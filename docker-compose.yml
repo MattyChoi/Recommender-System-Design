@@ -62,7 +62,7 @@ services:
     ports: ["6379:6379"]
 
   minio:
-    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z   # newest tag published to Docker Hub
     container_name: recsys-minio
     # "server" is the subcommand that starts the object-storage server.
     # /data is the storage root INSIDE the container (see the volume below).
@@ -88,7 +88,9 @@ services:
     # --host 0.0.0.0 binds all interfaces. Required: the default binds loopback
     # only, which would make the server unreachable from outside the container.
     command: mlflow server --host 0.0.0.0 --port 5000
-    ports: ["5000:5000"]
+    # Host 5001, not 5000: macOS AirPlay Receiver (ControlCenter) holds 5000 by
+    # default, so 5000:5000 fails to bind on a stock Mac. UI at localhost:5001.
+    ports: ["5001:5000"]
     # TODO: no --backend-store-uri and no volume, so the tracking DB and
     # artifacts sit in the container's writable layer and are LOST on `down`.
     # Give it a volume and point --default-artifact-root at MinIO.
