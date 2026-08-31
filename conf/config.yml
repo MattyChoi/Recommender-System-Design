@@ -1,0 +1,24 @@
+# Every value here is validated on load, and any of them can be overridden from the
+# environment without editing this file:
+#
+#   RECSYS_SPLIT__HOLDOUT_DAYS=1 uv run <command>
+
+paths:
+  raw: data/raw/MIND       # train/ and dev/ as downloaded -- kept, not regenerated
+  bronze: data/bronze      # one row per item shown, partitioned by date
+  silver: data/silver      # bronze + article metadata + integer ID indices
+  gold: data/gold          # point-in-time feature tables
+
+spark:
+  master: "local[*]"       # local[1] when debugging something non-deterministic
+  driver_memory: "8g"      # local mode has no executors: this is the whole budget
+  shuffle_partitions: 32   # ~2-4x core count; Spark's default of 200 is cluster-tuned
+
+split:
+  holdout_days: 1          # train impressions span ~1 week (week 5); custom ablations only.
+                           # Primary evaluation uses MIND's official train/dev split.
+  min_user_impressions: 3  # below this a user cannot be personalized to
+
+filter:
+  min_item_impressions: 5     # below this, nothing is learnable about the article
+  max_impressions_per_user: 500   # stops heavy users dominating row-averaged metrics
