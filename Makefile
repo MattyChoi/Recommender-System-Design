@@ -1,4 +1,4 @@
-.PHONY: help up down data replay train index serve bench demo lint fmt types test check
+.PHONY: help up down clean data replay train index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -8,7 +8,10 @@ help:  ## Show this help
 up:  ## Bring up local infra (kafka, redis, minio, mlflow, prometheus, grafana)
 	docker compose up -d
 
-down:  ## Tear down local infra
+down:  ## Stop and remove containers, keeping data
+	docker compose down
+
+clean:  ## Stop everything and DESTROY all volumes
 	docker compose down -v
 
 data:  ## raw -> bronze -> silver -> gold

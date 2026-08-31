@@ -8,7 +8,13 @@ authors = [
     { name = "Matthew Choi", email = "matthew.choi02@gmail.com" }
 ]
 license = "MIT"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.2",
+    "pyarrow>=25.0.1",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]

@@ -50,11 +50,9 @@ services:
       # Consumer offsets live in an internal topic that defaults to 3 replicas.
       # Unsatisfiable on one broker, so the topic would never be created.
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-
-      # TODO: three more single-node overrides are missing and will bite later --
-      # KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      # KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1     (both default above 1; fail on transactions)
-      # KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0  (removes a 3s startup pause)
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0  (removes a 3s startup pause)
 
   redis:
     image: redis:7.4.11-alpine   # Alpine build, ~40MB instead of ~130MB.
@@ -75,25 +73,44 @@ services:
     environment:
       # Initial admin account. These double as the S3 access key and secret key.
       # Stock defaults: fine locally, must change before this leaves your laptop.
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     # Mounts the named volume declared at the bottom onto the storage root, so
     # bronze/silver/gold Parquet survives `docker compose restart` -- but NOT
     # `down -v`, which is what `make down` runs.
     volumes: ["minio:/data"]
+    # "mc ready local" asks the bundled MinIO client whether the server can
+    # actually serve requests, not merely whether the process is alive.
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.15.2   # MLflow 3.15.2, released 2026-08-03
     container_name: recsys-mlflow
     # --host 0.0.0.0 binds all interfaces. Required: the default binds loopback
     # only, which would make the server unreachable from outside the container.
-    command: mlflow server --host 0.0.0.0 --port 5000
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root s3://mlflow/
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
     # Host 5001, not 5000: macOS AirPlay Receiver (ControlCenter) holds 5000 by
     # default, so 5000:5000 fails to bind on a stock Mac. UI at localhost:5001.
     ports: ["5001:5000"]
-    # TODO: no --backend-store-uri and no volume, so the tracking DB and
-    # artifacts sit in the container's writable layer and are LOST on `down`.
-    # Give it a volume and point --default-artifact-root at MinIO.
+    volumes: ["mlflow:/mlflow"]
+    # Map form, not the [minio] short form -- only this syntax accepts a
+    # condition. Holds mlflow back until minio reports healthy, instead of
+    # starting both at once and racing.
+    depends_on:
+      minio:
+        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:v3.14.0       # Prometheus 3.14.0, released 2026-08-17
@@ -112,10 +129,10 @@ services:
       # enabled=true, which skips the login screen. Quoted because YAML would
       # otherwise parse bare true as a boolean, and env values must be strings.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-    # TODO: no volume, so hand-built dashboards vanish on `down`. Better still,
-    # provision them as files under infra/docker/grafana/ so they are versioned.
+    volumes: ["grafana:/var/lib/grafana"]  # persists dashboards and data sources
 
 # Named volumes. An empty value means "use the default local driver".
-# Referenced above as minio:/data. Removed by `docker compose down -v`.
 volumes:
   minio:
+  mlflow:
+  grafana:
