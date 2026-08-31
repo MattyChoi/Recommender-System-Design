@@ -1,0 +1,119 @@
+# Local dev infra. Images are pinned to exact versions (checked 2026-08-30).
+# Tags were NOT verified against the registries -- run `docker compose pull`
+# once to confirm every tag resolves. For stricter reproducibility, replace
+# each tag with its @sha256:... digest after the first successful pull.
+#
+# Compose also creates an implicit bridge network joining every service below,
+# on which each container reaches the others by SERVICE NAME (redis:6379,
+# kafka:9092) -- not localhost. "ports" entries are host:container.
+services:
+  kafka:
+    image: apache/kafka:4.3.1            # Kafka 4.3.1, released 2026-06-23
+    container_name: recsys-kafka
+    ports: ["9092:9092"]            # client bootstrap port, reachable from your Mac
+    environment:
+      # Unique ID of this node within the KRaft cluster. Single node, so 1.
+      KAFKA_NODE_ID: 1
+
+      # KRaft mode: this one node wears both hats, so no ZooKeeper container is
+      # needed. "broker" serves produce/consume traffic; "controller" owns the
+      # cluster metadata quorum (the job ZooKeeper used to do). In production
+      # these are separate machines.
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # Sockets this node BINDS. Empty host means "all interfaces".
+      # PLAINTEXT:9092 = client traffic. CONTROLLER:9093 = metadata quorum,
+      # which here is just this node talking to itself.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+
+      # Address the broker hands back to a client telling it where to RECONNECT.
+      # A Kafka client bootstraps, receives this, then discards the address it
+      # originally dialed and uses this one for all real traffic.
+      # TRAP: "localhost" is correct from your Mac but WRONG for any other
+      # container, where localhost means that container itself. When the Go
+      # service gets containerized, add a second INTERNAL listener advertised
+      # as kafka:29092. The CONTROLLER listener is deliberately not advertised.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+
+      # Members of the metadata quorum, as <nodeId>@<host>:<port>. One voter:
+      # itself, at localhost:9093 (true, since it resolves inside its own container).
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+
+      # Which of the listener names above carries controller traffic.
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Maps each listener NAME to the security protocol it speaks. PLAINTEXT
+      # and CONTROLLER are names I chose; both are unencrypted here, which is
+      # why this line reads redundantly.
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+      # Consumer offsets live in an internal topic that defaults to 3 replicas.
+      # Unsatisfiable on one broker, so the topic would never be created.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+      # TODO: three more single-node overrides are missing and will bite later --
+      # KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      # KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1     (both default above 1; fail on transactions)
+      # KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0  (removes a 3s startup pause)
+
+  redis:
+    image: redis:7.4.11-alpine   # Alpine build, ~40MB instead of ~130MB.
+    container_name: recsys-redis
+    ports: ["6379:6379"]
+
+  minio:
+    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
+    container_name: recsys-minio
+    # "server" is the subcommand that starts the object-storage server.
+    # /data is the storage root INSIDE the container (see the volume below).
+    # --console-address moves the browser UI to its own port so it does not
+    # collide with the S3 API, which stays on the default 9000.
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"              # S3-compatible API -- point boto3/pyarrow here
+      - "9001:9001"              # web console
+    environment:
+      # Initial admin account. These double as the S3 access key and secret key.
+      # Stock defaults: fine locally, must change before this leaves your laptop.
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    # Mounts the named volume declared at the bottom onto the storage root, so
+    # bronze/silver/gold Parquet survives `docker compose restart` -- but NOT
+    # `down -v`, which is what `make down` runs.
+    volumes: ["minio:/data"]
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.15.2   # MLflow 3.15.2, released 2026-08-03
+    container_name: recsys-mlflow
+    # --host 0.0.0.0 binds all interfaces. Required: the default binds loopback
+    # only, which would make the server unreachable from outside the container.
+    command: mlflow server --host 0.0.0.0 --port 5000
+    ports: ["5000:5000"]
+    # TODO: no --backend-store-uri and no volume, so the tracking DB and
+    # artifacts sit in the container's writable layer and are LOST on `down`.
+    # Give it a volume and point --default-artifact-root at MinIO.
+
+  prometheus:
+    image: prom/prometheus:v3.14.0       # Prometheus 3.14.0, released 2026-08-17
+    container_name: recsys-prometheus
+    ports: ["9090:9090"]         # query UI and API
+    # Mounts your scrape config over the path the image reads at startup.
+    # ":ro" = read-only, so the container cannot modify your repo file.
+    volumes: ["./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+
+  grafana:
+    image: grafana/grafana:13.2.0        # Grafana 13.2.0, released 2026-08-18
+    container_name: recsys-grafana
+    ports: ["3000:3000"]
+    environment:
+      # GF_<SECTION>_<KEY> maps onto grafana.ini -- this is [auth.anonymous]
+      # enabled=true, which skips the login screen. Quoted because YAML would
+      # otherwise parse bare true as a boolean, and env values must be strings.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    # TODO: no volume, so hand-built dashboards vanish on `down`. Better still,
+    # provision them as files under infra/docker/grafana/ so they are versioned.
+
+# Named volumes. An empty value means "use the default local driver".
+# Referenced above as minio:/data. Removed by `docker compose down -v`.
+volumes:
+  minio:

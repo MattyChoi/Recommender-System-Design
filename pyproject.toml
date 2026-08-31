@@ -1,0 +1,52 @@
+[project]
+name = "recsys"
+version = "0.1.0"
+description = "A multi-stage recommender: five-source retrieval, learned ranking, and diversity re-ranking behind a latency-budgeted service."
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+    { name = "Matthew Choi", email = "matthew.choi02@gmail.com" }
+]
+license = "MIT"
+dependencies = []
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["data_pipeline", "models", "indexing", "evaluation"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N", "ANN", "PTH", "RUF"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN"]
+"**/tests/*" = ["ANN"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "data_pipeline/tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: long-running tests, deselect with -m 'not slow'",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.5",
+]

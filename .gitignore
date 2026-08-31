@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Data and artifacts (never commit these)
+data/
+artifacts/
+*.parquet
+*.pt
+*.onnx
+*.faiss
+mlruns/
+mlartifacts/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Extra folders and files
+outline.md
+
+# Exclude for now
+docs/
+personal_README.md
