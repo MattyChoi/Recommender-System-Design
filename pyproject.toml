@@ -9,6 +9,7 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
+    "huggingface-hub>=1.29.0",
     "numpy>=2.5.2",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.5",

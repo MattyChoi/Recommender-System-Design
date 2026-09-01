@@ -1,6 +1,8 @@
-.PHONY: help up down clean data replay train index serve bench demo lint fmt types test check
+.PHONY: help up down clean download data replay train index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
+
+MIND_SIZE ?= small
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -13,6 +15,9 @@ down:  ## Stop and remove containers, keeping data
 
 clean:  ## Stop everything and DESTROY all volumes
 	docker compose down -v
+
+download:  ## Fetch MIND into paths.raw (override: make download MIND_SIZE=large)
+	uv run python -m data_pipeline.ingest.download --size $(MIND_SIZE)
 
 data:  ## raw -> bronze -> silver -> gold
 	@echo "TODO: data_pipeline"; exit 1
