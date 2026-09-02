@@ -49,7 +49,7 @@ lint:  ## ruff check + format check
 	uv run ruff format --check .
 
 fmt:  ## Apply ruff formatting and autofixes
-	uv run ruff check --fix .
+	uv run ruff check --fix --exit-zero .
 	uv run ruff format .
 
 types:  ## mypy

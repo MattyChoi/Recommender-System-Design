@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from functools import reduce
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
@@ -18,8 +19,11 @@ from common.config import Settings, load_settings
 from common.schemas import BEHAVIORS_RAW, NEWS_RAW
 from common.spark import get_spark
 
+from ..transform.id_maps import build_id_maps
+
 SPLITS = ("train", "dev", "test")
-BRONZE_TABLES = ("events", "history", "news")
+BRONZE_TABLES = ("events", "history", "news", "user_map", "item_map")
+MIND_TS_FORMAT = "M/d/yyyy h:mm:ss a"
 
 
 def _is_built(settings: Settings, split: str) -> bool:
@@ -32,9 +36,6 @@ def _is_built(settings: Settings, split: str) -> bool:
     return all(
         (settings.paths.bronze / table / split / "_SUCCESS").is_file() for table in BRONZE_TABLES
     )
-
-
-MIND_TS_FORMAT = "M/d/yyyy h:mm:ss a"
 
 
 def read_behaviors(spark: SparkSession, settings: Settings, split: str) -> DataFrame:
@@ -155,6 +156,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         for split in build_split:
             print(f"{split}: {settings.paths.raw / split} -> {settings.paths.bronze}")
             ingest(spark, settings, split, force=args.force)
+
+        # Build the user and item ID maps across all the splits
+        present_splits = [s for s in SPLITS if (settings.paths.raw / s).is_dir()]
+
+        all_events_dfs = reduce(
+            lambda a, b: a.unionByName(b),
+            [spark.read.parquet(str(settings.paths.bronze / "events" / s)) for s in present_splits],
+        )
+        all_news_dfs = reduce(
+            lambda a, b: a.unionByName(b),
+            [spark.read.parquet(str(settings.paths.bronze / "news" / s)) for s in present_splits],
+        )
+
+        build_id_maps(all_events_dfs, all_news_dfs, settings)
     finally:
         spark.stop()
     return 0

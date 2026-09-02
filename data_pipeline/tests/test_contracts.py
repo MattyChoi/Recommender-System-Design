@@ -5,6 +5,9 @@ Skipped when no bronze layer exists, so CI stays green without the dataset.
 
 from __future__ import annotations
 
+import os
+import shutil
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -12,22 +15,33 @@ import pytest
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
-from common.config import load_settings
-from common.spark import get_spark
-
 BRONZE = Path("data/bronze/events/train")
 
 pytestmark = pytest.mark.skipif(
     not BRONZE.exists(), reason="no bronze layer; run `make data` first"
 )
 
+# PySpark needs a JVM, which a bare CI runner does not have. Skip the whole
+# module rather than fail, the same way the contract tests skip without data.
+_HAS_JVM = bool(os.environ.get("JAVA_HOME")) or shutil.which("java") is not None
+requires_jvm = pytest.mark.skipif(
+    not _HAS_JVM, reason="no JVM on PATH; PySpark tests need Java 17 or 21"
+)
+
 
 @pytest.fixture(scope="session")
-def spark() -> SparkSession:
+def spark() -> Iterator[object]:
     # session scope matters: a SparkSession costs seconds to build
-    s = get_spark(load_settings(), app="tests")
-    yield s
-    s.stop()
+    session = (
+        SparkSession.builder.master("local[1]")
+        .appName("mind-tests")
+        .config("spark.sql.shuffle.partitions", "1")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.ui.enabled", "false")
+        .getOrCreate()
+    )
+    yield session
+    session.stop()
 
 
 @pytest.fixture(scope="session")
