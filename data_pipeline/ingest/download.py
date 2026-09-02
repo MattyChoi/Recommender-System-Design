@@ -21,6 +21,7 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError, LocalTokenNotFoundError
 
 from common.config import load_settings
+from common.utils import SPLITS
 
 REPO_ID = "yjw1029/MIND"
 DATASET_URL = f"https://huggingface.co/datasets/{REPO_ID}"
@@ -28,7 +29,6 @@ DATASET_URL = f"https://huggingface.co/datasets/{REPO_ID}"
 EXPECTED_MEMBERS = frozenset(
     {"behaviors.tsv", "news.tsv", "entity_embedding.vec", "relation_embedding.vec"}
 )
-SPLITS = ("train", "dev", "test")
 
 _AUTH_HELP = (
     f"\n{REPO_ID} is a gated huggingface dataset.\n"

@@ -18,24 +18,9 @@ from pyspark.sql import functions as f
 from common.config import Settings, load_settings
 from common.schemas import BEHAVIORS_RAW, NEWS_RAW
 from common.spark import get_spark
+from common.utils import MIND_TS_FORMAT, SPLITS, _is_built
 
 from ..transform.id_maps import build_id_maps
-
-SPLITS = ("train", "dev", "test")
-BRONZE_TABLES = ("events", "history", "news", "user_map", "item_map")
-MIND_TS_FORMAT = "M/d/yyyy h:mm:ss a"
-
-
-def _is_built(settings: Settings, split: str) -> bool:
-    """Whether every bronze table for ``split`` holds a committed write.
-
-    Spark drops ``_SUCCESS`` into an output directory only after the write job
-    commits, so a run that died midway leaves part-files behind but no marker
-    and is correctly reported as unbuilt.
-    """
-    return all(
-        (settings.paths.bronze / table / split / "_SUCCESS").is_file() for table in BRONZE_TABLES
-    )
 
 
 def read_behaviors(spark: SparkSession, settings: Settings, split: str) -> DataFrame:
@@ -86,7 +71,7 @@ def ingest(spark: SparkSession, settings: Settings, split: str, *, force: bool =
         split: ``train``, ``dev`` or ``test``.
         force: Rebuild even when the split's bronze tables are already present.
     """
-    if _is_built(settings, split) and not force:
+    if _is_built(settings, "bronze", split) and not force:
         print(f"{split}: bronze already present, skipping")
         return
 
@@ -143,7 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: no raw data for {missing} under {settings.paths.raw}; run `make download`")
         return 1
 
-    build_split = [s for s in args.splits if args.force or not _is_built(settings, s)]
+    build_split = [s for s in args.splits if args.force or not _is_built(settings, "bronze", s)]
     for split in args.splits:
         if split not in build_split:
             print(f"{split}: bronze already present, skipping")
