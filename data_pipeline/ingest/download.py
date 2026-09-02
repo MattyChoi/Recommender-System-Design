@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import zipfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -59,8 +60,8 @@ def fetch_split(size: str, split: str, raw_root: Path, *, force: bool = False) -
         RuntimeError: If the archive is corrupt, is missing an expected member,
             or the dataset's terms have not been accepted.
     """
-    dest = raw_root / split
-    marker = dest / "behaviors.tsv"
+    dest = raw_root
+    marker = dest / split / "behaviors.tsv"
 
     # For idempotency, we check for the presence of one of the expected members.
     if marker.is_file() and marker.stat().st_size > 0 and not force:
@@ -94,7 +95,12 @@ def fetch_split(size: str, split: str, raw_root: Path, *, force: bool = False) -
         dest.mkdir(parents=True, exist_ok=True)
         zf.extractall(dest)
 
-    (dest / "_manifest.json").write_text(
+    zf_dir = dest / Path(name).stem
+    if (dest / split).is_dir():
+        shutil.rmtree(dest / split)
+    zf_dir.rename(dest / split)
+
+    (dest / split / "_manifest.json").write_text(
         json.dumps(
             {
                 "repo_id": REPO_ID,

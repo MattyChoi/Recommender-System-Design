@@ -23,7 +23,7 @@ def _write_zip(path: Path, members: list[str]) -> Path:
     """Build a zip at ``path`` holding ``members``, each with token TSV content."""
     with zipfile.ZipFile(path, "w") as zf:
         for name in members:
-            zf.writestr(name, "col_a\tcol_b\n")
+            zf.writestr(path.stem + "/" + name, "col_a\tcol_b\n")
     return path
 
 
@@ -36,7 +36,8 @@ def stub_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, 
 
     def fake(**kwargs: object) -> str:
         calls.append(kwargs)
-        return str(_write_zip(cache / str(kwargs["filename"]), MEMBERS))
+        filename = str(kwargs["filename"])
+        return str(_write_zip(cache / filename, MEMBERS))
 
     monkeypatch.setattr(dl, "hf_hub_download", fake)
     return calls

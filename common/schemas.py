@@ -35,7 +35,7 @@ EVENT_SCHEMA = t.StructType(
         t.StructField("user_id", t.StringType(), False),
         t.StructField("item_id", t.StringType(), False),
         t.StructField("clicked", t.BooleanType(), False),  # observed, not sampled
-        t.StructField("position", t.IntegerType(), False),  # slot within the list
+        t.StructField("slot", t.IntegerType(), False),  # slot within the list
         t.StructField("ts", t.TimestampType(), False),
     ]
 )
