@@ -24,7 +24,7 @@ from pyspark.sql import SparkSession
 
 from common.config import Settings, load_settings
 from common.spark import get_spark
-from common.utils import SPLITS, _is_built, read_news, read_silver
+from common.utils import SPLITS, _is_built, read_silver
 from data_pipeline.features.ctr_smoothed import smoothed_ctr_by_category
 from data_pipeline.features.item_dynamic_features import item_hourly_features
 
@@ -39,9 +39,8 @@ def build_item_hourly(spark: SparkSession, settings: Settings, splits: Sequence[
     column that no FeatureView declares, which is a needless divergence
     between what is on disk and what is registered.
     """
-    events = read_silver(spark, settings, splits).select("item_id", "ts", "clicked")
-    news = read_news(spark, settings, splits)
-    features = smoothed_ctr_by_category(item_hourly_features(events), news)
+    events = read_silver(spark, settings, splits).select("item_id", "ts", "clicked", "category")
+    features = smoothed_ctr_by_category(item_hourly_features(events))
     features.write.mode("overwrite").parquet(str(settings.paths.gold / "item_hourly_features"))
 
 

@@ -16,6 +16,7 @@ def item_hourly_features(events: DataFrame) -> DataFrame:
         .agg(
             f.count("*").alias("impressions_1h"),
             f.sum(f.col("clicked").cast("int")).alias("clicks_1h"),
+            f.first("category", ignorenulls=True).alias("category"),
         )
     )
 

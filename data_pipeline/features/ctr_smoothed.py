@@ -18,23 +18,28 @@ def smoothed_ctr(
     return (clicks + prior_ctr * prior_strength) / (impressions + prior_strength)
 
 
-def smoothed_ctr_by_category(
-    item_hourly: DataFrame, news: DataFrame, prior_strength: float = 20.0
-) -> DataFrame:
-    """Use the CATEGORY mean as the prior, not the global mean. when calculating smoothed CTR."""
-    cat = (
-        item_hourly.join(f.broadcast(news.select("item_id", "category")), on="item_id", how="left")
-        .groupBy("category")
-        .agg((f.sum("clicks_24h") / f.sum("impressions_24h")).alias("cat_ctr"))
+def smoothed_ctr_by_category(item_hourly: DataFrame, prior_strength: float = 20.0) -> DataFrame:
+    """Shrink each item's 24h CTR toward its CATEGORY mean, not the global mean.
+
+    Args:
+        item_hourly: Hourly item aggregates carrying ``clicks_24h``,
+            ``impressions_24h`` and ``category``.
+        prior_strength: Pseudo-count for the prior, in impressions.
+
+    Returns:
+        ``item_hourly`` with ``cat_ctr`` and ``ctr_24h_smoothed`` attached.
+
+    Note:
+        ``cat_ctr`` is aggregated over the WHOLE timeline, not as of each
+        hour, so the prior is not strictly point-in-time.
+    """
+    cat = item_hourly.groupBy("category").agg(
+        (f.sum("clicks_24h") / f.sum("impressions_24h")).alias("cat_ctr")
     )
 
-    return (
-        item_hourly.join(f.broadcast(news.select("item_id", "category")), on="item_id", how="left")
-        .join(f.broadcast(cat), on="category", how="left")
-        .withColumn(
-            "ctr_24h_smoothed",
-            smoothed_ctr(
-                f.col("clicks_24h"), f.col("impressions_24h"), f.col("cat_ctr"), prior_strength
-            ),
-        )
+    return item_hourly.join(f.broadcast(cat), on="category", how="left").withColumn(
+        "ctr_24h_smoothed",
+        smoothed_ctr(
+            f.col("clicks_24h"), f.col("impressions_24h"), f.col("cat_ctr"), prior_strength
+        ),
     )
