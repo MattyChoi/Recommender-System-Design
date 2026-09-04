@@ -1,4 +1,4 @@
-.PHONY: help up down clean download bronze silver data replay train index serve bench demo lint fmt types test check
+.PHONY: help up down clean raw bronze silver gold data replay train index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -18,16 +18,19 @@ down:  ## Stop and remove containers, keeping data
 clean:  ## Stop everything and DESTROY all volumes
 	docker compose down -v
 
-download:  ## Fetch MIND into paths.raw (override: make download MIND_SIZE=large)
-	uv run python -m data_pipeline.ingest.download --size $(MIND_SIZE) --splits $(SPLITS) $(if $(FORCE),--force)
+raw:  ## Fetch MIND into paths.raw (override: make download MIND_SIZE=large)
+	uv run python -m data_pipeline.ingest.download_mind --size $(MIND_SIZE) --splits $(SPLITS) $(if $(FORCE),--force)
 
 bronze:  ## raw -> bronze (rebuild an existing layer: make bronze FORCE=1)
-	uv run python -m data_pipeline.ingest.mind --splits $(SPLITS) $(if $(FORCE),--force)
+	uv run python -m data_pipeline.ingest.bronze --splits $(SPLITS) $(if $(FORCE),--force)
 
 silver:  ## bronze -> silver (rebuild an existing layer: make silver FORCE=1)
 	uv run python -m data_pipeline.transform.silver --splits $(SPLITS) $(if $(FORCE),--force)
 
-data: download bronze silver  ## Build raw + bronze + silver under data/ (gold: TODO)
+gold:  ## silver -> gold feature tables (rebuild an existing layer: make gold FORCE=1)
+	uv run python -m data_pipeline.features.gold --splits $(SPLITS) $(if $(FORCE),--force)
+
+data: raw bronze silver gold  ## Build every layer under data/
 
 replay:  ## Drive the pipeline from the Kafka replay harness
 	@echo "TODO: replay harness"; exit 1

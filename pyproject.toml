@@ -9,10 +9,10 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
+    "feast[redis]>=0.66.0",
     "huggingface-hub>=1.29.0",
     "ipykernel>=7.3.0",
     "numpy>=2.5.2",
-    "pandas>=3.0.5",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",

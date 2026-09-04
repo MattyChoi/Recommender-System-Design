@@ -14,7 +14,7 @@ import httpx
 import pytest
 from huggingface_hub.errors import GatedRepoError
 
-from data_pipeline.ingest import download as dl
+from data_pipeline.ingest import download_mind as dl
 
 MEMBERS = ["behaviors.tsv", "news.tsv", "entity_embedding.vec", "relation_embedding.vec"]
 
