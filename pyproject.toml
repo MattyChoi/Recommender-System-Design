@@ -29,6 +29,8 @@ packages = ["common", "data_pipeline", "models", "indexing", "evaluation"]
 
 [tool.ruff]
 line-length = 100
+# Nothing in notebooks/ is imported by anything, serving/go and infra are not Python.
+exclude = ["notebooks", "serving/go", "infra"]
 target-version = "py313"
 
 [tool.ruff.lint]
