@@ -1,0 +1,17 @@
+project: recsys_store
+registry: registry.db
+provider: local
+
+# Redis, from docker-compose.yml. `localhost` because feast runs on the host
+# and reaches the container through the published port; a process INSIDE the
+# compose network would use `redis:6379` instead.
+online_store:
+  type: redis
+  connection_string: localhost:6379
+
+offline_store:
+  type: file
+
+# v3 keys entities by name as well as value, so two entities that share a
+# value cannot collide in Redis. Required for new repos.
+entity_key_serialization_version: 3

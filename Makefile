@@ -1,10 +1,13 @@
-.PHONY: help up down clean raw bronze silver gold data replay train index serve bench demo lint fmt types test check
+.PHONY: help up down clean raw bronze silver gold feast data replay train index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
 MIND_SIZE ?= small
 SPLITS ?= train dev
 FORCE ?=
+FEAST_START ?= 2019-11-09T00:00:00		# MIND dataset date range
+FEAST_END   ?= 2019-11-16T00:00:00
+FEAST_REPO ?= data_pipeline/features/recsys_store/feature_repo
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +32,11 @@ silver:  ## bronze -> silver (rebuild an existing layer: make silver FORCE=1)
 
 gold:  ## silver -> gold feature tables (rebuild an existing layer: make gold FORCE=1)
 	uv run python -m data_pipeline.features.gold --splits $(SPLITS) $(if $(FORCE),--force)
+
+feast:  ## Register feature definitions and materialise them into Redis
+	uv run feast -c $(FEAST_REPO) apply
+	uv run feast -c $(FEAST_REPO) materialize $(FEAST_START) $(FEAST_END)
+# 	uv run feast -c $(FEAST_REPO) materialize 2019-11-09T00:00:00 2019-11-16T00:00:00
 
 data: raw bronze silver gold  ## Build every layer under data/
 

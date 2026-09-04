@@ -16,7 +16,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
 from data_pipeline.features.asof import asof_join
-from data_pipeline.features.item_dynamic_features import item_hourly
+from data_pipeline.features.item_dynamic_features import item_hourly_features
 
 BRONZE = Path("data/bronze/events/train")
 
@@ -246,12 +246,12 @@ def test_hourly_features_do_not_leak_within_the_bucket(spark: SparkSession) -> N
     future, and every model trained on it looks superb offline.
     """
     hour = datetime(2019, 11, 14, 14, 0, 0)
-    rows: list[tuple[str, datetime, int]] = [("N1", hour - timedelta(minutes=50), 0)]
-    rows += [("N1", hour + timedelta(minutes=50), 1) for _ in range(100)]
-    raw = spark.createDataFrame(rows, "item_id string, ts timestamp, clicked int")
+    rows: list[tuple[str, datetime, int, str]] = [("N1", hour - timedelta(minutes=50), 0, "sports")]
+    rows += [("N1", hour + timedelta(minutes=50), 1, "sports") for _ in range(100)]
+    raw = spark.createDataFrame(rows, "item_id string, ts timestamp, clicked int, category string")
 
     labels = _labels(spark, [("I1", "N1", hour + timedelta(minutes=5))])
-    got = asof_join(labels, item_hourly(raw), join_key="item_id").collect()[0]
+    got = asof_join(labels, item_hourly_features(raw), join_key="item_id").collect()[0]
 
     assert got["impressions_24h"] == 1, (
         f"leak: the label saw {got['impressions_24h']} impressions, but only 1 "
