@@ -1,11 +1,3 @@
-# Local dev infra. Images are pinned to exact versions (checked 2026-08-30).
-# Tags were NOT verified against the registries -- run `docker compose pull`
-# once to confirm every tag resolves. For stricter reproducibility, replace
-# each tag with its @sha256:... digest after the first successful pull.
-#
-# Compose also creates an implicit bridge network joining every service below,
-# on which each container reaches the others by SERVICE NAME (redis:6379,
-# kafka:9092) -- not localhost. "ports" entries are host:container.
 services:
   kafka:
     image: apache/kafka:4.3.1            # Kafka 4.3.1, released 2026-06-23
@@ -24,16 +16,10 @@ services:
       # Sockets this node BINDS. Empty host means "all interfaces".
       # PLAINTEXT:9092 = client traffic. CONTROLLER:9093 = metadata quorum,
       # which here is just this node talking to itself.
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-
-      # Address the broker hands back to a client telling it where to RECONNECT.
-      # A Kafka client bootstraps, receives this, then discards the address it
-      # originally dialed and uses this one for all real traffic.
-      # TRAP: "localhost" is correct from your Mac but WRONG for any other
-      # container, where localhost means that container itself. When the Go
-      # service gets containerized, add a second INTERNAL listener advertised
-      # as kafka:29092. The CONTROLLER listener is deliberately not advertised.
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LISTENERS: PLAINTEXT://:9092,INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
 
       # Members of the metadata quorum, as <nodeId>@<host>:<port>. One voter:
       # itself, at localhost:9093 (true, since it resolves inside its own container).
@@ -42,22 +28,31 @@ services:
       # Which of the listener names above carries controller traffic.
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
 
-      # Maps each listener NAME to the security protocol it speaks. PLAINTEXT
-      # and CONTROLLER are names I chose; both are unencrypted here, which is
-      # why this line reads redundantly.
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-
       # Consumer offsets live in an internal topic that defaults to 3 replicas.
       # Unsatisfiable on one broker, so the topic would never be created.
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0  (removes a 3s startup pause)
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0   # removes a 3s startup pause
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh",
+             "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   redis:
     image: redis:7.4.11-alpine   # Alpine build, ~40MB instead of ~130MB.
     container_name: recsys-redis
     ports: ["6379:6379"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z   # newest tag published to Docker Hub
@@ -111,6 +106,15 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    # Python rather than curl: curl is not guaranteed to be in this image, and a
+    # healthcheck that can never pass is worse than none -- `--wait` hangs on it.
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   prometheus:
     image: prom/prometheus:v3.14.0       # Prometheus 3.14.0, released 2026-08-17
@@ -129,10 +133,21 @@ services:
       # enabled=true, which skips the login screen. Quoted because YAML would
       # otherwise parse bare true as a boolean, and env values must be strings.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-    volumes: ["grafana:/var/lib/grafana"]  # persists dashboards and data sources
+    volumes:
+      # Runtime state (users, prefs, the sqlite db). Survives `down`, not `down -v`.
+      - "grafana:/var/lib/grafana"
+      # Provider configs -- Grafana globs /etc/grafana/provisioning/{datasources,dashboards}/*.yml
+      # at STARTUP, so the host path must be the provisioning/ dir itself, not
+      # its parent. Mounting the parent nests it one level deeper and Grafana
+      # silently finds nothing.
+      - "./infra/docker/grafana/provisioning:/etc/grafana/provisioning:ro"
+      # The dashboard JSON the provider above loads. Separate mount so provider
+      # config and dashboard content stay separate in the repo.
+      - "./infra/docker/grafana/dashboards:/etc/grafana/dashboards:ro"
 
 # Named volumes. An empty value means "use the default local driver".
 volumes:
   minio:
   mlflow:
   grafana:
+  redis:

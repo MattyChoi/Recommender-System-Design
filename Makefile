@@ -12,8 +12,9 @@ FEAST_REPO ?= data_pipeline/features/recsys_store/feature_repo
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-up:  ## Bring up local infra (kafka, redis, minio, mlflow, prometheus, grafana)
-	docker compose up -d
+up:
+	docker compose up -d --wait
+	docker exec recsys-minio sh -c 'mc alias set local http://localhost:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null && mc mb --ignore-existing local/mlflow local/recsys'
 
 down:  ## Stop and remove containers, keeping data
 	docker compose down

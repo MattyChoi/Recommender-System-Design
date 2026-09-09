@@ -45,10 +45,13 @@ ignore = ["ANN401"]
 python_version = "3.13"
 strict = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "data_pipeline/tests"]
+testpaths = ["tests", "data_pipeline/tests", "evaluation/tests", "models/tests", "indexing/tests"]
 addopts = "-q --strict-markers"
 markers = [
     "slow: long-running tests, deselect with -m 'not slow'",
@@ -57,6 +60,7 @@ markers = [
 [dependency-groups]
 dev = [
     "mypy>=2.3.1",
+    "types-PyYAML>=6.0.12",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
