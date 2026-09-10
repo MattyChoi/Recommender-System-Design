@@ -26,12 +26,15 @@ import pyarrow.parquet as pq
 
 from common.config import load_settings
 from common.utils import SPLITS
-from data_pipeline.replay.pacing import LatenessInjector, sleep_seconds
+from data_pipeline.replay.pacing import LatenessInjector, drift_seconds
 from data_pipeline.replay.records import BRONZE_COLUMNS, event_ts_ms, to_record
 
 # Rows materialised out of Arrow at a time. The sorted table stays in Arrow's
 # compact columnar form; only this many rows exist as Python dicts at once.
 _BATCH_ROWS = 65_536
+
+# Seconds close() waits for the produce queue to drain before giving up.
+_FLUSH_TIMEOUT_S = 30.0
 
 
 class Sink(Protocol):
@@ -68,6 +71,9 @@ class KafkaSink:
         from confluent_kafka import Producer
 
         self.topic = topic
+        # Record number of failed records and the first failure
+        self._failed = 0
+        self._first_error: str | None = None
         # linger.ms waits to batch records; without it, sends records one at a time
         self._producer = Producer({"bootstrap.servers": bootstrap_servers, "linger.ms": 20})
 
@@ -75,13 +81,37 @@ class KafkaSink:
         # Kafka guarantees order WITHIN a partition only, and the partition is
         # chosen by hashing the key. Keying on user_id is what keeps one user's
         # events in sequence
-        self._producer.produce(self.topic, key=key.encode(), value=json.dumps(value).encode())
+        self._producer.produce(
+            self.topic,
+            key=key.encode(),
+            value=json.dumps(value).encode(),
+            timestamp=value["event_ts_ms"],
+            on_delivery=self._on_delivery,
+        )
         # Serve delivery callbacks and apply backpressure. Skip this and the
         # internal queue grows until the client raises BufferError.
         self._producer.poll(0)
 
+    def _on_delivery(self, err: object, _msg: object) -> None:
+        """Record permanent delivery failures."""
+        if err is not None:
+            self._failed += 1
+            if self._first_error is None:
+                self._first_error = str(err)
+
     def close(self) -> None:
-        self._producer.flush()
+        """Block until the queue drains, then refuse to report a false success."""
+        remaining = self._producer.flush(_FLUSH_TIMEOUT_S)
+        if remaining:
+            raise RuntimeError(
+                f"{remaining} records were still queued after "
+                f"{_FLUSH_TIMEOUT_S}s -- the broker is unreachable or too slow; "
+                "the topic is missing records"
+            )
+        if self._failed:
+            raise RuntimeError(
+                f"{self._failed} records were rejected by the broker (first: {self._first_error})"
+            )
 
 
 def iter_bronze(
@@ -129,16 +159,21 @@ def replay(
     sent = 0
     # Pacing follows INGEST time, not event time: the injector emits in arrival
     # order, and arrival is what a consumer's clock actually sees.
-    prev_ingest_ms: int | None = None
+    #
+    # Both anchors are set by the first record rather than before the loop, so
+    # the clock starts when data starts
+    origin_ms: int | None = None
+    wall_start = 0.0
 
     def emit(ingest_ms: int, row: dict[str, Any]) -> None:
-        nonlocal sent, prev_ingest_ms
-        pause = sleep_seconds(prev_ingest_ms, ingest_ms, speed)
+        nonlocal sent, origin_ms, wall_start
+        if origin_ms is None:
+            origin_ms, wall_start = ingest_ms, time.monotonic()
+        pause = drift_seconds(origin_ms, ingest_ms, speed, time.monotonic() - wall_start)
         if pause > 0:
             time.sleep(pause)
         record = to_record(row, ingest_ms)
         sink.send(record["user_id"], record)
-        prev_ingest_ms = ingest_ms
         sent += 1
 
     for row in rows:

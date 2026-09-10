@@ -1,5 +1,5 @@
 .PHONY: proto help up down clean raw bronze silver gold feast data \
-        topic replay consume offsets \
+        topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
@@ -73,8 +73,15 @@ topic:  ## Create the replay topic -- run ONCE before the first replay
 	$(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
 	    --create --if-not-exists --topic $(TOPIC) \
 	    --partitions $(PARTITIONS) --replication-factor 1
+	$(KAFKA_EXEC)/kafka-configs.sh --bootstrap-server $(KAFKA_BROKER) \
+	    --alter --entity-type topics --entity-name $(TOPIC) \
+	    --add-config retention.ms=-1
 	$(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
 	    --describe --topic $(TOPIC)
+
+delete_topic:  ## Delete the replay topic -- run ONCE to reset the replay harness
+	$(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
+	    --delete --topic $(TOPIC)
 
 # Run `make topic` first. Producing to a topic that does not exist auto-creates
 # it with ONE partition, and on one partition the producer's user_id keying is

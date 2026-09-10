@@ -15,26 +15,32 @@ import random
 from typing import Any
 
 
-def sleep_seconds(prev_event_ms: int | None, event_ms: int, speed: float) -> float:
-    """How long to pause before emitting an event, to imitate its own cadence.
+def drift_seconds(origin_ms: int | None, event_ms: int, speed: float, elapsed: float) -> float:
+    """How long to pause so this record lands on schedule.
+
+    The schedule is ABSOLUTE, anchored on the first record of the run, not
+    incremental from the previous one. That distinction is the whole function.
+
+    Anchoring on the origin makes the schedule self-correcting. Fall behind and
+    the next target is already in the past, so the pause is zero and the run
+    closes the gap on its own.
 
     Args:
-        prev_event_ms: Event time of the previously emitted record, or None for
-            the first record of the run.
-        event_ms: Event time of the record about to be emitted.
-        speed: Compression factor. ``3600`` replays an hour of event time per
-            wall-clock second. ``0`` or less means unthrottled -- which is what
-            tests and backfills want, and what a live demo does not.
+        origin_ms: Timestamp of the first record emitted, or None before one
+            has been.
+        event_ms: Timestamp of the record about to be emitted.
+        speed: Event-time seconds per wall-clock second. ``3600`` replays an
+            hour of event time per second; ``0`` or less is unthrottled, which
+            is what backfills and tests want and a live demo does not.
+        elapsed: Wall-clock seconds since the first record was emitted.
 
     Returns:
-        Seconds to sleep. Never negative.
+        Seconds to sleep. Zero when already on or behind schedule.
     """
-    if prev_event_ms is None or speed <= 0:
+    if origin_ms is None or speed <= 0:
         return 0.0
-    # Clamped at zero rather than asserting: the injector below hands records
-    # out in INGEST order, so a genuinely late record can arrive with an event
-    # time behind its predecessor. That is the point of it, not a bug.
-    return max(0, event_ms - prev_event_ms) / 1000.0 / speed
+    target = (event_ms - origin_ms) / 1000.0 / speed
+    return max(0.0, target - elapsed)
 
 
 class LatenessInjector:

@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from data_pipeline.replay.pacing import LatenessInjector, sleep_seconds
+from data_pipeline.replay.pacing import LatenessInjector, drift_seconds
 from data_pipeline.replay.producer import DryRunSink, replay
 from data_pipeline.replay.records import WIRE_FIELDS, to_record
 
@@ -194,19 +194,43 @@ def test_an_impossible_fraction_is_rejected(fraction: float) -> None:
 def test_pacing_scales_with_speed() -> None:
     """speed is a compression factor: 3600 replays an hour per wall second."""
     hour_ms = 3_600_000
-    assert sleep_seconds(0, hour_ms, speed=3600.0) == pytest.approx(1.0)
-    assert sleep_seconds(0, hour_ms, speed=7200.0) == pytest.approx(0.5)
+    assert drift_seconds(0, hour_ms, speed=3600.0, elapsed=0.0) == pytest.approx(1.0)
+    assert drift_seconds(0, hour_ms, speed=7200.0, elapsed=0.0) == pytest.approx(0.5)
 
 
-def test_unthrottled_and_first_record_never_sleep() -> None:
+def test_unthrottled_and_the_first_record_never_sleep() -> None:
     """speed <= 0 is the backfill and test path; it must not pause at all."""
-    assert sleep_seconds(0, 3_600_000, speed=0.0) == 0.0
-    assert sleep_seconds(None, 3_600_000, speed=3600.0) == 0.0
+    assert drift_seconds(0, 3_600_000, speed=0.0, elapsed=0.0) == 0.0
+    assert drift_seconds(None, 3_600_000, speed=3600.0, elapsed=0.0) == 0.0
+
+
+def test_the_schedule_is_absolute_not_incremental() -> None:
+    """The property an incremental pause cannot have, and the reason for the rewrite.
+
+    Targets are measured from the ORIGIN, so per-record overhead cannot
+    accumulate: a record whose slot has already passed sleeps zero, and the
+    records after it are still measured against the original schedule rather
+    than against the delay. Compute each pause as (this - previous) / speed
+    instead and every millisecond of overhead is permanent, so the replay
+    slowly falls behind and the arrival PATTERN -- the thing the harness
+    exists to reproduce -- stretches with it.
+    """
+    speed = 3600.0  # one wall second per event hour
+
+    # Two hours in, but five wall seconds have already elapsed: behind
+    # schedule, so do not sleep.
+    assert drift_seconds(0, 7_200_000, speed, elapsed=5.0) == 0.0
+
+    # Ten hours in, same five seconds elapsed. An incremental scheme would
+    # sleep the full eight seconds from the previous record and stay five
+    # seconds late forever; anchored, the target is 10s and the pause is what
+    # remains of it.
+    assert drift_seconds(0, 36_000_000, speed, elapsed=5.0) == pytest.approx(5.0)
 
 
 def test_pacing_never_returns_a_negative_pause() -> None:
     """Ingest order is monotone, but a clamp here is cheaper than a bug there."""
-    assert sleep_seconds(10_000, 5_000, speed=1.0) == 0.0
+    assert drift_seconds(10_000, 5_000, speed=1.0, elapsed=0.0) == 0.0
 
 
 # --- end to end, still without a broker ------------------------------------

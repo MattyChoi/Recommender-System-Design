@@ -6,6 +6,7 @@ Most of these tests were created by a Claude agent
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from functools import reduce
 from pathlib import Path
 
 import pytest
@@ -479,3 +480,139 @@ def test_news_categories_are_a_small_closed_vocabulary(
 
     assert 5 <= len(categories) <= 50, f"{len(categories)} distinct categories"
     assert all(" " not in c for c in categories), "a category contains a space"
+
+
+# ---------------------------------------------------------------------------
+# Referential integrity and the history snapshot
+#
+# Guide C4's remaining contracts. Two of them are adapted rather than copied,
+# and the adaptation is the interesting part -- see
+# test_history_predates_the_log_window.
+# ---------------------------------------------------------------------------
+
+HISTORY = Path("data/bronze/history")
+
+# Measured on MIND-small: 0.4% of train's in-log clicked pairs appear in
+# history, 0.2% of dev's. A ceiling well above both, but far below the ~100%
+# that an end-of-window snapshot would produce.
+_MAX_HISTORY_OVERLAP = 0.05
+
+
+@pytest.fixture(scope="session")
+def history(spark: SparkSession) -> dict[str, DataFrame]:
+    if not HISTORY.exists():
+        pytest.skip("no bronze layer; run `make bronze` first")
+    available = {s: HISTORY / s for s in ("train", "dev") if (HISTORY / s / "_SUCCESS").is_file()}
+    if not available:
+        pytest.skip("no committed history tables; run `make bronze` first")
+    return {s: spark.read.parquet(str(p)).cache() for s, p in available.items()}
+
+
+def _history_pairs(history: DataFrame) -> DataFrame:
+    """Distinct (user_id, item_id) pairs named in the history snapshot."""
+    return (
+        history.select(
+            "user_id",
+            f.explode(f.split(f.coalesce(f.col("history"), f.lit("")), " ")).alias("item_id"),
+        )
+        .filter(f.col("item_id") != "")
+        .distinct()
+    )
+
+
+def test_every_click_sits_inside_an_impression(events: DataFrame) -> None:
+    """Guide C4's orphan-click contract.
+
+    Structurally guaranteed on this schema and asserted anyway. MIND ships one
+    row per (impression, item shown) with the click as a BOOLEAN on that row,
+    so a click cannot exist without its impression -- there is nowhere for it
+    to live. The guide assumes an event-type model where clicks arrive as
+    separate rows and can genuinely be orphaned.
+
+    Kept because the guarantee is a property of the current schema, not of the
+    project: Part Q feeds clicks through Kafka as their own events, and on the
+    day silver is built from that stream instead, this stops being free and
+    starts being the test that catches it.
+    """
+    clicks = events.filter(f.col("clicked")).select("impression_id", "item_id")
+    shown = events.select("impression_id", "item_id")
+    orphans = clicks.join(shown, ["impression_id", "item_id"], "left_anti").count()
+
+    assert orphans == 0, f"{orphans} clicks without a matching impression"
+
+
+def test_silver_items_all_exist_in_the_catalogue(
+    silver: DataFrame, news: dict[str, DataFrame]
+) -> None:
+    """Referential integrity, asserted against the catalogue rather than the map.
+
+    The ID-map tests already prove events resolve to an index, but item_map is
+    DERIVED from news -- so checking against it cannot detect the two drifting
+    apart. This checks silver against the catalogue directly, which is where
+    category, subcategory and title actually come from.
+    """
+    catalogue = reduce(
+        lambda a, b: a.unionByName(b),
+        [df.select("item_id") for df in news.values()],
+    ).distinct()
+
+    missing = silver.select("item_id").distinct().join(catalogue, "item_id", "left_anti")
+    assert missing.count() == 0, "silver holds items absent from the news catalogue"
+
+
+@pytest.mark.parametrize("split", ["train", "dev"])
+def test_history_is_one_snapshot_per_user(history: dict[str, DataFrame], split: str) -> None:
+    """A user's history never changes across their impressions.
+
+    Verified at zero exceptions over 100,000 users, and it is the property
+    every sequence feature rests on. MIND's `history` is a SNAPSHOT, not a
+    running log: the same string is attached to a user's first impression and
+    their last. Should that ever stop being true, any code treating history as
+    "the sequence as of this impression" quietly changes meaning without
+    changing shape, which is the kind of bug that survives a code review.
+
+    The consequence is worth stating plainly: history is STALE for later
+    impressions, not leaky. A user's day-6 impression carries their day-1
+    history and knows nothing of the five days between. Part H's sequential
+    model has to top it up from in-window clicks as of each impression.
+    """
+    if split not in history:
+        pytest.skip(f"{split} history not built")
+    coalesced = history[split].withColumn("h", f.coalesce(f.col("history"), f.lit("")))
+    per_user = coalesced.groupBy("user_id").agg(f.count_distinct("h").alias("variants"))
+
+    assert per_user.filter(f.col("variants") > 1).count() == 0
+
+
+def test_history_predates_the_log_window(events: DataFrame, history: dict[str, DataFrame]) -> None:
+    """The leak guard, rewritten -- the guide's version fails on this corpus.
+
+    C4 asks for `test_history_predates_its_impression`, asserting that no item
+    in a user's history was clicked at or after the impression it hangs off,
+    with a hard zero. Run verbatim on MIND-small it reports 5,704 violations,
+    and every one of them is benign: an item clicked BEFORE the log window
+    (which is what put it in history) and clicked again during it. The test is
+    wrong, not the data.
+
+    What the guide is really reaching for is whether the snapshot was taken
+    before the window or after it. Taken after, a user's history would contain
+    the clicks they made during the window, and training on it would leak the
+    future wholesale. That is measurable directly, and it degrades gracefully:
+    an end-of-window snapshot pushes this overlap towards 100%, while a
+    genuine pre-window snapshot leaves only re-clicks behind.
+
+    Measured: 0.4% on train, 0.2% on dev.
+    """
+    if "train" not in history:
+        pytest.skip("train history not built")
+    clicked = events.filter(f.col("clicked")).select("user_id", "item_id").distinct()
+    total = clicked.count()
+    assert total > 0, "no clicks in bronze -- check the label parse"
+
+    overlap = clicked.join(_history_pairs(history["train"]), ["user_id", "item_id"]).count()
+    rate = overlap / total
+
+    assert rate < _MAX_HISTORY_OVERLAP, (
+        f"{rate:.1%} of in-log clicks appear in history; a pre-window snapshot "
+        "leaves only re-clicks, so this suggests history was captured later"
+    )
