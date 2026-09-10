@@ -107,7 +107,38 @@ class SessionConfig(BaseModel):
             elbow rather than inheriting the default.
     """
 
-    gap_minutes: int = 5
+    gap_minutes: int = 30
+
+
+class ReplayConfig(BaseModel):
+    """Kafka replay harness parameters (``data_pipeline/replay``).
+
+    The harness reads bronze and produces it to Kafka as though it were
+    arriving now, so the streaming jobs have something to consume.
+
+    Attributes:
+        topic: Destination topic. Must match the Flink DDL's ``'topic'``.
+        bootstrap_servers: ``localhost:9092`` from the host, ``kafka:29092``
+            from inside the compose network -- the broker advertises both.
+        speed: Event-time seconds per wall-clock second. 3600 replays an hour
+            per second, which walks MIND's week in about three minutes. 0 is
+            unthrottled, which is what backfills and tests want.
+        max_lateness_seconds: Upper bound on injected delay. THIS MUST NOT
+            EXCEED the allowed lateness in the consumer's watermark -- the
+            Flink table declares ``ts - INTERVAL '30' SECOND``. Raise one
+            without the other and the extra records are dropped as too late
+            rather than handled as late, which looks like data loss.
+        late_fraction: Share of records to delay. A few percent is enough to
+            exercise the path; more turns every window into a straggler.
+        seed: Fixes the draw sequence, so a window replays identically.
+    """
+
+    topic: str = "impressions"
+    bootstrap_servers: str = "localhost:9092"
+    speed: float = 3600.0
+    max_lateness_seconds: int = 30
+    late_fraction: float = 0.02
+    seed: int = 0
 
 
 class FilterConfig(BaseModel):
@@ -148,6 +179,7 @@ class Settings(BaseSettings):
         spark: Optional; spark runtime tuning.
         split: Optional; temporal split parameters.
         session: Optional; sessionization parameters.
+        replay: Optional; Kafka replay harness parameters.
         filter: Optional; corpus filters.
     """
 
@@ -161,6 +193,7 @@ class Settings(BaseSettings):
     spark: SparkConfig = SparkConfig()
     split: SplitConfig = SplitConfig()
     session: SessionConfig = SessionConfig()
+    replay: ReplayConfig = ReplayConfig()
     filter: FilterConfig = FilterConfig()
 
     @classmethod

@@ -24,6 +24,15 @@ session:
                            # convention, not a number from this corpus. Compute the
                            # inter-impression gap quantiles and set from the elbow.
 
+replay:
+  topic: impressions       # must match the 'topic' in the Flink CREATE TABLE
+  bootstrap_servers: "localhost:9092"   # kafka:29092 from inside the compose network
+  speed: 3600              # an hour of event time per wall second; 0 = unthrottled
+  max_lateness_seconds: 30 # MUST NOT exceed the Flink watermark's INTERVAL '30' SECOND,
+                           # or the extra delay shows up as dropped records, not late ones
+  late_fraction: 0.02      # enough to exercise the late path without making it the norm
+  seed: 0                  # a fixed seed is what makes the batch/stream parity test valid
+
 filter:
   min_item_impressions: 5     # below this, nothing is learnable about the article
   max_impressions_per_user: 500   # stops heavy users dominating row-averaged metrics

@@ -9,6 +9,7 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
+    "confluent-kafka>=2.12.0",
     "feast[redis]>=0.66.0",
     "huggingface-hub>=1.29.0",
     "ipykernel>=7.3.0",
@@ -51,7 +52,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*"]
+module = ["pyarrow.*", "confluent_kafka.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
