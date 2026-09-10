@@ -7,6 +7,7 @@
 MIND_SIZE ?= small
 SPLITS ?= train dev
 FORCE ?=
+FORCE_ID_MAPS ?=
 REPLAY_SPLIT ?= train
 REPLAY_ARGS ?=
 
@@ -53,7 +54,7 @@ raw:  ## Fetch MIND into paths.raw (override: make download MIND_SIZE=large)
 	uv run python -m data_pipeline.ingest.download_mind --size $(MIND_SIZE) --splits $(SPLITS) $(if $(FORCE),--force)
 
 bronze:  ## raw -> bronze (rebuild an existing layer: make bronze FORCE=1)
-	uv run python -m data_pipeline.ingest.bronze --splits $(SPLITS) $(if $(FORCE),--force)
+	uv run python -m data_pipeline.ingest.bronze --splits $(SPLITS) $(if $(FORCE),--force) $(if $(FORCE_ID_MAPS),--force-id-maps)
 
 silver:  ## bronze -> silver (rebuild an existing layer: make silver FORCE=1)
 	uv run python -m data_pipeline.transform.silver --splits $(SPLITS) $(if $(FORCE),--force)

@@ -119,6 +119,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Rebuild a split even when its bronze tables are already present.",
     )
+    parser.add_argument(
+        "--force-id-maps",
+        action="store_true",
+        help="Renumber user_map and item_map. INVALIDATES trained checkpoints; retrain after.",
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
@@ -156,7 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             [spark.read.parquet(str(settings.paths.bronze / "news" / s)) for s in present_splits],
         )
 
-        build_id_maps(all_events_dfs, all_news_dfs, settings, force=args.force)
+        build_id_maps(all_events_dfs, all_news_dfs, settings, force=args.force_id_maps)
     finally:
         spark.stop()
     return 0
