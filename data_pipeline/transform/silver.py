@@ -11,6 +11,7 @@ from pyspark.sql import functions as f
 from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import SPLITS, _is_built
+from data_pipeline.transform.sessionize import sessionize
 
 
 def join_events_with_news(
@@ -21,8 +22,8 @@ def join_events_with_news(
     settings: Settings,
     split: str,
 ) -> None:
-    """Join and write."""
-    silver = (
+    """Join, sessionize, and write."""
+    joined = (
         events.join(
             f.broadcast(news.select("item_id", "category", "subcategory", "title", "abstract")),
             on="item_id",
@@ -30,11 +31,15 @@ def join_events_with_news(
         )
         .join(f.broadcast(item_map), on="item_id", how="left")
         .join(user_map, on="user_id", how="left")  # ~1M rows: shuffle join
+    )
+    silver = (
+        sessionize(joined, settings.session.gap_minutes)
         .withColumn("dt", f.to_date("ts"))
         .select(
             "impression_id",
             "user_id",
             "user_idx",
+            "session_id",
             "item_id",
             "item_idx",
             "clicked",
@@ -98,7 +103,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     spark = get_spark(settings, app="silver")
     try:
         for split in todo:
-            print(f"{split}: {settings.paths.bronze} -> {settings.paths.silver / split}")
+            dest = settings.paths.silver / "impressions" / split
+            print(f"{split}: {settings.paths.bronze} -> {dest}")
             build_silver(spark, settings, split)
     finally:
         spark.stop()

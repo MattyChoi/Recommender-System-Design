@@ -1,7 +1,7 @@
 """Build the bronze layer from the raw MIND TSVs.
 
 Reads ``paths.raw/<split>/`` as downloaded by
-:mod:`data_pipeline.ingest.download` and writes typed Parquet under
+:mod:`data_pipeline.ingest.download_mind` and writes typed Parquet under
 ``paths.bronze``: ``events/`` (one row per item shown, partitioned by date),
 ``history/`` and ``news/``.
 """

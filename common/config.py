@@ -6,7 +6,7 @@ Every threshold, path and tuning knob the pipeline uses lives here and in
 Values may be overridden from the environment without editing a file, using the
 ``RECSYS_`` prefix and ``__`` to descend into nested models::
 
-    RECSYS_SPLIT__HOLDOUT_DAYS=1 uv run python -m data_pipeline.ingest.mind
+    RECSYS_SPLIT__HOLDOUT_DAYS=1 uv run python -m data_pipeline.ingest.bronze
 
 That is how CI runs the whole pipeline over a single day of data as a smoke
 test while a laptop runs the real thing.
@@ -86,24 +86,48 @@ class SplitConfig(BaseModel):
     min_user_impressions: int = 3
 
 
-class FilterConfig(BaseModel):
-    """Corpus filters applied between bronze and silver.
+class SessionConfig(BaseModel):
+    """Sessionization parameters.
 
-    Each of these moves your metrics, so each belongs in ``docs/evaluation.md``
-    with its measured effect on row count. An unstated filter is how offline
-    numbers stop meaning anything.
+    A session groups one user's impressions into a burst of activity, split
+    wherever they go quiet for longer than ``gap_minutes``. This is COARSER
+    than MIND's ``impression_id``, which already groups the items shown
+    together on a single page view -- sessions group several page views into
+    one sitting.
 
-    Note:
-        There is NO filter for zero-click impressions. These are real observations
-        -- a user was shown five articles and wanted none -- and they carry most
-        of the calibration signal.
+    Nothing in the batch pipeline needs sessions; they exist for the streaming
+    session-window aggregates in Part Q and the recently-viewed retriever in
+    Part I.
 
     Attributes:
-        min_item_impressions: Articles shown fewer times than this are dropped;
-            below this threshold nothing is learnable about them.
-        max_impressions_per_user: Cap on impressions retained per user. A handful
-            of very heavy users would otherwise dominate any row-averaged metric
-            while representing nobody.
+        gap_minutes: Inactivity gap that ends a session. Guide 5.2 suggests 30,
+            which is a web-analytics convention rather than a measurement --
+            and arguably long for news, where reading is short and bursty.
+            Measure the inter-impression gap distribution and set this from the
+            elbow rather than inheriting the default.
+    """
+
+    gap_minutes: int = 5
+
+
+class FilterConfig(BaseModel):
+    """Filter thresholds that were measured and REJECTED. Nothing reads these.
+
+    * ``min_item_impressions = 5`` discards 0.3% of train rows but **50.2% of
+      dev rows**, because 32.9% of the evaluation catalogue never appears in
+      training.
+    * ``max_impressions_per_user = 500`` never binds: the busiest user in
+      MIND-small has 62 impressions.
+
+    The pipeline is therefore lossless from raw to silver, and the row-count
+    contracts in ``data_pipeline/tests/test_contracts.py`` assert exactly that.
+
+    Attributes:
+        min_item_impressions: Minimum impressions for an article to be
+            considered learnable. Not enforced; see above.
+        max_impressions_per_user: Cap on impressions retained per user, to stop
+            heavy users dominating row-averaged metrics. Not enforced, and
+            unreachable at this dataset size.
     """
 
     min_item_impressions: int = 5
@@ -123,6 +147,7 @@ class Settings(BaseSettings):
         paths: Required
         spark: Optional; spark runtime tuning.
         split: Optional; temporal split parameters.
+        session: Optional; sessionization parameters.
         filter: Optional; corpus filters.
     """
 
@@ -135,6 +160,7 @@ class Settings(BaseSettings):
     paths: Paths
     spark: SparkConfig = SparkConfig()
     split: SplitConfig = SplitConfig()
+    session: SessionConfig = SessionConfig()
     filter: FilterConfig = FilterConfig()
 
     @classmethod

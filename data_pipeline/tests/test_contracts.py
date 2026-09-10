@@ -5,9 +5,6 @@ Skipped when no bronze layer exists, so CI stays green without the dataset.
 
 from __future__ import annotations
 
-import os
-import shutil
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,32 +12,13 @@ import pytest
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
+from common.schemas import EVENT_SCHEMA
 from data_pipeline.features.asof import asof_join
 from data_pipeline.features.item_dynamic_features import item_hourly_features
 
 BRONZE = Path("data/bronze/events/train")
 
-# PySpark needs a JVM, which a bare CI runner does not have. Skip the whole
-# module rather than fail.
-_HAS_JVM = bool(os.environ.get("JAVA_HOME")) or shutil.which("java") is not None
-pytestmark = pytest.mark.skipif(
-    not _HAS_JVM, reason="no JVM on PATH; PySpark tests need Java 17 or 21"
-)
-
-
-@pytest.fixture(scope="session")
-def spark() -> Iterator[object]:
-    # session scope matters: a SparkSession costs seconds to build
-    session = (
-        SparkSession.builder.master("local[1]")
-        .appName("mind-tests")
-        .config("spark.sql.shuffle.partitions", "1")
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.ui.enabled", "false")
-        .getOrCreate()
-    )
-    yield session
-    session.stop()
+# The `spark` fixture, and the JVM skip that guards it, live in conftest.py.
 
 
 @pytest.fixture(scope="session")
@@ -89,6 +67,21 @@ def test_every_impression_has_at_least_two_items(events: DataFrame) -> None:
     """A single-item impression cannot be ranked, and skews per-impression AUC."""
     sizes = events.groupBy("impression_id").count()
     assert sizes.filter(f.col("count") < 2).count() == 0
+
+
+def test_bronze_events_matches_the_declared_contract(events: DataFrame) -> None:
+    # `dt` is a partition column derived from ts at write time, not part of
+    # the event contract itself.
+    actual = {
+        (field.name, field.dataType.simpleString())
+        for field in events.schema.fields
+        if field.name != "dt"
+    }
+    expected = {(field.name, field.dataType.simpleString()) for field in EVENT_SCHEMA.fields}
+    assert actual == expected, (
+        f"missing from bronze: {sorted(expected - actual)}; "
+        f"unexpected in bronze: {sorted(actual - expected)}"
+    )
 
 
 # ---------------------------------------------------------------------------

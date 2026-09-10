@@ -20,5 +20,6 @@ def get_spark(settings: Settings, app: str = "recsys") -> SparkSession:
         .config("spark.sql.shuffle.partitions", settings.spark.shuffle_partitions)
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        .config("spark.driver.maxResultSize", "2g")
         .getOrCreate()
     )

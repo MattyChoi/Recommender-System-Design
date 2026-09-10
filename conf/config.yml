@@ -19,6 +19,11 @@ split:
                            # Primary evaluation uses MIND's official train/dev split.
   min_user_impressions: 3  # below this a user cannot be personalized to
 
+session:
+  gap_minutes: 30          # TODO: measure. Guide 5.2's default is a web-analytics
+                           # convention, not a number from this corpus. Compute the
+                           # inter-impression gap quantiles and set from the elbow.
+
 filter:
   min_item_impressions: 5     # below this, nothing is learnable about the article
   max_impressions_per_user: 500   # stops heavy users dominating row-averaged metrics
