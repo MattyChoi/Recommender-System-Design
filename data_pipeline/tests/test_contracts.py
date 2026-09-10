@@ -1,6 +1,6 @@
-"""Data contracts for the bronze layer.
+"""Data contracts for the all layers of the data pipeline.
 
-Skipped when no bronze layer exists, so CI stays green without the dataset.
+Most of these tests were created by a Claude agent
 """
 
 from __future__ import annotations
@@ -359,3 +359,123 @@ def test_silver_never_falls_back_to_oov(silver: DataFrame) -> None:
         assert silver.filter(f.col(column) == OOV_IDX).count() == 0, (
             f"{column} fell back to OOV in a batch build -- the maps do not cover silver"
         )
+
+
+# ---------------------------------------------------------------------------
+# The news catalogue
+#
+# news is the sole source of item_map, so a defect here corrupts C3 without
+# implicating itself: the ID-map tests would report the symptom while pointing
+# at the wrong file. These sit upstream of that.
+# ---------------------------------------------------------------------------
+
+NEWS = Path("data/bronze/news")
+
+# Present but frequently absent, so a blanket non-null assertion would be
+# wrong: ~5% of MIND articles ship no abstract at all. That is a property of
+# the corpus, not a parse failure -- see the ceiling asserted below.
+_REQUIRED_NEWS_COLUMNS = ("item_id", "category", "subcategory", "title")
+
+
+@pytest.fixture(scope="session")
+def news(spark: SparkSession) -> dict[str, DataFrame]:
+    if not NEWS.exists():
+        pytest.skip("no bronze layer; run `make bronze` first")
+    available = {s: NEWS / s for s in ("train", "dev") if (NEWS / s / "_SUCCESS").is_file()}
+    if not available:
+        pytest.skip("no committed news tables; run `make bronze` first")
+    return {s: spark.read.parquet(str(p)).cache() for s, p in available.items()}
+
+
+@pytest.mark.parametrize("split", ["train", "dev"])
+def test_news_item_ids_are_unique_within_a_split(news: dict[str, DataFrame], split: str) -> None:
+    """What licenses the .distinct() in build_id_maps.
+
+    A duplicated item_id here would survive into item_map as two rows with two
+    different indices for one article -- splitting its interactions across two
+    embedding rows, each trained on half the evidence, and neither wrong enough
+    to look wrong.
+    """
+    if split not in news:
+        pytest.skip(f"{split} news not built")
+    catalogue = news[split]
+    assert catalogue.select("item_id").distinct().count() == catalogue.count()
+
+
+def test_news_rows_agree_where_the_splits_overlap(news: dict[str, DataFrame]) -> None:
+    """The assumption read_news() states in prose and nothing has checked.
+
+    read_news unions both splits and calls dropDuplicates(["item_id"]), which
+    keeps an ARBITRARY row of each duplicate group. That is only safe while
+    overlapping rows are identical. Let them diverge -- a retitled article, a
+    recategorised one -- and the surviving row becomes whichever Spark happened
+    to encounter first, so item_map, silver's category column and every
+    category-level CTR prior turn nondeterministic across runs.
+
+    Measured on MIND-small: 28,460 items appear in both weeks, none differing.
+    """
+    if len(news) < 2:
+        pytest.skip("need both splits to compare")
+    columns = ["item_id", "category", "subcategory", "title", "abstract", "url"]
+    train, dev = news["train"].select(columns), news["dev"].select(columns)
+
+    shared = train.select("item_id").intersect(dev.select("item_id")).count()
+    # INTERSECT compares with null-safe equality, so a shared null abstract
+    # counts as agreement rather than silently failing the match.
+    identical = train.intersect(dev).count()
+
+    assert identical == shared, (
+        f"{shared - identical} of {shared} overlapping articles differ between splits; "
+        "dropDuplicates in read_news would pick between them arbitrarily"
+    )
+
+
+@pytest.mark.parametrize("split", ["train", "dev"])
+@pytest.mark.parametrize("column", _REQUIRED_NEWS_COLUMNS)
+def test_news_required_columns_are_never_null(
+    news: dict[str, DataFrame], split: str, column: str
+) -> None:
+    """category and subcategory feed the smoothed-CTR prior; title feeds content.
+
+    A null in any of them is not a missing value to impute around -- it means
+    the TSV column offsets have shifted, and every column after it is holding
+    someone else's data.
+    """
+    if split not in news:
+        pytest.skip(f"{split} news not built")
+    assert news[split].filter(f.col(column).isNull()).count() == 0
+
+
+@pytest.mark.parametrize("split", ["train", "dev"])
+def test_news_abstracts_are_mostly_present(news: dict[str, DataFrame], split: str) -> None:
+    """Absent abstracts are normal; an absent COLUMN is a parse failure.
+
+    ~5% of MIND articles genuinely ship without one, so the contract is a
+    ceiling rather than zero. The failure this catches is the whole column
+    arriving null, which is what a shifted delimiter or a short row produces
+    and which no other test in this file would notice.
+    """
+    if split not in news:
+        pytest.skip(f"{split} news not built")
+    catalogue = news[split]
+    missing = catalogue.filter(f.col("abstract").isNull()).count() / catalogue.count()
+    assert missing < 0.20, f"{missing:.1%} of abstracts are null -- suspect the parse"
+
+
+@pytest.mark.parametrize("split", ["train", "dev"])
+def test_news_categories_are_a_small_closed_vocabulary(
+    news: dict[str, DataFrame], split: str
+) -> None:
+    """A cheap canary for the columns having slid sideways.
+
+    MIND ships 17 categories, all single lowercase tokens. If the parse shifts,
+    this column fills with titles or URLs -- thousands of distinct values, most
+    containing spaces -- and the smoothed-CTR prior silently degenerates to one
+    group per article, which is the same as having no prior at all.
+    """
+    if split not in news:
+        pytest.skip(f"{split} news not built")
+    categories = {row[0] for row in news[split].select("category").distinct().collect()}
+
+    assert 5 <= len(categories) <= 50, f"{len(categories)} distinct categories"
+    assert all(" " not in c for c in categories), "a category contains a space"
