@@ -20,7 +20,7 @@ from common.schemas import BEHAVIORS_RAW, NEWS_RAW
 from common.spark import get_spark
 from common.utils import MIND_TS_FORMAT, SPLITS, _is_built
 
-from ..transform.id_maps import build_id_maps
+from ..transform.id_maps import _maps_exist, build_id_maps
 
 
 def read_behaviors(spark: SparkSession, settings: Settings, split: str) -> DataFrame:
@@ -132,8 +132,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     for split in args.splits:
         if split not in build_split:
             print(f"{split}: bronze already present, skipping")
+
+    maps_missing = not _maps_exist(settings)
     # Starting a session costs seconds of JVM boot, so decide before paying for it.
-    if not build_split:
+    if not build_split and not maps_missing:
         return 0
 
     spark = get_spark(settings, app="mind-ingest")
@@ -154,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             [spark.read.parquet(str(settings.paths.bronze / "news" / s)) for s in present_splits],
         )
 
-        build_id_maps(all_events_dfs, all_news_dfs, settings)
+        build_id_maps(all_events_dfs, all_news_dfs, settings, force=args.force)
     finally:
         spark.stop()
     return 0

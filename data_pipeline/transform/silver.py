@@ -9,6 +9,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
 from common.config import Settings, load_settings
+from common.schemas import OOV_IDX
 from common.spark import get_spark
 from common.utils import SPLITS, _is_built
 from data_pipeline.transform.sessionize import sessionize
@@ -31,6 +32,8 @@ def join_events_with_news(
         )
         .join(f.broadcast(item_map), on="item_id", how="left")
         .join(user_map, on="user_id", how="left")  # ~1M rows: shuffle join
+        .withColumn("item_idx", f.coalesce("item_idx", f.lit(OOV_IDX)))
+        .withColumn("user_idx", f.coalesce("user_idx", f.lit(OOV_IDX)))
     )
     silver = (
         sessionize(joined, settings.session.gap_minutes)

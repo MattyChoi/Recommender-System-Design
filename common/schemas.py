@@ -1,5 +1,10 @@
 from pyspark.sql import types as t
 
+# Index 0 is RESERVED and appears in no mapping table. It is the slot every
+# unmapped string resolves to -- an article published after the maps were
+# built, a user seen for the first time at serving time.
+OOV_IDX: int = 0
+
 # --- raw, as MIND ships it (tab-separated, no header) ---
 
 BEHAVIORS_RAW = t.StructType(

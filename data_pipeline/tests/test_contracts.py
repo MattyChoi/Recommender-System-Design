@@ -12,7 +12,7 @@ import pytest
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
-from common.schemas import EVENT_SCHEMA
+from common.schemas import EVENT_SCHEMA, OOV_IDX
 from data_pipeline.features.asof import asof_join
 from data_pipeline.features.item_dynamic_features import item_hourly_features
 
@@ -254,3 +254,108 @@ def test_hourly_features_do_not_leak_within_the_bucket(spark: SparkSession) -> N
         f"leak: the label saw {got['clicks_24h']} clicks, all of which happened "
         "after it. This is the failure that produces beautiful offline metrics."
     )
+
+
+# ---------------------------------------------------------------------------
+# ID mappings
+#
+# An index is meaningless on its own; it is meaningful relative to the
+# checkpoint trained against it. Every assertion below exists because its
+# failure mode is SILENT -- a model that loads, runs, returns recommendations,
+# and addresses the wrong embedding row.
+# ---------------------------------------------------------------------------
+
+ITEM_MAP = Path("data/bronze/item_map")
+USER_MAP = Path("data/bronze/user_map")
+SILVER = Path("data/silver/impressions/train")
+
+
+@pytest.fixture(scope="session")
+def item_map(spark: SparkSession) -> DataFrame:
+    if not ITEM_MAP.exists():
+        pytest.skip("no id maps; run `make bronze` first")
+    return spark.read.parquet(str(ITEM_MAP)).cache()
+
+
+@pytest.fixture(scope="session")
+def user_map(spark: SparkSession) -> DataFrame:
+    if not USER_MAP.exists():
+        pytest.skip("no id maps; run `make bronze` first")
+    return spark.read.parquet(str(USER_MAP)).cache()
+
+
+@pytest.fixture(scope="session")
+def silver(spark: SparkSession) -> DataFrame:
+    if not SILVER.exists():
+        pytest.skip("no silver layer; run `make silver` first")
+    return spark.read.parquet(str(SILVER)).cache()
+
+
+@pytest.mark.parametrize("table,column", [("item_map", "item_idx"), ("user_map", "user_idx")])
+def test_indices_are_dense_and_start_after_the_oov_slot(
+    request: pytest.FixtureRequest, table: str, column: str
+) -> None:
+    """Contiguous 1..N, with no duplicates and nothing sitting on OOV.
+
+    Density is not cosmetic. A gap is a row in the embedding table that no
+    item ever addresses: it receives no gradient, keeps its random
+    initialisation for the whole of training, and costs parameters and memory
+    for the privilege. A duplicate is worse -- two items sharing one vector,
+    which trains to the average of two unrelated things.
+
+    The lower bound is the half people forget: reserving OOV_IDX is only real
+    if the maps genuinely start at 1.
+    """
+    mapping: DataFrame = request.getfixturevalue(table)
+    n = mapping.count()
+    lo, hi, distinct = mapping.agg(
+        f.min(column), f.max(column), f.count_distinct(column)
+    ).collect()[0]
+
+    assert lo == OOV_IDX + 1, f"{column} starts at {lo}; {OOV_IDX} must stay reserved"
+    assert hi == n, f"{column} runs to {hi} over {n} rows -- gaps mean dead embedding rows"
+    assert distinct == n, f"{column} has {n - distinct} duplicate indices"
+
+
+@pytest.mark.parametrize("table,key", [("item_map", "item_id"), ("user_map", "user_id")])
+def test_the_mapping_key_is_unique(request: pytest.FixtureRequest, table: str, key: str) -> None:
+    """A repeated key turns the join in silver into a row multiplier.
+
+    Not hypothetical: item_map is built from the news catalogue, which ships
+    one row per article PER SPLIT, and items shown in both weeks appear twice.
+    Drop the distinct() and every such impression is duplicated in silver --
+    inflating counts, CTR denominators and every metric built on them.
+    """
+    mapping: DataFrame = request.getfixturevalue(table)
+    assert mapping.select(key).distinct().count() == mapping.count()
+
+
+def test_every_event_id_resolves_to_an_index(
+    events: DataFrame, item_map: DataFrame, user_map: DataFrame
+) -> None:
+    """The maps must cover the data, or silver's LEFT joins quietly drop to OOV.
+
+    This is what catches the case the overwrite guard deliberately creates:
+    keeping existing indices when a new split has arrived is correct for the
+    checkpoint and wrong for the data, and this is where you find out.
+    """
+    unmapped_items = events.select("item_id").distinct().join(item_map, "item_id", "left_anti")
+    unmapped_users = events.select("user_id").distinct().join(user_map, "user_id", "left_anti")
+
+    assert unmapped_items.count() == 0, "items in bronze have no index; rebuild the maps"
+    assert unmapped_users.count() == 0, "users in bronze have no index; rebuild the maps"
+
+
+def test_silver_never_falls_back_to_oov(silver: DataFrame) -> None:
+    """OOV exists for serving-time strangers, not for a batch build.
+
+    silver coalesces a missing index to OOV_IDX so the column is never null.
+    That is the right behaviour and also a perfect hiding place, so the batch
+    rate is pinned at zero here: every id in a historical log was known when
+    the maps were built, by construction.
+    """
+    for column in ("item_idx", "user_idx"):
+        assert silver.filter(f.col(column).isNull()).count() == 0, f"{column} is null"
+        assert silver.filter(f.col(column) == OOV_IDX).count() == 0, (
+            f"{column} fell back to OOV in a batch build -- the maps do not cover silver"
+        )
