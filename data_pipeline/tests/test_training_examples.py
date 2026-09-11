@@ -12,13 +12,17 @@ from datetime import datetime, timedelta
 import pytest
 from pyspark.sql import DataFrame, SparkSession
 
-from data_pipeline.features.gold import attach_point_in_time_features
+from data_pipeline.features.asof import attach_point_in_time_features
 
 T0 = datetime(2019, 11, 14, 12, 0, 0)
 
 _LABELS = (
     "impression_id long, user_id string, item_id string, category string, "
     "clicked boolean, ts timestamp"
+)
+_AFFINITY = (
+    "user_id string, category string, feature_ts timestamp, "
+    "user_cat_impressions_cum long, user_cat_clicks_cum long, user_cat_affinity double"
 )
 _USERS = (
     "user_id string, feature_ts timestamp, user_impressions_24h long, "
@@ -55,6 +59,14 @@ def users(spark: SparkSession) -> DataFrame:
 
 
 @pytest.fixture
+def affinity(spark: SparkSession) -> DataFrame:
+    """U1 has read sports before; nobody has read anything else."""
+    return spark.createDataFrame(
+        [("U1", "sports", T0 - timedelta(hours=1), 40, 6, 0.15)], _AFFINITY
+    )
+
+
+@pytest.fixture
 def labels(spark: SparkSession) -> DataFrame:
     """One warm item and one the series has never seen, at the same instant."""
     return spark.createDataFrame(
@@ -71,10 +83,10 @@ def _rows(got: DataFrame) -> dict[str, dict[str, object]]:
 
 
 def test_a_warm_item_reads_only_its_past(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """The 0.75 bucket closes an hour AFTER the label and must stay invisible."""
-    got = _rows(attach_point_in_time_features(labels, series, users))["N1"]
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
 
     assert got["item_ctr_smoothed"] == pytest.approx(0.05), "read a feature from the future"
     assert got["item_impressions_24h"] == 400
@@ -82,7 +94,7 @@ def test_a_warm_item_reads_only_its_past(
 
 
 def test_a_cold_item_gets_the_category_prior_not_a_zero_rate(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """The distinction the guide is specific about.
 
@@ -92,14 +104,14 @@ def test_a_cold_item_gets_the_category_prior_not_a_zero_rate(
     prior arrives through the category timeline, which is why it is joined
     separately: a prior read off N2's own (null) row would be null too.
     """
-    got = _rows(attach_point_in_time_features(labels, series, users))["N2"]
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N2"]
 
     assert got["item_ctr_smoothed"] == pytest.approx(0.03), "cold item was zero-filled"
     assert got["has_item_features"] is False
 
 
 def test_cold_item_counts_are_zero_not_null(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """Counts are the opposite case: zero is the honest answer.
 
@@ -107,7 +119,7 @@ def test_cold_item_counts_are_zero_not_null(
     impressions, and an age of zero at first sight. Leaving them null would
     push the imputation decision onto every downstream consumer.
     """
-    got = _rows(attach_point_in_time_features(labels, series, users))["N2"]
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N2"]
 
     assert got["item_impressions_24h"] == 0
     assert got["item_clicks_24h"] == 0
@@ -115,7 +127,7 @@ def test_cold_item_counts_are_zero_not_null(
 
 
 def test_the_joins_never_multiply_labels(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """Two rows in, two rows out -- every label here has a reachable prior.
 
@@ -123,21 +135,21 @@ def test_the_joins_never_multiply_labels(
     one row per (impression, item). Drop the distinct() and `sports` matches
     three series rows, silently tripling every label in the category.
     """
-    assert attach_point_in_time_features(labels, series, users).count() == labels.count()
+    assert attach_point_in_time_features(labels, series, users, affinity).count() == labels.count()
 
 
 def test_context_features_come_from_the_label_timestamp(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """Cheap, and the only D1 group available without another table."""
-    got = _rows(attach_point_in_time_features(labels, series, users))["N1"]
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
 
     assert got["hour_of_day"] == 12
     assert got["day_of_week"] == 5  # Spark's dayofweek: Sunday = 1, so Thursday = 5
 
 
 def test_the_label_keeps_its_own_category(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """Silver's category is static metadata and must survive the join.
 
@@ -145,7 +157,7 @@ def test_the_label_keeps_its_own_category(
     from the item feature list on purpose. Were it attached instead, a cold
     item would lose the very column its prior is keyed on.
     """
-    got = _rows(attach_point_in_time_features(labels, series, users))
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))
 
     assert got["N1"]["category"] == "sports"
     assert got["N2"]["category"] == "sports"
@@ -173,14 +185,15 @@ def test_a_label_with_nothing_knowable_is_dropped(spark: SparkSession) -> None:
     )
 
     users = spark.createDataFrame([], _USERS)
-    got = attach_point_in_time_features(labels, series, users)
+    affinity = spark.createDataFrame([], _AFFINITY)
+    got = attach_point_in_time_features(labels, series, users, affinity)
 
     assert got.count() == 1, "the unknowable label was not dropped"
     assert got.collect()[0]["impression_id"] == 2
 
 
 def test_a_user_with_history_gets_their_own_rate(
-    labels: DataFrame, series: DataFrame, users: DataFrame
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
     """The second as-of join, on its own timeline.
 
@@ -188,7 +201,7 @@ def test_a_user_with_history_gets_their_own_rate(
     and prefixed -- unprefixed, `impressions_24h` would collide between the
     user and item series and asof_join would raise.
     """
-    got = _rows(attach_point_in_time_features(labels, series, users))["N1"]
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
 
     assert got["user_ctr_smoothed"] == pytest.approx(0.09)
     assert got["user_impressions_24h"] == 30
@@ -208,9 +221,56 @@ def test_a_users_first_impression_is_kept_with_a_null_rate(
     """
     labels = spark.createDataFrame([(1, "U9", "N1", "sports", True, T0)], _LABELS)
     users = spark.createDataFrame([], _USERS)
+    affinity = spark.createDataFrame([], _AFFINITY)
 
-    got = _rows(attach_point_in_time_features(labels, series, users))["N1"]
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
 
     assert got["has_user_features"] is False
     assert got["user_ctr_smoothed"] is None
     assert got["user_impressions_24h"] == 0
+
+
+def test_affinity_is_keyed_on_the_user_and_category_pair(
+    labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
+) -> None:
+    """The composite key, which is the whole point of the cross feature.
+
+    U1 has sports history, so a sports label reads it. The same user on a
+    different vertical must NOT: a value carried forward on one timeline says
+    nothing about another, and a single-key join would have handed every
+    category U1's sports number.
+    """
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
+
+    assert got["user_cat_affinity"] == pytest.approx(0.15)
+    assert got["has_user_category_features"] is True
+
+
+def test_affinity_does_not_leak_across_categories(
+    spark: SparkSession, series: DataFrame, users: DataFrame, affinity: DataFrame
+) -> None:
+    """A finance label from a user who has only ever read sports."""
+    labels = spark.createDataFrame([(1, "U1", "N1", "finance", True, T0)], _LABELS)
+
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
+
+    assert got["has_user_category_features"] is False, "sports affinity leaked into finance"
+    assert got["user_cat_impressions_cum"] == 0
+
+
+def test_the_affinity_flag_is_stricter_than_the_user_flag(
+    spark: SparkSession, series: DataFrame, users: DataFrame, affinity: DataFrame
+) -> None:
+    """Its own flag, because the condition is strictly smaller.
+
+    U1 has user-level history and sports affinity, but reading finance means
+    the pair has none -- so reusing has_user_features would have claimed a
+    feature that is null. Measured on the corpus: 33.7% of dev rows have
+    affinity against 37.1% with user history.
+    """
+    labels = spark.createDataFrame([(1, "U1", "N1", "finance", True, T0)], _LABELS)
+
+    got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
+
+    assert got["has_user_features"] is True
+    assert got["has_user_category_features"] is False

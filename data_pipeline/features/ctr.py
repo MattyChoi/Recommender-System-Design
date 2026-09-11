@@ -1,4 +1,4 @@
-"""Bayesian shrinkage toward a point-in-time category prior."""
+"""Bayesian shrinkage toward a point-in-time prior."""
 
 from __future__ import annotations
 

@@ -6,6 +6,8 @@ features observable at the time of the label are used.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as f
 
@@ -23,6 +25,11 @@ _USER_FEATURES = (
     "user_ctr_smoothed",
     "user_tenure_hours",
 )
+_USER_CATEGORY_FEATURES = (
+    "user_cat_impressions_cum",
+    "user_cat_clicks_cum",
+    "user_cat_affinity",
+)
 _CATEGORY_FEATURES = ("cat_expanding_ctr",)
 
 # Counts, where zero is the honest answer for an item with no closed bucket
@@ -35,13 +42,15 @@ _ZERO_FILLED = (
     "user_impressions_24h",
     "user_clicks_24h",
     "user_tenure_hours",
+    "user_cat_impressions_cum",
+    "user_cat_clicks_cum",
 )
 
 
 def asof_join(
     labels: DataFrame,
     features: DataFrame,
-    join_key: str,
+    join_key: str | Sequence[str],
     label_ts: str = "ts",
     feat_ts: str = "feature_ts",
 ) -> DataFrame:
@@ -56,8 +65,8 @@ def asof_join(
         labels: Rows to enrich; must contain ``join_key`` and ``label_ts``, and
             must NOT already carry any of the feature columns.
         features: Time series from D1; must contain ``join_key`` and ``feat_ts``.
-        join_key: Join key, e.g. "item_id" or "user_id". Run this once per key:
-            each has its own independent timeline.
+        join_key: Join key, or several. ``"item_id"``, ``"user_id"``, and
+            ``["user_id", "category"]``
 
     Returns:
         ``labels`` with one column per feature, carrying the most recent value
@@ -68,7 +77,8 @@ def asof_join(
     Raises:
         ValueError: If a feature column already exists on ``labels``.
     """
-    feat_cols = [c for c in features.columns if c not in {join_key, feat_ts}]
+    keys = [join_key] if isinstance(join_key, str) else list(join_key)
+    feat_cols = [c for c in features.columns if c not in {*keys, feat_ts}]
 
     # Prevent overwriting a label column with a feature column of the same name. Biggest
     # risk would be the category feature being nulled if it's a cold item
@@ -91,7 +101,7 @@ def asof_join(
     # must set _is_label as secondary sort key to ensure that the feature rows are
     # always before the label rows at the same timestamp
     w = (
-        Window.partitionBy(join_key)
+        Window.partitionBy(*keys)
         .orderBy(f.col("_ts").asc(), f.col("_is_label").asc())
         .rowsBetween(Window.unboundedPreceding, 0)
     )
@@ -107,7 +117,10 @@ def asof_join(
 
 
 def attach_point_in_time_features(
-    labels: DataFrame, item_features: DataFrame, user_features: DataFrame
+    labels: DataFrame,
+    item_features: DataFrame,
+    user_features: DataFrame,
+    user_category_features: DataFrame,
 ) -> DataFrame:
     """Attach features knowable at each label's timestamp.
 
@@ -126,6 +139,7 @@ def attach_point_in_time_features(
         labels: Silver rows, carrying ``item_id``, ``category``, ``ts``.
         item_features: ``item_hourly_features`` output.
         user_features: ``user_hourly_features`` output.
+        user_category_features: ``user_category_hourly_features`` output.
 
     Returns:
         ``labels`` with the item features, user features the category prior,
@@ -139,15 +153,20 @@ def attach_point_in_time_features(
     ).distinct()
     item_features = item_features.select("item_id", "feature_ts", *_ITEM_FEATURES)
     user_features = user_features.select("user_id", "feature_ts", *_USER_FEATURES)
+    user_category_features = user_category_features.select(
+        "user_id", "category", "feature_ts", *_USER_CATEGORY_FEATURES
+    )
 
     examples = asof_join(labels, item_features, join_key="item_id")
     examples = asof_join(examples, user_features, join_key="user_id")
+    examples = asof_join(examples, user_category_features, join_key=["user_id", "category"])
     examples = asof_join(examples, category_features, join_key="category")
 
     examples = (
         # Create flagsfor whether the item and user
         examples.withColumn("has_item_features", f.col("item_ctr_smoothed").isNotNull())
         .withColumn("has_user_features", f.col("user_ctr_smoothed").isNotNull())
+        .withColumn("has_user_category_features", f.col("user_cat_affinity").isNotNull())
         .withColumn(
             "item_ctr_smoothed",
             f.coalesce(f.col("item_ctr_smoothed"), f.col("cat_expanding_ctr")),

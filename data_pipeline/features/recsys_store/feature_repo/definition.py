@@ -21,6 +21,7 @@ GOLD = PROJECT_ROOT / "data" / "gold"
 
 item = Entity(name="item_id", value_type=ValueType.STRING)
 user = Entity(name="user_id", value_type=ValueType.STRING)
+category = Entity(name="category", value_type=ValueType.STRING)
 
 item_stats_source = FileSource(
     path=str(GOLD / "item_hourly_features"),
@@ -63,5 +64,23 @@ user_stats = FeatureView(
         Field(name="user_tenure_hours", dtype=Float64),
     ],
     source=user_stats_source,
+    online=True,
+)
+
+user_category_source = FileSource(
+    path=str(GOLD / "user_category_cross_features"),
+    timestamp_field="feature_ts",
+)
+
+user_category_stats = FeatureView(
+    name="user_category_stats",
+    entities=[user, category],
+    ttl=timedelta(hours=24),
+    schema=[
+        Field(name="user_cat_impressions_cum", dtype=Int64),
+        Field(name="user_cat_clicks_cum", dtype=Int64),
+        Field(name="user_cat_affinity", dtype=Float64),
+    ],
+    source=user_category_source,
     online=True,
 )

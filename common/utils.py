@@ -12,6 +12,7 @@ BRONZE_TABLES = ("events", "history", "news")
 GOLD_TABLES = (
     "item_hourly_features",
     "user_hourly_features",
+    "user_category_cross_features",
     "training_examples",
 )
 MIND_TS_FORMAT = "M/d/yyyy h:mm:ss a"

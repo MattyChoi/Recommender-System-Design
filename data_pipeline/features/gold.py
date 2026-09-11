@@ -22,6 +22,7 @@ from data_pipeline.features.item_dynamic_features import (
     item_hourly_features,
     smoothed_ctr_by_category,
 )
+from data_pipeline.features.user_category_features import user_category_hourly_features
 from data_pipeline.features.user_dynamic_features import smoothed_user_ctr, user_hourly_features
 
 
@@ -53,14 +54,26 @@ def build_user_hourly(spark: SparkSession, settings: Settings, splits: Sequence[
     features.write.mode("overwrite").parquet(str(settings.paths.gold / "user_hourly_features"))
 
 
+def build_user_category_hourly(
+    spark: SparkSession, settings: Settings, splits: Sequence[str]
+) -> None:
+    """Write the (user, category) cross series to ``paths.gold``."""
+    events = read_silver(spark, settings, splits).select("user_id", "category", "ts", "clicked")
+    features = user_category_hourly_features(events)
+    features.write.mode("overwrite").parquet(
+        str(settings.paths.gold / "user_category_cross_features")
+    )
+
+
 def build_training_examples(spark: SparkSession, settings: Settings, split: str) -> None:
     """Read one split's labels and the global series, join, write."""
     labels = spark.read.parquet(str(settings.paths.silver / "impressions" / split))
     item_features = read_gold(spark, settings, "item_hourly_features")
     user_features = read_gold(spark, settings, "user_hourly_features")
+    user_category_features = read_gold(spark, settings, "user_category_cross_features")
 
     (
-        attach_point_in_time_features(labels, item_features, user_features)
+        attach_point_in_time_features(labels, item_features, user_features, user_category_features)
         .write.mode("overwrite")
         .partitionBy("dt")
         .parquet(str(settings.paths.gold / "training_examples" / split))
@@ -130,6 +143,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         build_item_hourly(spark, settings, args.splits)
         print(f"user_hourly_features: {settings.paths.silver} -> {settings.paths.gold}")
         build_user_hourly(spark, settings, args.splits)
+        print(f"user_category_cross_features: {settings.paths.silver} -> {settings.paths.gold}")
+        build_user_category_hourly(spark, settings, args.splits)
 
         for split in todo:
             dest = settings.paths.gold / "training_examples" / split
