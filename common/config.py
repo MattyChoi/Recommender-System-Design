@@ -76,10 +76,18 @@ class SparkConfig(BaseModel):
 class SplitConfig(BaseModel):
     """Temporal split parameters.
 
+    Used for ABLATIONS only, over a single split's timeline. The project's
+    primary evaluation is MIND's official train/dev boundary, which already
+    satisfies the protocol and is not produced from these values.
+
     Attributes:
-        holdout_days: Length of the held-out window at the end of the corpus.
+        holdout_days: Length of the held-out window at the end of the corpus,
+            applied TWICE -- test is the last ``holdout_days``, validation the
+            ``holdout_days`` before it. Boundaries are snapped to midnight so
+            they align with the ``dt`` partitioning.
         min_user_impressions: Impressions a user must have in *train* to enter
-            the test set.
+            the test set, guarding against measuring cold-start and calling it
+            personalization. Zero disables the filter
     """
 
     holdout_days: int = 1
