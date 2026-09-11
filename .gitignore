@@ -39,6 +39,7 @@ mlartifacts/
 # Extra folders and files
 outline.md
 playground.ipynb
+logs.txt
 
 # Exclude for now
 docs/

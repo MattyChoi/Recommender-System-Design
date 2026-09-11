@@ -32,13 +32,36 @@ item_stats = FeatureView(
     entities=[item],
     ttl=timedelta(hours=2),
     schema=[
-        Field(name="impressions_24h", dtype=Int64),
-        Field(name="clicks_24h", dtype=Int64),
-        Field(name="ctr_24h_smoothed", dtype=Float64),
-        Field(name="cat_ctr", dtype=Float64),
-        Field(name="age_hours", dtype=Float64),
+        Field(name="item_impressions_24h", dtype=Int64),
+        Field(name="item_clicks_24h", dtype=Int64),
+        Field(name="item_ctr_smoothed", dtype=Float64),
+        Field(name="cat_expanding_ctr", dtype=Float64),
+        Field(name="item_age_hours", dtype=Float64),
         Field(name="category", dtype=String),
     ],
     source=item_stats_source,
+    online=True,
+)
+
+user_stats_source = FileSource(
+    path=str(GOLD / "user_hourly_features"),
+    timestamp_field="feature_ts",
+)
+
+user_stats = FeatureView(
+    name="user_stats",
+    entities=[user],
+    # Six hours rather than the item view's two. A user's recent activity ages
+    # far more slowly than a news article's click rate, and a stale-by-an-hour
+    # reader profile is a much smaller error than a stale-by-an-hour trending
+    # count. Feast's own default is 24h, which on either would be too long.
+    ttl=timedelta(hours=6),
+    schema=[
+        Field(name="user_impressions_24h", dtype=Int64),
+        Field(name="user_clicks_24h", dtype=Int64),
+        Field(name="user_ctr_smoothed", dtype=Float64),
+        Field(name="user_tenure_hours", dtype=Float64),
+    ],
+    source=user_stats_source,
     online=True,
 )

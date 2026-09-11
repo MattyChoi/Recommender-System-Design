@@ -177,26 +177,28 @@ read the wrong one by forgetting a filter.
 
 ### gold
 
-The point-in-time feature series that `asof_join` reads for training and Feast materialises to Redis
-for serving.
+Three tables in two shapes: two point-in-time feature **series**, unioned across splits, and one
+**label table per split** that joins into them. `asof_join` reads the series for training; Feast
+materialises them to Redis for serving.
 
-**Input:** `silver/impressions/<split>` for every split, plus `bronze/news/<split>`
+**Input:** `silver/impressions/<split>` for every split
 **Command:** `make gold` -> `data_pipeline/features/gold.py`
-**Output:** `data/gold/item_hourly_features/` (unpartitioned)
+**Output:** `data/gold/{item_hourly_features, user_hourly_features, training_examples/<split>}`
+
+#### `item_hourly_features`
 
 | column | type | notes |
 |---|---|---|
 | `item_id` | string | |
 | `feature_ts` | timestamp | the hour the bucket **closed** -- see below |
-| `impressions_1h` | long | impressions inside this bucket |
-| `clicks_1h` | long | clicks inside this bucket |
-| `impressions_24h` | long | rolling 24h `RANGE` window |
-| `clicks_24h` | long | rolling 24h `RANGE` window |
-| `first_seen` | timestamp | earliest bucket for this item |
-| `age_hours` | double | `feature_ts - first_seen`, in hours |
+| `item_impressions_1h` | long | impressions inside this bucket |
+| `item_clicks_1h` | long | clicks inside this bucket |
+| `item_impressions_24h` | long | rolling 24h `RANGE` window |
+| `item_clicks_24h` | long | rolling 24h `RANGE` window |
+| `item_age_hours` | double | hours since the item's earliest bucket |
 | `category` | string | from news |
-| `cat_ctr` | double | category-mean CTR, the shrinkage prior |
-| `ctr_24h_smoothed` | double | `(clicks + prior*k) / (impressions + k)`, `k = 20` |
+| `cat_expanding_ctr` | double | category CTR **as of this hour**, the shrinkage prior |
+| `item_ctr_smoothed` | double | `(item_clicks_24h + prior*k) / (item_impressions_24h + k)`, `k = 20` -- 24h counts, **expanding** prior, so the horizons differ |
 
 **Rows: 243,992** -- one per (item, hour) the item was actually shown in, not per (item, hour) in the
 corpus.
@@ -208,16 +210,94 @@ online. Stamping buckets with their start time instead would let a label at 14:2
 14:00-14:59 -- including its own impression. `test_hourly_features_do_not_leak_within_the_bucket`
 guards exactly this.
 
-**Gold is not built per split.** Features belong to the timeline, not to a label. A train label
-still cannot see dev-derived rows (dev's week follows train's, and the as-of join only reads
+**The series are not built per split.** Features belong to the timeline, not to a label. A train
+label still cannot see dev-derived rows (dev's week follows train's, and the as-of join only reads
 backwards), while a dev label *can* see train-derived rows -- which is correct, since the production
 system serving that impression had those statistics. Building from train alone would leave every
 dev-only item with null features.
 
-**Known caveat:** `cat_ctr` is aggregated over the whole corpus rather than as-of each hour, so the
-shrinkage prior is not strictly point-in-time. The leak is diffuse -- roughly one scalar per
-category, each averaged over millions of rows -- but it is a real qualification on the
-point-in-time claim.
+#### `user_hourly_features`
+
+The same construction on the other entity: one row per (user, hour the user was active), the same
+close-stamped bucket, the same 24h `RANGE` frame. Separate table because the grain differs, and
+separate timeline because `asof_join` reads each key independently.
+
+| column | type | notes |
+|---|---|---|
+| `user_id` | string | |
+| `feature_ts` | timestamp | the hour the bucket **closed** |
+| `user_impressions_1h` / `user_clicks_1h` | long | inside this bucket |
+| `user_impressions_24h` / `user_clicks_24h` | long | rolling 24h `RANGE` window |
+| `user_tenure_hours` | double | hours since the user's earliest bucket |
+| `user_ctr_smoothed` | double | shrunk toward the **global** as-of rate (0.0404 on train) |
+
+Toward the global rate rather than a segment rate because MIND ships no demographics -- there is no
+user cohort to regress a quiet reader toward, where an item at least has a category.
+
+**Every column on both series is entity-prefixed.** Both land on the same label rows, so
+`impressions_24h` unprefixed would collide on the second as-of join. `asof_join` raises on a column
+collision rather than overwriting silently, but a name that cannot collide is better than an error
+saying it did.
+
+#### `training_examples/<split>`
+
+Labels with the features that were knowable at their timestamp: silver's columns, plus the item
+series joined on `item_id`, the user series on `user_id`, and the category prior on `category` --
+three as-of joins over three independent timelines. Plus `hour_of_day` / `day_of_week` from `ts`,
+and two cold-start flags.
+
+**Rows: 5,837,182 (train) / 2,740,998 (dev).** Train is 6,262 short of silver: those labels fall in
+the corpus's opening hour, before the first bucket closes anywhere, so neither the item nor the
+category fallback has anything to offer. They are dropped rather than carried as nulls -- a label
+whose features were entirely unknowable teaches a model nothing but the imputation rule. The count
+is printed at build time so the loss is never silent.
+
+**Cold-start is handled three ways, and the distinction matters.** The *rate* is imputed from the
+category prior, because filling it with `0.0` would claim a measured click-through of zero -- a lie
+about evidence, not a missing value. The *counts* are zero-filled, because zero is true: no bucket
+had closed. And `has_item_features` / `has_user_features` record which happened, so a model can
+learn that absence is itself a signal.
+
+| | with item history | with user history |
+|---|---|---|
+| train | 99.2% | 67.2% |
+| dev | 99.7% | **37.1%** |
+
+**The user side is the sparse one, by a wide margin.** A user only has features once they have been
+active in an *earlier closed hour*, and 88% of dev's users are new to the corpus in a split that
+lasts a single day -- so most dev impressions carry no user history at all. Item coverage is near
+total for the opposite reason: popular articles dominate impressions, so the cold item tail is wide
+but thin (see `docs/evaluation.md`).
+
+That asymmetry is a modelling constraint worth stating rather than discovering. A ranker leaning on
+`user_ctr_smoothed` is leaning on a feature that is null for two dev impressions in three, which is
+an argument for the content and context features carrying the cold case -- and for reporting metrics
+sliced on `has_user_features`.
+
+A user's first impression is **not** dropped and **not** imputed: it keeps real item features, so it
+is a usable example, and dropping it would delete exactly the cold-start cohort the evaluation
+harness slices on. Its `user_ctr_smoothed` stays null and the flag says why.
+
+**The shrinkage prior is point-in-time too.** `cat_expanding_ctr` at hour *t* is the category's
+click rate computed from buckets at or before *t*, never the whole corpus. Including bucket *t*
+itself is legitimate under the closing-time convention above, and it removes a bootstrap hole at
+hour zero. The prior sums `item_impressions_1h` / `item_clicks_1h` rather than the `_24h` columns, which
+overlap between consecutive rows and would count the same click up to 24 times.
+
+Both mattered, and both mattered most where the prior does its job. Against the whole-corpus
+value, the as-of prior differs by 0.6% (finance) to 153% (movies) in the first hour, converging
+within about a day; summing the rolling columns instead biased `kids` by -36.5%. A category below
+1,000 cumulative impressions borrows the global rate, because in hour one `kids` has impressions
+and zero clicks -- so its own prior is exactly `0.0`, and shrinking toward zero on no evidence is
+worse than not shrinking.
+
+**A rolling 24-hour prior is computed alongside it and deliberately not shipped.**
+`category_prior()` returns both so the choice stays measurable; `cat_rolling_ctr` is dropped before
+gold is written, so it is not in the table above and not in the FeatureView. Expanding won on
+measurement: the two differ by 0.0070 absolute CTR on average, rolling is 1.7x noisier hour to
+hour, and category CTR drifts only +0.8% from the first 36 hours to the last -- so rolling's
+adaptivity buys nothing on a stationary corpus while costing noise on exactly the thin-sample
+items the prior exists to serve.
 
 ---
 

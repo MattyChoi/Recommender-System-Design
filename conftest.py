@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from collections.abc import Iterator
 
 import pytest
 from pyspark.sql import SparkSession
 
 _HAS_JVM = bool(os.environ.get("JAVA_HOME")) or shutil.which("java") is not None
+
+os.environ["TZ"] = "UTC"
+time.tzset()  # Unix only; would need a guard if the suite ever runs on Windows
 
 
 @pytest.fixture(scope="session")

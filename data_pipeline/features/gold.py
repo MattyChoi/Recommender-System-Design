@@ -1,18 +1,9 @@
 """Silver -> gold: the point-in-time feature tables the feature store reads.
 
-Gold differs from bronze and silver in one important way: it is NOT built per
-split. Features are a property of the timeline, not of a train/dev label, so
-this job unions every split and computes one continuous series.
-
-That is safe in both directions:
-
-  * A train label cannot see a dev-derived feature row. MIND's dev week
-    follows the train week, and the as-of join only ever reads backwards.
-  * A dev label CAN see train-derived rows, which is exactly right -- the
-    production system serving that impression had those statistics.
-
-Building the series from train alone would instead leave every dev-only item
-with null features, and a third of dev's catalogue never appears in train.
+The TRAINING EXAMPLES built here are per split, because a label belongs to
+exactly one side of the split protocol even though the features it reads do
+not. So gold holds two shapes: one global feature series, and one label table
+per split pointing into it.
 """
 
 from __future__ import annotations
@@ -21,12 +12,17 @@ import argparse
 from collections.abc import Sequence
 
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as f
 
 from common.config import Settings, load_settings
 from common.spark import get_spark
-from common.utils import SPLITS, _is_built, read_silver
-from data_pipeline.features.ctr_smoothed import smoothed_ctr_by_category
-from data_pipeline.features.item_dynamic_features import item_hourly_features
+from common.utils import SPLITS, _is_built, read_gold, read_silver
+from data_pipeline.features.asof import attach_point_in_time_features
+from data_pipeline.features.item_dynamic_features import (
+    item_hourly_features,
+    smoothed_ctr_by_category,
+)
+from data_pipeline.features.user_dynamic_features import smoothed_user_ctr, user_hourly_features
 
 
 def build_item_hourly(spark: SparkSession, settings: Settings, splits: Sequence[str]) -> None:
@@ -42,6 +38,50 @@ def build_item_hourly(spark: SparkSession, settings: Settings, splits: Sequence[
     events = read_silver(spark, settings, splits).select("item_id", "ts", "clicked", "category")
     features = smoothed_ctr_by_category(item_hourly_features(events))
     features.write.mode("overwrite").parquet(str(settings.paths.gold / "item_hourly_features"))
+
+
+def build_user_hourly(spark: SparkSession, settings: Settings, splits: Sequence[str]) -> None:
+    """Write the hourly user feature series to ``paths.gold/user_hourly_features``.
+
+    Unioned across splits for the same reason the item series is: features
+    belong to the timeline, not to a label. A dev impression by a user who read
+    during the train week should see that history, because the production
+    system serving it would have.
+    """
+    events = read_silver(spark, settings, splits).select("user_id", "ts", "clicked")
+    features = smoothed_user_ctr(user_hourly_features(events))
+    features.write.mode("overwrite").parquet(str(settings.paths.gold / "user_hourly_features"))
+
+
+def build_training_examples(spark: SparkSession, settings: Settings, split: str) -> None:
+    """Read one split's labels and the global series, join, write."""
+    labels = spark.read.parquet(str(settings.paths.silver / "impressions" / split))
+    item_features = read_gold(spark, settings, "item_hourly_features")
+    user_features = read_gold(spark, settings, "user_hourly_features")
+
+    (
+        attach_point_in_time_features(labels, item_features, user_features)
+        .write.mode("overwrite")
+        .partitionBy("dt")
+        .parquet(str(settings.paths.gold / "training_examples" / split))
+    )
+
+
+def _example_counts(spark: SparkSession, settings: Settings, split: str) -> dict[str, float]:
+    """Row counts, warm-up loss and both cold-start shares, for the build log."""
+    labels = spark.read.parquet(str(settings.paths.silver / "impressions" / split))
+    written = spark.read.parquet(str(settings.paths.gold / "training_examples" / split))
+    rows = written.count()
+    shares = written.agg(
+        f.avg(f.col("has_item_features").cast("double")).alias("item"),
+        f.avg(f.col("has_user_features").cast("double")).alias("user"),
+    ).collect()[0]
+    return {
+        "rows": rows,
+        "dropped": labels.count() - rows,
+        "with_item": shares["item"],
+        "with_user": shares["user"],
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -74,17 +114,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: silver not built for {missing}. Run `make silver` first.")
         return 1
 
-    if _is_built(settings, "gold", "item_hourly_features") and not args.force:
-        print("item_hourly_features: already built, skipping")
+    series_built = _is_built(settings, "gold", "user_hourly_features")
+    todo = [
+        s
+        for s in args.splits
+        if args.force or not _is_built(settings, "gold", f"training_examples/{s}")
+    ]
+    if series_built and not todo and not args.force:
+        print("gold: already built, skipping")
         return 0
 
     spark = get_spark(settings, app="gold")
     try:
-        print(
-            f"item_hourly_features: {settings.paths.silver} -> \
-            {settings.paths.gold / 'item_hourly_features'}"
-        )
+        print(f"item_hourly_features: {settings.paths.silver} -> {settings.paths.gold}")
         build_item_hourly(spark, settings, args.splits)
+        print(f"user_hourly_features: {settings.paths.silver} -> {settings.paths.gold}")
+        build_user_hourly(spark, settings, args.splits)
+
+        for split in todo:
+            dest = settings.paths.gold / "training_examples" / split
+            print(f"{split}: labels + point-in-time features -> {dest}")
+            build_training_examples(spark, settings, split)
+            counts = _example_counts(spark, settings, split)
+            print(
+                f"  {counts['rows']:,} examples, "
+                f"{counts['with_item']:.1%} with item history, "
+                f"{counts['with_user']:.1%} with user history, "
+                f"{counts['dropped']:,} dropped as unknowable"
+            )
     finally:
         spark.stop()
     return 0

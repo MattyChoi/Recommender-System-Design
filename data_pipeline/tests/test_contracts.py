@@ -15,7 +15,11 @@ from pyspark.sql import functions as f
 
 from common.schemas import EVENT_SCHEMA, OOV_IDX
 from data_pipeline.features.asof import asof_join
-from data_pipeline.features.item_dynamic_features import item_hourly_features
+from data_pipeline.features.ctr import category_prior
+from data_pipeline.features.item_dynamic_features import (
+    item_hourly_features,
+    smoothed_ctr_by_category,
+)
 
 # The `spark` and `data_root` fixtures live in conftest.py. `data_root` is the
 # real corpus when it has been built and a freshly-built synthetic fixture
@@ -221,6 +225,27 @@ def test_asof_preserves_the_label_row_count(spark: SparkSession) -> None:
     assert asof_join(labels, features, join_key="item_id").count() == labels.count()
 
 
+def test_asof_rejects_feature_columns_already_present_on_labels(spark: SparkSession) -> None:
+    """The collision is silent and destructive, so it must be loud instead.
+
+    Silver carries ``category`` and the gold item series emits ``category``, so
+    this is the first thing a real call would hit. Unguarded, the label's own
+    value is nulled and then backfilled from the feature series by the
+    carry-forward: same column name, plausible value, different meaning, no
+    error anywhere.
+    """
+    labels = spark.createDataFrame(
+        [("N1", T0, "sports")], "item_id string, ts timestamp, category string"
+    )
+    features = spark.createDataFrame(
+        [("N1", T0 - timedelta(hours=1), "finance")],
+        "item_id string, feature_ts timestamp, category string",
+    )
+
+    with pytest.raises(ValueError, match="category"):
+        asof_join(labels, features, join_key="item_id")
+
+
 def test_hourly_features_do_not_leak_within_the_bucket(spark: SparkSession) -> None:
     """THE GATE: asof_join and item_hourly must agree on what feature_ts means.
 
@@ -245,14 +270,130 @@ def test_hourly_features_do_not_leak_within_the_bucket(spark: SparkSession) -> N
     labels = _labels(spark, [("I1", "N1", hour + timedelta(minutes=5))])
     got = asof_join(labels, item_hourly_features(raw), join_key="item_id").collect()[0]
 
-    assert got["impressions_24h"] == 1, (
-        f"leak: the label saw {got['impressions_24h']} impressions, but only 1 "
+    assert got["item_impressions_24h"] == 1, (
+        f"leak: the label saw {got['item_impressions_24h']} impressions, but only 1 "
         "occurred before it -- item_hourly is stamping buckets with their start time"
     )
-    assert got["clicks_24h"] == 0, (
-        f"leak: the label saw {got['clicks_24h']} clicks, all of which happened "
+    assert got["item_clicks_24h"] == 0, (
+        f"leak: the label saw {got['item_clicks_24h']} clicks, all of which happened "
         "after it. This is the failure that produces beautiful offline metrics."
     )
+
+
+# ---------------------------------------------------------------------------
+# The category prior
+#
+# Shrinkage is what stops the ranker promoting an article with one click on one
+# impression, which on a news corpus is the common case rather than the edge
+# case. That makes the prior load-bearing, and a prior that peeks at the future
+# or is computed from overlapping windows is worse than a wrong constant --
+# it is a wrong constant that looks measured.
+# ---------------------------------------------------------------------------
+
+_PRIOR_SCHEMA = (
+    "category string, feature_ts timestamp, item_impressions_1h long, item_clicks_1h long"
+)
+
+
+def _hourly(spark: SparkSession, rows: list[tuple[str, datetime, int, int]]) -> DataFrame:
+    return spark.createDataFrame(rows, _PRIOR_SCHEMA)
+
+
+def test_the_category_prior_cannot_see_the_future(spark: SparkSession) -> None:
+    """The prior at hour t uses buckets <= t and nothing after.
+
+    The middle hour is the discriminating one: a whole-timeline prior returns
+    0.10 for all three rows, because the quiet hour is averaged against a
+    future hour that had not happened yet.
+    """
+    rows = _hourly(
+        spark,
+        [
+            ("sports", T0, 100, 10),  # 10/100  -> 0.10
+            ("sports", T0 + timedelta(hours=1), 100, 0),  # 10/200  -> 0.05
+            ("sports", T0 + timedelta(hours=2), 100, 20),  # 30/300  -> 0.10
+        ],
+    )
+    got = {
+        r["feature_ts"]: r["cat_expanding_ctr"]
+        for r in category_prior(rows, min_impressions=0).collect()
+    }
+
+    assert got[T0] == pytest.approx(0.10)
+    assert got[T0 + timedelta(hours=1)] == pytest.approx(0.05), "the prior saw the future"
+    assert got[T0 + timedelta(hours=2)] == pytest.approx(0.10)
+
+
+def test_a_thin_category_falls_back_to_the_global_prior(spark: SparkSession) -> None:
+    """Measured on MIND: `kids` has impressions and zero clicks in hour one.
+
+    Its own prior is therefore exactly 0.0, and shrinking toward zero on the
+    strength of no evidence is worse than not shrinking at all. Below the floor
+    the category borrows the global rate, which is itself point-in-time.
+    """
+    rows = _hourly(spark, [("kids", T0, 50, 0), ("news", T0, 10_000, 400)])
+
+    prior = category_prior(rows, min_impressions=1_000)
+    got = {r["category"]: r["cat_expanding_ctr"] for r in prior.collect()}
+
+    assert got["kids"] == pytest.approx(400 / 10_050), "a thin category shrank toward zero"
+    assert got["news"] == pytest.approx(400 / 10_000)
+
+
+def test_the_prior_sums_hourly_counts_not_rolling_windows(spark: SparkSession) -> None:
+    """item_clicks_24h overlaps between consecutive rows; item_clicks_1h does not.
+
+    Summing the rolling column counts the same click up to 24 times, weighted
+    by how many hours an item happened to appear in -- measured at -36.5% on
+    `kids`. Here the correct answer is 20/200; a _24h-based implementation
+    would produce 20/300.
+    """
+    rows = _hourly(spark, [("sports", T0, 100, 0), ("sports", T0 + timedelta(hours=1), 100, 20)])
+
+    latest = category_prior(rows, min_impressions=0).orderBy(f.col("feature_ts").desc())
+    assert latest.collect()[0]["cat_expanding_ctr"] == pytest.approx(0.10)
+
+
+def test_both_prior_frames_are_computed_and_they_differ(spark: SparkSession) -> None:
+    """Expanding and rolling are carried side by side so the choice stays measurable.
+
+    The series is built so the two must disagree: a busy, high-CTR first day
+    followed by a quiet second day more than 24 hours later. The expanding
+    prior still remembers the first day; the rolling one has forgotten it.
+    """
+    rows = _hourly(
+        spark,
+        [
+            ("sports", T0, 1_000, 100),  # day one: 10% CTR
+            ("sports", T0 + timedelta(hours=48), 1_000, 10),  # two days later: 1%
+        ],
+    )
+    late = category_prior(rows, min_impressions=0).orderBy(f.col("feature_ts").desc())
+    got = late.collect()[0]
+
+    assert got["cat_expanding_ctr"] == pytest.approx(110 / 2_000)  # 0.055, remembers day one
+    assert got["cat_rolling_ctr"] == pytest.approx(10 / 1_000)  # 0.010, has forgotten it
+
+
+def test_only_the_expanding_prior_reaches_the_feature_table(spark: SparkSession) -> None:
+    """The rolling prior is computed, compared, and deliberately not shipped.
+
+    gold.py writes this frame straight to Parquet and the Feast FeatureView
+    declares its columns, so an undeclared extra column is a divergence between
+    what is on disk and what is registered.
+    """
+    hourly = spark.createDataFrame(
+        [("N1", "sports", T0, 100, 10, 100, 10)],
+        "item_id string, category string, feature_ts timestamp, "
+        "item_impressions_1h long, item_clicks_1h long, "
+        "item_impressions_24h long, item_clicks_24h long",
+    )
+    got = smoothed_ctr_by_category(hourly, prior_strength=20.0, min_prior_impressions=0)
+
+    assert "cat_expanding_ctr" in got.columns
+    assert "cat_rolling_ctr" not in got.columns, "the rolling prior leaked into the feature table"
+    # smoothed from the EXPANDING prior: (10 + 0.1*20) / (100 + 20)
+    assert got.collect()[0]["item_ctr_smoothed"] == pytest.approx(12 / 120)
 
 
 # ---------------------------------------------------------------------------

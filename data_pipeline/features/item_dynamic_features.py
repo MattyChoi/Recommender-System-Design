@@ -5,6 +5,8 @@ from __future__ import annotations
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as f
 
+from data_pipeline.features.ctr import _MIN_PRIOR_IMPRESSIONS, category_prior, smoothed_ctr
+
 
 def item_hourly_features(events: DataFrame) -> DataFrame:
     """One row per (item, hour) with cumulative counts up to that hour."""
@@ -14,8 +16,8 @@ def item_hourly_features(events: DataFrame) -> DataFrame:
         events.withColumn("feature_ts", f.date_trunc("hour", "ts") + f.expr("INTERVAL 1 HOUR"))
         .groupBy("item_id", "feature_ts")
         .agg(
-            f.count("*").alias("impressions_1h"),
-            f.sum(f.col("clicked").cast("int")).alias("clicks_1h"),
+            f.count("*").alias("item_impressions_1h"),
+            f.sum(f.col("clicked").cast("int")).alias("item_clicks_1h"),
             f.first("category", ignorenulls=True).alias("category"),
         )
     )
@@ -28,11 +30,53 @@ def item_hourly_features(events: DataFrame) -> DataFrame:
     first_seen = Window.partitionBy("item_id")
 
     return (
-        hourly.withColumn("impressions_24h", f.sum("impressions_1h").over(w24))
-        .withColumn("clicks_24h", f.sum("clicks_1h").over(w24))
-        .withColumn("first_seen", f.min("feature_ts").over(first_seen))
+        hourly.withColumn("item_impressions_24h", f.sum("item_impressions_1h").over(w24))
+        .withColumn("item_clicks_24h", f.sum("item_clicks_1h").over(w24))
+        .withColumn("item_first_seen", f.min("feature_ts").over(first_seen))
         .withColumn(
-            "age_hours",
-            (f.col("feature_ts").cast("long") - f.col("first_seen").cast("long")) / 3600.0,
+            "item_age_hours",
+            (f.col("feature_ts").cast("long") - f.col("item_first_seen").cast("long")) / 3600.0,
         )
+        .drop("item_first_seen")
+    )
+
+
+def smoothed_ctr_by_category(
+    item_hourly: DataFrame,
+    prior_strength: float = 20.0,
+    min_prior_impressions: int = _MIN_PRIOR_IMPRESSIONS,
+) -> DataFrame:
+    """Shrink each item's 24h CTR toward its CATEGORY prior, as of that hour.
+
+    Toward the category rather than the global mean, because MIND gives category
+    free and a new sports article should regress toward sports behaviour rather
+    than toward an average dominated by whichever vertical is largest. A
+    category thinner than ``min_prior_impressions`` has not earned its own rate
+    and borrows the global one instead -- see :func:`category_prior`.
+
+    Args:
+        item_hourly: Hourly item aggregates from ``item_hourly_features``.
+        prior_strength: Pseudo-count for the prior, in impressions.
+        min_prior_impressions: See :func:`category_prior`.
+
+    Returns:
+        ``item_hourly`` with ``cat_expanding_ctr`` and ``item_ctr_smoothed`` attached,
+        and nothing else -- the rolling prior is dropped. Row count is unchanged:
+        the prior joins one-to-one on ``(category, feature_ts)``.
+    """
+    prior = category_prior(item_hourly, min_prior_impressions)
+
+    return (
+        item_hourly.join(f.broadcast(prior), on=["category", "feature_ts"], how="left")
+        .withColumn(
+            "item_ctr_smoothed",
+            smoothed_ctr(
+                f.col("item_clicks_24h"),
+                f.col("item_impressions_24h"),
+                f.col("cat_expanding_ctr"),
+                prior_strength,
+            ),
+        )
+        # The rolling prior is computed but deliberately not shipped.
+        .drop("cat_rolling_ctr")
     )
