@@ -17,16 +17,14 @@ from common.schemas import EVENT_SCHEMA, OOV_IDX
 from data_pipeline.features.asof import asof_join
 from data_pipeline.features.item_dynamic_features import item_hourly_features
 
-BRONZE = Path("data/bronze/events/train")
-
-# The `spark` fixture, and the JVM skip that guards it, live in conftest.py.
+# The `spark` and `data_root` fixtures live in conftest.py. `data_root` is the
+# real corpus when it has been built and a freshly-built synthetic fixture
+# otherwise, so every path below hangs off it rather than being hardcoded.
 
 
 @pytest.fixture(scope="session")
-def events(spark: SparkSession) -> DataFrame:
-    if not BRONZE.exists():
-        pytest.skip("no bronze layer; run `make data` first")
-    return spark.read.parquet(str(BRONZE)).cache()
+def events(spark: SparkSession, data_root: Path) -> DataFrame:
+    return spark.read.parquet(str(data_root / "bronze" / "events" / "train")).cache()
 
 
 def test_timestamps_all_parsed(events: DataFrame) -> None:
@@ -266,30 +264,20 @@ def test_hourly_features_do_not_leak_within_the_bucket(spark: SparkSession) -> N
 # and addresses the wrong embedding row.
 # ---------------------------------------------------------------------------
 
-ITEM_MAP = Path("data/bronze/item_map")
-USER_MAP = Path("data/bronze/user_map")
-SILVER = Path("data/silver/impressions/train")
+
+@pytest.fixture(scope="session")
+def item_map(spark: SparkSession, data_root: Path) -> DataFrame:
+    return spark.read.parquet(str(data_root / "bronze" / "item_map")).cache()
 
 
 @pytest.fixture(scope="session")
-def item_map(spark: SparkSession) -> DataFrame:
-    if not ITEM_MAP.exists():
-        pytest.skip("no id maps; run `make bronze` first")
-    return spark.read.parquet(str(ITEM_MAP)).cache()
+def user_map(spark: SparkSession, data_root: Path) -> DataFrame:
+    return spark.read.parquet(str(data_root / "bronze" / "user_map")).cache()
 
 
 @pytest.fixture(scope="session")
-def user_map(spark: SparkSession) -> DataFrame:
-    if not USER_MAP.exists():
-        pytest.skip("no id maps; run `make bronze` first")
-    return spark.read.parquet(str(USER_MAP)).cache()
-
-
-@pytest.fixture(scope="session")
-def silver(spark: SparkSession) -> DataFrame:
-    if not SILVER.exists():
-        pytest.skip("no silver layer; run `make silver` first")
-    return spark.read.parquet(str(SILVER)).cache()
+def silver(spark: SparkSession, data_root: Path) -> DataFrame:
+    return spark.read.parquet(str(data_root / "silver" / "impressions" / "train")).cache()
 
 
 @pytest.mark.parametrize("table,column", [("item_map", "item_idx"), ("user_map", "user_idx")])
@@ -370,8 +358,6 @@ def test_silver_never_falls_back_to_oov(silver: DataFrame) -> None:
 # at the wrong file. These sit upstream of that.
 # ---------------------------------------------------------------------------
 
-NEWS = Path("data/bronze/news")
-
 # Present but frequently absent, so a blanket non-null assertion would be
 # wrong: ~5% of MIND articles ship no abstract at all. That is a property of
 # the corpus, not a parse failure -- see the ceiling asserted below.
@@ -379,12 +365,11 @@ _REQUIRED_NEWS_COLUMNS = ("item_id", "category", "subcategory", "title")
 
 
 @pytest.fixture(scope="session")
-def news(spark: SparkSession) -> dict[str, DataFrame]:
-    if not NEWS.exists():
-        pytest.skip("no bronze layer; run `make bronze` first")
-    available = {s: NEWS / s for s in ("train", "dev") if (NEWS / s / "_SUCCESS").is_file()}
+def news(spark: SparkSession, data_root: Path) -> dict[str, DataFrame]:
+    root = data_root / "bronze" / "news"
+    available = {s: root / s for s in ("train", "dev") if (root / s / "_SUCCESS").is_file()}
     if not available:
-        pytest.skip("no committed news tables; run `make bronze` first")
+        pytest.skip("no committed news tables")
     return {s: spark.read.parquet(str(p)).cache() for s, p in available.items()}
 
 
@@ -490,8 +475,6 @@ def test_news_categories_are_a_small_closed_vocabulary(
 # test_history_predates_the_log_window.
 # ---------------------------------------------------------------------------
 
-HISTORY = Path("data/bronze/history")
-
 # Measured on MIND-small: 0.4% of train's in-log clicked pairs appear in
 # history, 0.2% of dev's. A ceiling well above both, but far below the ~100%
 # that an end-of-window snapshot would produce.
@@ -499,12 +482,11 @@ _MAX_HISTORY_OVERLAP = 0.05
 
 
 @pytest.fixture(scope="session")
-def history(spark: SparkSession) -> dict[str, DataFrame]:
-    if not HISTORY.exists():
-        pytest.skip("no bronze layer; run `make bronze` first")
-    available = {s: HISTORY / s for s in ("train", "dev") if (HISTORY / s / "_SUCCESS").is_file()}
+def history(spark: SparkSession, data_root: Path) -> dict[str, DataFrame]:
+    root = data_root / "bronze" / "history"
+    available = {s: root / s for s in ("train", "dev") if (root / s / "_SUCCESS").is_file()}
     if not available:
-        pytest.skip("no committed history tables; run `make bronze` first")
+        pytest.skip("no committed history tables")
     return {s: spark.read.parquet(str(p)).cache() for s, p in available.items()}
 
 
