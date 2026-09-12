@@ -43,6 +43,9 @@ jobs:
         run: uv run mypy .
 
       - name: Test
+        # Redundant with the fixture, which pins it too but writing for visibility
+        env:
+          RECSYS_STORAGE__BACKEND: local
         run: uv run pytest
 
       - name: Pre-commit hooks

@@ -16,7 +16,7 @@ from pyspark.sql import functions as f
 
 from common.config import Settings, load_settings
 from common.spark import get_spark
-from common.utils import SPLITS, _is_built, read_gold, read_silver
+from common.utils import SPLITS, _is_built, gold_location, read_gold, read_silver
 from data_pipeline.features.asof import attach_point_in_time_features
 from data_pipeline.features.item_dynamic_features import (
     item_hourly_features,
@@ -38,7 +38,10 @@ def build_item_hourly(spark: SparkSession, settings: Settings, splits: Sequence[
     """
     events = read_silver(spark, settings, splits).select("item_id", "ts", "clicked", "category")
     features = smoothed_ctr_by_category(item_hourly_features(events))
-    features.write.mode("overwrite").parquet(str(settings.paths.gold / "item_hourly_features"))
+    # created_ts records WHEN the row was computed, which is what Feast uses
+    # to break ties between rows sharing a feature_ts.
+    features = features.withColumn("created_ts", f.current_timestamp())
+    features.write.mode("overwrite").parquet(gold_location(settings, "item_hourly_features"))
 
 
 def build_user_hourly(spark: SparkSession, settings: Settings, splits: Sequence[str]) -> None:
@@ -51,7 +54,8 @@ def build_user_hourly(spark: SparkSession, settings: Settings, splits: Sequence[
     """
     events = read_silver(spark, settings, splits).select("user_id", "ts", "clicked")
     features = smoothed_user_ctr(user_hourly_features(events))
-    features.write.mode("overwrite").parquet(str(settings.paths.gold / "user_hourly_features"))
+    features = features.withColumn("created_ts", f.current_timestamp())
+    features.write.mode("overwrite").parquet(gold_location(settings, "user_hourly_features"))
 
 
 def build_user_category_hourly(
@@ -60,8 +64,9 @@ def build_user_category_hourly(
     """Write the (user, category) cross series to ``paths.gold``."""
     events = read_silver(spark, settings, splits).select("user_id", "category", "ts", "clicked")
     features = user_category_hourly_features(events)
+    features = features.withColumn("created_ts", f.current_timestamp())
     features.write.mode("overwrite").parquet(
-        str(settings.paths.gold / "user_category_cross_features")
+        gold_location(settings, "user_category_cross_features")
     )
 
 
@@ -139,12 +144,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     spark = get_spark(settings, app="gold")
     try:
-        print(f"item_hourly_features: {settings.paths.silver} -> {settings.paths.gold}")
-        build_item_hourly(spark, settings, args.splits)
-        print(f"user_hourly_features: {settings.paths.silver} -> {settings.paths.gold}")
-        build_user_hourly(spark, settings, args.splits)
-        print(f"user_category_cross_features: {settings.paths.silver} -> {settings.paths.gold}")
-        build_user_category_hourly(spark, settings, args.splits)
+        # Printing the resolved destination rather than paths.gold: with the
+        # s3 backend these three do not land there, and a log that says
+        # otherwise is how you spend an afternoon looking in the wrong place.
+        for table, build_feature in (
+            ("item_hourly_features", build_item_hourly),
+            ("user_hourly_features", build_user_hourly),
+            ("user_category_cross_features", build_user_category_hourly),
+        ):
+            print(f"{table}: {settings.paths.silver} -> {gold_location(settings, table)}")
+            build_feature(spark, settings, args.splits)
 
         for split in todo:
             dest = settings.paths.gold / "training_examples" / split

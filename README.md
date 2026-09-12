@@ -182,8 +182,27 @@ Three tables in two shapes: two point-in-time feature **series**, unioned across
 materialises them to Redis for serving.
 
 **Input:** `silver/impressions/<split>` for every split
-**Command:** `make gold` -> `data_pipeline/features/gold.py`
-**Output:** `data/gold/{item_hourly_features, user_hourly_features, training_examples/<split>}`
+**Command:** `make up && make gold` -> `data_pipeline/features/gold.py`
+**Output:** the three series in MinIO, `training_examples/<split>` on disk
+
+#### Where gold lives
+
+This is the only layer with a storage backend. `storage.backend` in `conf/config.yml` is `s3`,
+so **MinIO must be running** — `make up` starts it and creates the bucket.
+
+| | Location | Why |
+|---|---|---|
+| the three feature series | `s3://recsys/gold/…` | Feast's sources; serving cannot read a laptop |
+| `training_examples/<split>` | `data/gold/…` | largest table, read by the trainer on the same machine |
+
+Two clients reach the same bucket by different routes, which is why the config carries a scheme:
+Spark writes through Hadoop's S3A client (`s3a://`, magic committer), Feast reads through pyarrow
+(`s3://`, `s3_endpoint_override`). `RECSYS_STORAGE__BACKEND=local` puts everything back on disk —
+which is what `make demo` and the test fixtures do, so neither needs a container.
+
+Feast resolves these paths **at `feast apply` time** and bakes them into its registry, so running
+`make feast` under a different backend than the one you built with produces a registry pointing at
+data that is not there.
 
 #### `item_hourly_features`
 

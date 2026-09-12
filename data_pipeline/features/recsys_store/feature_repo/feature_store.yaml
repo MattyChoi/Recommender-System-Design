@@ -1,16 +1,23 @@
 project: recsys_store
-registry: registry.db
+
+
+# The registry is a local file today. It is the piece that has to move when
+# Part M lands: the Go service needs it to resolve FeatureViews, and it cannot
+# read a file on a laptop. Feast's file registry accepts an object-storage
+# path, so that becomes FEAST_REGISTRY=s3://recsys/feast/registry.db -- check
+# how it reaches MinIO first, since it goes through fsspec rather than the
+# per-source s3_endpoint_override.
+registry: ${FEAST_REGISTRY}
 provider: local
 
-# Redis, from docker-compose.yml. `localhost` because feast runs on the host
-# and reaches the container through the published port; a process INSIDE the
-# compose network would use `redis:6379` instead.
 online_store:
   type: redis
-  connection_string: localhost:6379
+  # localhost from the host, redis:6379 from inside the compose network.
+  connection_string: ${FEAST_REDIS_CONNECTION}
+  key_ttl_seconds: 604800
 
 offline_store:
-  type: file
+  type: dask
 
 # v3 keys entities by name as well as value, so two entities that share a
 # value cannot collide in Redis. Required for new repos.

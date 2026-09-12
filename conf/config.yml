@@ -9,6 +9,12 @@ paths:
   silver: data/silver      # bronze + article metadata + integer ID indices
   gold: data/gold          # point-in-time feature tables
 
+storage:
+  backend: s3              # MinIO must be up: `make up`. `make demo` overrides to local.
+  bucket: recsys           # created by hand: mc mb local/recsys
+  endpoint_url: "http://localhost:9000"   # minio:9000 from inside the compose network
+  gold_prefix: gold        # key prefix under the bucket, mirroring the local layout
+
 spark:
   master: "local[*]"       # local[1] when debugging something non-deterministic
   driver_memory: "8g"      # local mode has no executors: this is the whole budget

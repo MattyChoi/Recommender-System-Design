@@ -20,6 +20,7 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "pyspark>=4.2.0",
     "pyyaml>=6.0.3",
+    "s3fs>=2026.7.0",
 ]
 
 [build-system]
@@ -52,7 +53,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "confluent_kafka.*"]
+module = ["pyarrow.*", "confluent_kafka.*", "s3fs.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -60,6 +61,14 @@ testpaths = ["tests", "data_pipeline/tests", "evaluation/tests", "models/tests",
 addopts = "-q --strict-markers"
 markers = [
     "slow: long-running tests, deselect with -m 'not slow'",
+]
+# feast 0.66 builds its null-timestamp sentinel with np.datetime64("NaT"), whose
+# generic unit numpy 2.5 deprecates; it wants an explicit unit. Third-party and
+# harmless -- the value is still int64 min -- so it is silenced rather than
+# fixed. Scoped to feast.type_map so the same deprecation still surfaces if it
+# ever appears in our own code. Drop this when feast stops emitting it.
+filterwarnings = [
+    "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning:feast.type_map",
 ]
 
 [dependency-groups]

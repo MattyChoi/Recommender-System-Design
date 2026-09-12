@@ -34,9 +34,15 @@ def _fixture_settings(root: Path) -> Settings:
     """Config pointing at the synthetic corpus, with everything else inherited.
 
     model_copy rather than Settings(paths=...) so the YAML and environment
-    layers still apply -- only the paths move.
+    layers still apply -- only the paths and the storage backend move.
+
+    The backend is forced local because this corpus IS local: the committed
+    default is s3, and inheriting it would send a synthetic fixture to MinIO --
+    failing in CI, where no container is running.. Pinned here rather than via
+    an environment variable in CI so that a developer running pytest gets the same
+    behaviour the pipeline does.
     """
-    return load_settings().model_copy(
+    settings = load_settings().model_copy(
         update={
             "paths": Paths(
                 raw=FIXTURE_RAW,
@@ -44,8 +50,11 @@ def _fixture_settings(root: Path) -> Settings:
                 silver=root / "silver",
                 gold=root / "gold",
             )
-        }
+        },
+        deep=True,
     )
+    settings.storage.backend = "local"
+    return settings
 
 
 def _build_fixture(spark: SparkSession, root: Path) -> Path:

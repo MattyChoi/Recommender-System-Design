@@ -1,8 +1,13 @@
-.PHONY: proto help up down clean raw bronze silver gold feast data \
+.PHONY: proto help up down clean raw bronze silver gold feast parity data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
+
+-include .env
+export MINIO_ROOT_USER MINIO_ROOT_PASSWORD
+export AWS_ACCESS_KEY_ID     = $(MINIO_ROOT_USER)
+export AWS_SECRET_ACCESS_KEY = $(MINIO_ROOT_PASSWORD)
 
 MIND_SIZE ?= small
 SPLITS ?= train dev
@@ -25,6 +30,16 @@ KAFKA_EXEC       = docker exec $(KAFKA_CONTAINER) /opt/kafka/bin
 FEAST_START ?= 2019-11-09T00:00:00		# MIND dataset date range
 FEAST_END   ?= 2019-11-16T00:00:00
 FEAST_REPO ?= data_pipeline/features/recsys_store/feature_repo
+
+# feature_store.yaml substitutes these via os.path.expandvars, which has no
+# default syntax -- an unset variable is left as a literal "${...}" and fails
+# config validation. Exporting them here is what keeps that from happening.
+# Override either one to point the same repo at different infrastructure:
+#   make feast FEAST_REDIS_CONNECTION=redis:6379
+PARITY_SAMPLE ?= 200
+FEAST_REGISTRY ?= registry.db
+FEAST_REDIS_CONNECTION ?= localhost:6379
+export FEAST_REGISTRY FEAST_REDIS_CONNECTION
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -59,13 +74,26 @@ bronze:  ## raw -> bronze (rebuild an existing layer: make bronze FORCE=1)
 silver:  ## bronze -> silver (rebuild an existing layer: make silver FORCE=1)
 	uv run python -m data_pipeline.transform.silver --splits $(SPLITS) $(if $(FORCE),--force)
 
+# Writes the three feature series to MinIO, so `make up` first. The label table
+# stays on disk. `RECSYS_STORAGE__BACKEND=local make gold` puts everything back
+# on disk and needs nothing running.
 gold:  ## silver -> gold feature tables (rebuild an existing layer: make gold FORCE=1)
 	uv run python -m data_pipeline.features.gold --splits $(SPLITS) $(if $(FORCE),--force)
 
+# Reads the series from MinIO, so `make up` first. Note that apply RESOLVES the
+# source paths and bakes them into the registry: running this under a different
+# backend than the one you built with leaves a registry pointing at data that is
+# not there. `RECSYS_STORAGE__BACKEND=local make feast` for the on-disk build.
 feast:  ## Register feature definitions and materialise them into Redis
 	uv run feast -c $(FEAST_REPO) apply
-	uv run feast -c $(FEAST_REPO) materialize $(FEAST_START) $(FEAST_END)
-# 	uv run feast -c $(FEAST_REPO) materialize 2019-11-09T00:00:00 2019-11-16T00:00:00
+	uv run feast -c $(FEAST_REPO) materialize $(FEAST_START) $(FEAST_END) \
+	    --views item_stats --views user_stats --views user_category_stats
+
+# Compares what Feast materialised against what the gold series says it should
+# hold. NOT the skew report -- both sides are offline reads; see docs/ for the
+# distinction. Needs Redis and MinIO, so `make up && make feast` first.
+parity:  ## Materialisation parity: Redis vs the gold series
+	uv run python -m data_pipeline.features.parity --sample $(PARITY_SAMPLE)
 
 data: raw bronze silver gold  ## Build every layer under data/
 
@@ -117,7 +145,9 @@ serve:  ## Run the gRPC orchestrator
 bench:  ## Latency + recall/QPS benchmarks
 	@echo "TODO: benchmarks"; exit 1
 
-demo:  ## End-to-end demo; must work from a clean clone
+# Runs against the LOCAL gold layer on purpose.
+demo: export RECSYS_STORAGE__BACKEND = local
+demo:  ## End-to-end demo; must work from a clean clone, with nothing running
 	@echo "TODO: demo"; exit 1
 
 lint:  ## ruff check + format check

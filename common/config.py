@@ -14,7 +14,9 @@ test while a laptop runs the real thing.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_settings import (
@@ -23,6 +25,16 @@ from pydantic_settings import (
     SettingsConfigDict,
     YamlConfigSettingsSource,
 )
+
+# Where the YAML lives, as a ContextVar rather than a module global so a nested
+# or concurrent load cannot see another caller's value.
+#
+# The default is relative, which is correct for every process started from the
+# repo root. The Feast CLI is the exception: it chdirs into feature_repo/ before
+# importing definition.py, so that file passes an absolute root to
+# load_settings() instead of duplicating the values it needs.
+_DEFAULT_YAML = Path("conf/config.yml")
+_yaml_file: ContextVar[Path] = ContextVar("_yaml_file", default=_DEFAULT_YAML)
 
 
 class Paths(BaseModel):
@@ -44,6 +56,39 @@ class Paths(BaseModel):
     bronze: Path
     silver: Path
     gold: Path
+
+
+class StorageConfig(BaseModel):
+    """Where the gold layer is written and read from.
+
+    Two schemes address the same bucket. Spark writes through Hadoop's S3A
+    client, which registers ``s3a://``; Feast reads through pyarrow, which knows
+    only ``s3://``. They are separate clients with separate credential plumbing,
+    so both get configured, and their agreement is an assumption this config
+    makes rather than one it can enforce.
+
+    Attributes:
+        backend: ``local`` resolves against :attr:`Paths.gold`; ``s3`` resolves
+            against ``{bucket}/{gold_prefix}``. The default is s3
+
+            The two places that must NOT inherit it pin it themselves rather
+            than relying on the environment: the synthetic test corpus
+            (``data_pipeline/tests/conftest.py``) and ``make demo``, both of
+            which have to run with no container up.
+        bucket: Bucket name. Created once by hand; nothing creates it on demand,
+            and a missing bucket surfaces as a 404 from the S3 client rather
+            than as anything self-explanatory.
+        endpoint_url: MinIO's S3 API. The host-visible address, because Spark
+            and the Feast CLI both run on the host -- a process inside the
+            compose network would use ``http://minio:9000``.
+        gold_prefix: Key prefix under the bucket, mirroring the local layout so
+            the two backends are diffable.
+    """
+
+    backend: Literal["local", "s3"] = "s3"
+    bucket: str = "recsys"
+    endpoint_url: str = "http://localhost:9000"
+    gold_prefix: str = "gold"
 
 
 class SparkConfig(BaseModel):
@@ -184,6 +229,7 @@ class Settings(BaseSettings):
 
     Attributes:
         paths: Required
+        storage: Optional; gold-layer location and object-store endpoint.
         spark: Optional; spark runtime tuning.
         split: Optional; temporal split parameters.
         session: Optional; sessionization parameters.
@@ -194,15 +240,33 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="RECSYS_",
         env_nested_delimiter="__",
-        yaml_file="conf/config.yml",
     )
 
     paths: Paths
+    storage: StorageConfig = StorageConfig()
     spark: SparkConfig = SparkConfig()
     split: SplitConfig = SplitConfig()
     session: SessionConfig = SessionConfig()
     replay: ReplayConfig = ReplayConfig()
     filter: FilterConfig = FilterConfig()
+
+    def gold_uri(self, name: str, scheme: str = "s3a") -> str:
+        """Resolve a gold table to a location the calling client can open.
+
+        Args:
+            name: Table name under the gold layer, such as
+                ``item_hourly_features``. May contain separators, so
+                ``training_examples/train`` resolves the same way on both
+                backends.
+            scheme: ``s3a`` for Spark, ``s3`` for pyarrow and Feast. Ignored
+                when the backend is local, where there is no scheme to choose.
+
+        Returns:
+            A local filesystem path, or a URI in the requested scheme.
+        """
+        if self.storage.backend == "local":
+            return str(self.paths.gold / name)
+        return f"{scheme}://{self.storage.bucket}/{self.storage.gold_prefix}/{name}"
 
     @classmethod
     def settings_customise_sources(
@@ -219,6 +283,10 @@ class Settings(BaseSettings):
         field without discarding the rest of the block it belongs to: setting
         ``RECSYS_SPLIT__HOLDOUT_DAYS`` must not wipe ``min_user_impressions``.
 
+        The YAML path is read from ``_yaml_file`` at call time rather than
+        fixed in ``model_config``, which is what lets :func:`load_settings`
+        accept a root for callers that cannot rely on the working directory.
+
         Args:
             settings_cls: The settings class being built.
             init_settings: Values passed as keyword arguments.
@@ -232,15 +300,28 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            YamlConfigSettingsSource(settings_cls, deep_merge=True),
+            YamlConfigSettingsSource(settings_cls, yaml_file=_yaml_file.get(), deep_merge=True),
         )
 
 
-def load_settings() -> Settings:
+def load_settings(root: Path | None = None) -> Settings:
     """Load and validate configuration.
 
     Reads ``conf/config.yml`` relative to the process working directory, then
     applies any ``RECSYS_``-prefixed environment variables over it.
+
+    Args:
+        root: Repository root to resolve the configuration against. Omit it in
+            anything launched from the repo root, which is everything except
+            the Feast CLI -- that chdirs into the feature repo before importing
+            its definitions, so ``definition.py`` passes its own anchored root
+            rather than keeping a second copy of the values it needs.
+
+            This anchors the DATA PATHS as well as the YAML file. Both are
+            relative by default, so resolving only the file would hand back
+            ``data/gold`` to a caller whose working directory is not the repo
+            root -- which fails as a missing directory underneath it, not as a
+            configuration error.
 
     Returns:
         A validated :class:`Settings`.
@@ -255,4 +336,21 @@ def load_settings() -> Settings:
     # __init__ from the field declarations. At runtime it is supplied by the
     # YAML source, which mypy cannot see. This is the documented friction
     # between BaseSettings and strict mode, not a real call error.
-    return Settings()  # type: ignore[call-arg]
+    if root is None:
+        return Settings()  # type: ignore[call-arg]
+
+    root = Path(root).resolve()
+
+    # reset() rather than leaving the value set: a load with an explicit root
+    # must not change what the next default load reads.
+    token = _yaml_file.set(root / "conf" / "config.yml")
+    try:
+        settings = Settings()  # type: ignore[call-arg]
+    finally:
+        _yaml_file.reset(token)
+
+    # An absolute path in the YAML is taken as deliberate and left alone.
+    settings.paths = Paths(
+        **{name: value if value.is_absolute() else root / value for name, value in settings.paths}
+    )
+    return settings

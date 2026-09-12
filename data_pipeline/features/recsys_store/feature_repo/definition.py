@@ -5,28 +5,79 @@ must live BESIDE feature_store.yaml -- not up in data_pipeline/features/,
 where the CLI will never look at it.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from feast import Entity, FeatureView, Field, FileSource, ValueType
-from feast.types import Float64, Int64, String
+from feast import (
+    Entity,
+    FeatureService,
+    FeatureView,
+    Field,
+    FileSource,
+    Project,
+    PushSource,
+    RequestSource,
+    ValueType,
+)
+from feast.on_demand_feature_view import on_demand_feature_view
+from feast.types import Array, Float64, Int64, String, UnixTimestamp
 
-# The CLI chdirs into this directory before running, and load_settings() reads
-# "conf/config.yml" relative to the working directory -- so settings cannot be
-# used here. Anchor on __file__ instead, which is stable no matter who calls.
+from common.config import load_settings
+from common.utils import gold_location
+
+# The CLI chdirs into this directory before importing, so a load relative to the
+# working directory fails here. __file__ is stable no matter who calls, and
+# load_settings() takes a root -- which is why the bucket and the endpoint are
+# read from conf/config.yml below rather than repeated as literals.
 #
 #   feature_repo/ -> recsys_store/ -> features/ -> data_pipeline/ -> repo root
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-GOLD = PROJECT_ROOT / "data" / "gold"
+SETTINGS = load_settings(PROJECT_ROOT)
 
-item = Entity(name="item_id", value_type=ValueType.STRING)
-user = Entity(name="user_id", value_type=ValueType.STRING)
-category = Entity(name="category", value_type=ValueType.STRING)
 
-item_stats_source = FileSource(
-    path=str(GOLD / "item_hourly_features"),
-    timestamp_field="feature_ts",  # what makes the as-of join possible
+def _source(table: str) -> FileSource:
+    """A gold feature series as Feast sees it.
+
+    ``scheme="s3"``: Feast reads through pyarrow, which registers ``s3://``
+    and has never heard of ``s3a://``. Spark writes the same bytes to the same
+    bucket through the Hadoop client, which registers only ``s3a://``. Two
+    clients, two schemes, one location -- see ``StorageConfig``.
+
+    Args:
+        table: Gold table name.
+
+    Returns:
+        A configured :class:`FileSource`.
+    """
+    endpoint: str | None = None
+    if SETTINGS.storage.backend == "s3":
+        # Ignored by pyarrow for a local path, but passing it anyway would
+        # claim a dependency on MinIO that the local backend does not have.
+        endpoint = SETTINGS.storage.endpoint_url
+
+    return FileSource(
+        path=gold_location(SETTINGS, table, scheme="s3"),
+        s3_endpoint_override=endpoint,
+        timestamp_field="feature_ts",  # what makes the as-of join possible
+        # Breaks ties between rows sharing an event timestamp. No series can
+        # produce one today -- each is unique per (entity, feature_ts) -- so
+        # this is a guard on a future backfill that rewrites a bucket rather
+        # than a fix for anything current.
+        created_timestamp_column="created_ts",
+    )
+
+
+project = Project(
+    name="recsys_store",
+    description="Point-in-time feature definitions for the recommender system features.",
 )
+
+item = Entity(name="item", join_keys=["item_id"], value_type=ValueType.STRING)
+user = Entity(name="user", join_keys=["user_id"], value_type=ValueType.STRING)
+category = Entity(name="category", join_keys=["category"], value_type=ValueType.STRING)
+
+item_stats_source = _source("item_hourly_features")
 
 item_stats = FeatureView(
     name="item_stats",
@@ -44,10 +95,7 @@ item_stats = FeatureView(
     online=True,
 )
 
-user_stats_source = FileSource(
-    path=str(GOLD / "user_hourly_features"),
-    timestamp_field="feature_ts",
-)
+user_stats_source = _source("user_hourly_features")
 
 user_stats = FeatureView(
     name="user_stats",
@@ -67,10 +115,7 @@ user_stats = FeatureView(
     online=True,
 )
 
-user_category_source = FileSource(
-    path=str(GOLD / "user_category_cross_features"),
-    timestamp_field="feature_ts",
-)
+user_category_source = _source("user_category_cross_features")
 
 user_category_stats = FeatureView(
     name="user_category_stats",
@@ -83,4 +128,89 @@ user_category_stats = FeatureView(
     ],
     source=user_category_source,
     online=True,
+)
+
+# TODO: Flink job pushes into this
+#
+# It is excluded from `make feast` materialisation: a push view has no batch
+# rows to pull, and the batch_source below exists only because Feast requires
+# one for schema inference and offline retrieval.
+user_realtime = FeatureView(
+    name="user_realtime",
+    entities=[user],
+    ttl=timedelta(hours=6),
+    schema=[
+        Field(name="last_50_items", dtype=Array(String)),
+        Field(name="session_length", dtype=Int64),
+        Field(name="session_categories", dtype=Array(String)),
+    ],
+    source=PushSource(name="user_rt_push", batch_source=user_stats_source),
+    online=True,
+)
+
+
+# Context features: derived from the request timestamp, stored nowhere.
+#
+# Training computes these in Spark, inside attach_point_in_time_features. Serving
+# would otherwise recompute them in Go, from a different clock in a different
+# language -- two implementations of one definition, which is how an off-by-one
+# hour reaches the ranker with nothing to catch it.
+request_time = RequestSource(
+    name="request_time",
+    schema=[Field(name="request_ts", dtype=UnixTimestamp)],
+    description="The instant the recommendation was requested.",
+)
+
+
+def _as_utc(value: datetime | int | float) -> datetime:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+    return datetime.fromtimestamp(value, tz=UTC)
+
+
+@on_demand_feature_view(  # type: ignore[untyped-decorator]
+    sources=[request_time],
+    schema=[
+        Field(name="hour_of_day", dtype=Int64),
+        Field(name="day_of_week", dtype=Int64),
+    ],
+    mode="python",
+    description="Calendar features derived from the request timestamp, in UTC.",
+)
+def context_features(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Match Spark's ``hour`` and ``dayofweek`` exactly.
+
+    Two conventions have to be honoured, and neither is the Python default:
+
+    * **UTC.** Spark reads these with ``spark.sql.session.timeZone`` pinned to
+      UTC, so a naive local-time conversion here shifts every hour by the
+      developer's offset. That is the timezone bug this project already hit
+      once, in a test, where it was visible. Here it would not be.
+    * **Spark's week numbering.** ``dayofweek`` is 1=Sunday..7=Saturday, while
+      Python's ``isoweekday`` is 1=Monday..7=Sunday. ``% 7 + 1`` maps one onto
+      the other: Monday 1 -> 2, Sunday 7 -> 1.
+
+    tests/test_context_features.py asserts this against Spark itself rather than
+    against a restatement of these rules.
+    """
+    hours: list[int] = []
+    days: list[int] = []
+
+    for value in inputs["request_ts"]:
+        moment = _as_utc(value)
+        hours.append(moment.hour)
+        days.append(moment.isoweekday() % 7 + 1)
+
+    return {"hour_of_day": hours, "day_of_week": days}
+
+
+# user_realtime is absent because nothing writes it yet -- the Flink job that
+# pushes into it will be implemented later
+ranker_v1 = FeatureService(
+    name="ranker_v1",
+    features=[item_stats, user_stats, user_category_stats, context_features],
+    description=(
+        "Features the ranker consumes, matching what build_training_examples "
+        "attaches offline. Change this and the ranker's input width changes."
+    ),
 )
