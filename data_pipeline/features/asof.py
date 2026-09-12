@@ -35,7 +35,12 @@ _CATEGORY_FEATURES = ("cat_expanding_ctr",)
 # Counts, where zero is the honest answer for an item with no closed bucket
 # before the label: nothing was knowable yet. The RATE is different and must
 # never be zero-filled -- see build_training_examples.
-_ZERO_FILLED = (
+# Serving MUST apply the same fill. These are counts and durations where zero
+# is the honest answer for an entity with no closed bucket before the label;
+# the RATES next to them must stay null and fall back to a prior instead.
+# Public because it is a contract between training and serving, not an
+# implementation detail -- tests/test_served_covers_trained.py pins it.
+ZERO_FILLED = (
     "item_impressions_24h",
     "item_clicks_24h",
     "item_age_hours",
@@ -168,13 +173,13 @@ def attach_point_in_time_features(
         .withColumn("has_user_features", f.col("user_ctr_smoothed").isNotNull())
         .withColumn("has_user_category_features", f.col("user_cat_affinity").isNotNull())
         .withColumn(
-            "item_ctr_smoothed",
+            "item_ctr_effective",
             f.coalesce(f.col("item_ctr_smoothed"), f.col("cat_expanding_ctr")),
         )
         .withColumn("hour_of_day", f.hour("ts"))
         .withColumn("day_of_week", f.dayofweek("ts"))
     )
-    for column in _ZERO_FILLED:
+    for column in ZERO_FILLED:
         examples = examples.withColumn(column, f.coalesce(f.col(column), f.lit(0)))
 
     # A null rate here means BOTH fallbacks were empty: no bucket had closed
@@ -183,6 +188,4 @@ def attach_point_in_time_features(
     # the first bucket anywhere closes at 01:00.
     #
     # These are dropped rather than kept.
-    # The count is logged at build time so the loss is never silent, and the
-    # same warm-up applies to the streaming path when it starts cold in Part Q.
-    return examples.filter(f.col("item_ctr_smoothed").isNotNull())
+    return examples.filter(f.col("item_ctr_effective").isNotNull())

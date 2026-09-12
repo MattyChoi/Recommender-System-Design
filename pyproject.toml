@@ -9,6 +9,7 @@ authors = [
 ]
 license = "MIT"
 dependencies = [
+    "boto3==1.43.75",
     "confluent-kafka>=2.12.0",
     "feast[redis]>=0.66.0",
     "huggingface-hub>=1.29.0",

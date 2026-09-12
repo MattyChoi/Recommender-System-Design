@@ -4,10 +4,9 @@
 
 .DEFAULT_GOAL := help
 
+
 -include .env
-export MINIO_ROOT_USER MINIO_ROOT_PASSWORD
-export AWS_ACCESS_KEY_ID     = $(MINIO_ROOT_USER)
-export AWS_SECRET_ACCESS_KEY = $(MINIO_ROOT_PASSWORD)
+export UV_ENV_FILE=.env
 
 MIND_SIZE ?= small
 SPLITS ?= train dev
@@ -30,16 +29,8 @@ KAFKA_EXEC       = docker exec $(KAFKA_CONTAINER) /opt/kafka/bin
 FEAST_START ?= 2019-11-09T00:00:00		# MIND dataset date range
 FEAST_END   ?= 2019-11-16T00:00:00
 FEAST_REPO ?= data_pipeline/features/recsys_store/feature_repo
-
-# feature_store.yaml substitutes these via os.path.expandvars, which has no
-# default syntax -- an unset variable is left as a literal "${...}" and fails
-# config validation. Exporting them here is what keeps that from happening.
-# Override either one to point the same repo at different infrastructure:
-#   make feast FEAST_REDIS_CONNECTION=redis:6379
 PARITY_SAMPLE ?= 200
-FEAST_REGISTRY ?= registry.db
-FEAST_REDIS_CONNECTION ?= localhost:6379
-export FEAST_REGISTRY FEAST_REDIS_CONNECTION
+
 
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'

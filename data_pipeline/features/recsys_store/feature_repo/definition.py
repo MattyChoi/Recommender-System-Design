@@ -21,7 +21,7 @@ from feast import (
     ValueType,
 )
 from feast.on_demand_feature_view import on_demand_feature_view
-from feast.types import Array, Float64, Int64, String, UnixTimestamp
+from feast.types import Array, Bool, Float64, Int64, String, UnixTimestamp
 
 from common.config import load_settings
 from common.utils import gold_location
@@ -204,11 +204,52 @@ def context_features(inputs: dict[str, Any]) -> dict[str, Any]:
     return {"hour_of_day": hours, "day_of_week": days}
 
 
+@on_demand_feature_view(  # type: ignore[untyped-decorator]
+    sources=[item_stats, user_stats, user_category_stats],
+    schema=[
+        Field(name="item_ctr_effective", dtype=Float64),
+        Field(name="has_item_features", dtype=Bool),
+        Field(name="has_user_features", dtype=Bool),
+        Field(name="has_user_category_features", dtype=Bool),
+    ],
+    mode="python",
+    description=(
+        "Cold-start fallback and the missingness flags, matching what "
+        "attach_point_in_time_features computes offline."
+    ),
+)
+def derived_features(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Mirror the post-join block in ``attach_point_in_time_features``.
+
+    A row where the item has no history AND its category has no prior yields
+    None here. Training drops those rows; serving cannot drop a request, so
+    we have to decide what to send the ranker later
+    """
+    item_ctr = inputs["item_ctr_smoothed"]
+    category_ctr = inputs["cat_expanding_ctr"]
+
+    return {
+        "has_item_features": [value is not None for value in item_ctr],
+        "has_user_features": [value is not None for value in inputs["user_ctr_smoothed"]],
+        "has_user_category_features": [value is not None for value in inputs["user_cat_affinity"]],
+        "item_ctr_effective": [
+            item if item is not None else category
+            for item, category in zip(item_ctr, category_ctr, strict=True)
+        ],
+    }
+
+
 # user_realtime is absent because nothing writes it yet -- the Flink job that
 # pushes into it will be implemented later
 ranker_v1 = FeatureService(
     name="ranker_v1",
-    features=[item_stats, user_stats, user_category_stats, context_features],
+    features=[
+        item_stats,
+        user_stats,
+        user_category_stats,
+        context_features,
+        derived_features,
+    ],
     description=(
         "Features the ranker consumes, matching what build_training_examples "
         "attaches offline. Change this and the ranker's input width changes."
