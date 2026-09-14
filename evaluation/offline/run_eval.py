@@ -19,20 +19,31 @@ from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
 from evaluation.offline.report import default_cohorts, report_card
+from models.retrieval.popularity import score_decayed_popular, score_most_popular
 
 RESULTS = Path("evaluation/results")
 
-_NEEDED = ("user_id", "item_id", "impression_id", "clicked")
+# ts is needed by the decayed baseline, which measures a click's age from the
+# label's own instant rather than from one global "now".
+_NEEDED = ("user_id", "item_id", "impression_id", "clicked", "ts")
 
 
-def _score(model: str, frame: DataFrame, seed: int) -> DataFrame:
+def _score(
+    model: str, frame: DataFrame, train: DataFrame, seed: int, half_life: float
+) -> DataFrame:
     """Attach a ``score`` column.
 
+    Every model goes through here, so every model is scored by the same harness
+    over the same rows
+
     Args:
-        model: Model name. ``random`` is implemented here; every other name is
-            expected to come from Part F onwards.
+        model: Model name.
         frame: Evaluation rows.
+        train: Training rows, for the baselines fitted on them. TRAIN ONLY:
+            fitting popularity over train plus dev would let the baseline see
+            the evaluation window, and it would look stronger for it.
         seed: Fixes the random scorer so a rerun reproduces the card.
+        half_life: Days, for the decayed baseline.
 
     Returns:
         ``frame`` plus ``score``.
@@ -43,21 +54,31 @@ def _score(model: str, frame: DataFrame, seed: int) -> DataFrame:
     """
     if model == "random":
         return frame.withColumn("score", f.rand(seed=seed))
+    if model == "popularity":
+        return score_most_popular(frame, train)
+    if model == "decayed_popularity":
+        return score_decayed_popular(frame, train, half_life_days=half_life)
 
     raise NotImplementedError(
-        f"no scorer for {model!r}. 'random' is available now; popularity, "
-        "co-visitation and the learned models arrive in Part F onwards."
+        f"no scorer for {model!r}. Available: random, popularity, "
+        "decayed_popularity. Co-visitation, ALS and the learned models arrive "
+        "in F2 onwards."
     )
 
 
 def evaluate(
-    spark: SparkSession, settings: Settings, model: str, split: str, seed: int
+    spark: SparkSession,
+    settings: Settings,
+    model: str,
+    split: str,
+    seed: int,
+    half_life: float = 3.0,
 ) -> dict[str, Any]:
     """Build one report card end to end."""
     examples = read_gold(spark, settings, f"training_examples/{split}")
     train = read_gold(spark, settings, "training_examples/train")
 
-    scored = _score(model, examples.select(*_NEEDED), seed)
+    scored = _score(model, examples.select(*_NEEDED), train, seed, half_life)
 
     warm_users = train.select("user_id").distinct().withColumn("_wu", f.lit(True))
     warm_items = train.select("item_id").distinct().withColumn("_wi", f.lit(True))
@@ -87,22 +108,8 @@ def evaluate(
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--split", default="dev")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--out", type=Path, default=None)
-    args = parser.parse_args(argv)
-
-    settings = load_settings()
-    spark = get_spark(settings, app=f"eval-{args.model}")
-    try:
-        card = evaluate(spark, settings, args.model, args.split, args.seed)
-    finally:
-        spark.stop()
-
-    destination = args.out or RESULTS / f"{args.model}.json"
+def write_card(card: dict[str, Any], destination: Path) -> dict[str, Any]:
+    """Persist one card and echo its headline. Returns the overall cohort."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(card, indent=2) + "\n")
 
@@ -125,6 +132,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"[{wrong[0]}, {wrong[1]}]  width {wrong[1] - wrong[0]:.4f}  <- WRONG unit"
         )
         print("  impressions from one user are correlated; the narrower interval is unearned.")
+    return overall
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--split", default="dev")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--half-life",
+        type=float,
+        default=3.0,
+        help="days, for decayed_popularity; sweep it, the curve is a free ablation",
+    )
+    parser.add_argument("--out", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    settings = load_settings()
+    spark = get_spark(settings, app=f"eval-{args.model}")
+    try:
+        card = evaluate(spark, settings, args.model, args.split, args.seed, args.half_life)
+    finally:
+        spark.stop()
+
+    write_card(card, args.out or RESULTS / f"{args.model}.json")
     return 0
 
 

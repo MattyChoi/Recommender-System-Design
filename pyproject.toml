@@ -54,7 +54,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "confluent_kafka.*", "s3fs.*"]
+module = ["pyarrow.*", "confluent_kafka.*", "s3fs.*", "fsspec.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

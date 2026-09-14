@@ -346,6 +346,10 @@ observation, and carries most of the calibration signal.
 
 ## How results are measured
 
+The current baseline numbers live in [docs/results.md](docs/results.md), rebuilt from the
+report cards by `make results`. Every model in this project is scored by the same harness
+and lands in that table — including the ones that look good.
+
 Two protocols, deliberately separate, because the same metric name over two different pools
 is two different measurements — and the number alone does not say which you are looking at.
 

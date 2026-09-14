@@ -1,4 +1,4 @@
-.PHONY: proto help up down clean raw bronze silver gold feast parity eval data \
+.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
@@ -39,6 +39,10 @@ PARITY_SAMPLE ?= 200
 # Options for evaluating model metrics
 MODEL ?= random
 EVAL_SPLIT ?= dev
+# Sub-day values matter on a news corpus: an article's whole life is hours, so
+# a 3-day half-life is already long. The sweep is what shows that rather than
+# asserting it.
+HALF_LIVES ?= 0.25 0.5 1 2
 
 
 help:  ## Show this help
@@ -91,6 +95,17 @@ feast:  ## Register feature definitions and materialise them into Redis
 
 eval:  ## Score a model into evaluation/results/ (make eval MODEL=random)
 	uv run python -m evaluation.offline.run_eval --model $(MODEL) --split $(EVAL_SPLIT)
+
+# One card per half-life, so the results directory holds the ablation. The curve is
+# the deliverable: a lone tuned half-life reads as a number someone picked.
+sweep:  ## Half-life curve for decayed popularity (make sweep HALF_LIVES="0.5 1 3 7")
+	uv run python -m evaluation.offline.run_eval_sweep \
+	    --split $(EVAL_SPLIT) --half-lives $(HALF_LIVES)
+
+# Rebuilt from the cards, never hand-edited: a table that disagrees with the
+# JSON it quotes is worse than no table. Pure stdlib, so no cluster is needed.
+results:  ## Rebuild docs/results.md from evaluation/results/*.json
+	uv run python -m evaluation.offline.results_table
 
 # Compares what Feast materialised against what the gold series says it should
 # hold. NOT the skew report -- both sides are offline reads; see docs/ for the
