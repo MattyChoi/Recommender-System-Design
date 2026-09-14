@@ -342,3 +342,28 @@ dev's catalogue is largely new; `min_user_impressions = 3` would remove 75.46% o
 long-tail items would inflate every reported metric by deleting the hardest cases. Zero-click
 impressions are likewise **kept** -- a user shown five articles who wanted none is a real
 observation, and carries most of the calibration signal.
+
+
+## How results are measured
+
+Two protocols, deliberately separate, because the same metric name over two different pools
+is two different measurements — and the number alone does not say which you are looking at.
+
+**Ranking is scored within the impression.** The items shown together in one page view were
+selected by MSN's own recommender; the question is whether the model orders that slate
+better than they did. This is MIND's leaderboard task, so GAUC, MRR and NDCG@10 reported
+here are comparable to published MIND results.
+
+**Retrieval is scored against the whole catalogue** — all 65,238 articles, never a sampled
+pool. Scoring one positive against ~100 random negatives is biased and does not
+rank-correlate with full ranking ([Krichene & Rendle, 2020](https://dl.acm.org/doi/10.1145/3394486.3403226)),
+and it yields a plausible-looking number with nothing in the output to reveal it. Any table
+row labelled *retrieval* was produced over the full catalogue; `evaluate_retrieval` raises
+rather than accept a short candidate pool.
+
+Every per-impression metric is **undefined, not zero**, for a slate with no click, and every
+aggregate carries the count it was taken over. MIND-small's dev impressions all carry a
+click, so that count is zero overall — but a cohort slice can still reduce a slate to
+all-clicks or all-misses, and a mean without its denominator is not a comparable number.
+
+Full protocol, cohort slicing and the cold-start denominators: [`docs/evaluation.md`](docs/evaluation.md).

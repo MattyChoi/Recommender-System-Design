@@ -1,4 +1,4 @@
-.PHONY: proto help up down clean raw bronze silver gold feast parity data \
+.PHONY: proto help up down clean raw bronze silver gold feast parity eval data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
@@ -26,10 +26,19 @@ TOPIC           ?= impressions
 PARTITIONS      ?= 3
 CONSUME_ARGS    ?=
 KAFKA_EXEC       = docker exec $(KAFKA_CONTAINER) /opt/kafka/bin
+
+# Feast variables
 FEAST_START ?= 2019-11-09T00:00:00		# MIND dataset date range
 FEAST_END   ?= 2019-11-16T00:00:00
 FEAST_REPO ?= data_pipeline/features/recsys_store/feature_repo
+
+# Parity sample for make parity
 PARITY_SAMPLE ?= 200
+
+
+# Options for evaluating model metrics
+MODEL ?= random
+EVAL_SPLIT ?= dev
 
 
 help:  ## Show this help
@@ -79,6 +88,9 @@ feast:  ## Register feature definitions and materialise them into Redis
 	uv run feast -c $(FEAST_REPO) apply
 	uv run feast -c $(FEAST_REPO) materialize $(FEAST_START) $(FEAST_END) \
 	    --views item_stats --views user_stats --views user_category_stats
+
+eval:  ## Score a model into evaluation/results/ (make eval MODEL=random)
+	uv run python -m evaluation.offline.run_eval --model $(MODEL) --split $(EVAL_SPLIT)
 
 # Compares what Feast materialised against what the gold series says it should
 # hold. NOT the skew report -- both sides are offline reads; see docs/ for the

@@ -1,0 +1,114 @@
+{
+  "model": "random",
+  "split": "dev",
+  "generated": "2026-09-14T08:19:17.735014+00:00",
+  "git_sha": "3b81c62",
+  "k": 10,
+  "cohorts": {
+    "overall": {
+      "rows": 2740998,
+      "impressions": 73152,
+      "users": 50000,
+      "gauc": 0.5007,
+      "mrr": 0.2449,
+      "ndcg@10": 0.2855,
+      "recall@10": 0.5223,
+      "scored_impressions": 73152,
+      "skipped_impressions": 0,
+      "ci95": [
+        0.2851,
+        0.2903
+      ],
+      "ci_users": 50000,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.2832,
+        0.2877
+      ],
+      "ci_impressions": 73152
+    },
+    "warm_user": {
+      "rows": 337102,
+      "impressions": 8957,
+      "users": 5941,
+      "gauc": 0.4973,
+      "mrr": 0.2458,
+      "ndcg@10": 0.2846,
+      "recall@10": 0.5183,
+      "scored_impressions": 8957,
+      "skipped_impressions": 0,
+      "ci95": [
+        0.2794,
+        0.2939
+      ],
+      "ci_users": 5941,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.2777,
+        0.2912
+      ],
+      "ci_impressions": 8957
+    },
+    "cold_user": {
+      "rows": 2403896,
+      "impressions": 64195,
+      "users": 44059,
+      "gauc": 0.5012,
+      "mrr": 0.2448,
+      "ndcg@10": 0.2856,
+      "recall@10": 0.5229,
+      "scored_impressions": 64195,
+      "skipped_impressions": 0,
+      "ci95": [
+        0.2851,
+        0.2905
+      ],
+      "ci_users": 44059,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.2831,
+        0.288
+      ],
+      "ci_impressions": 64195
+    },
+    "warm_item": {
+      "rows": 1826037,
+      "impressions": 49762,
+      "users": 37899,
+      "gauc": 0.5023,
+      "mrr": 0.2357,
+      "ndcg@10": 0.2806,
+      "recall@10": 0.5241,
+      "scored_impressions": 49762,
+      "skipped_impressions": 0,
+      "ci95": [
+        0.2783,
+        0.2844
+      ],
+      "ci_users": 37899,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.2779,
+        0.2832
+      ],
+      "ci_impressions": 49762
+    },
+    "cold_item": {
+      "rows": 914961,
+      "impressions": 23390,
+      "users": 19532,
+      "gauc": 0.4976,
+      "mrr": 0.2647,
+      "ndcg@10": 0.2959,
+      "recall@10": 0.5185,
+      "scored_impressions": 23390,
+      "skipped_impressions": 0,
+      "ci95": [
+        0.2921,
+        0.3005
+      ],
+      "ci_users": 19532,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.2921,
+        0.2999
+      ],
+      "ci_impressions": 23390
+    }
+  }
+}
