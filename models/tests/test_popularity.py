@@ -17,6 +17,7 @@ from models.retrieval.popularity import (
     click_counts,
     score_decayed_popular,
     score_most_popular,
+    score_most_recent,
 )
 
 T0 = datetime(2019, 11, 14, 12, 0, 0)
@@ -141,3 +142,111 @@ class TestDecayedPopular:
 
         with pytest.raises(ValueError, match="must be positive"):
             score_decayed_popular(labels, train, half_life_days=bad)
+
+
+class TestMostRecent:
+    """The half-life -> 0 limit, computed rather than approached."""
+
+    @pytest.fixture
+    def recency_train(self, spark: SparkSession) -> DataFrame:
+        """N2 is five times more popular than N1, and six days staler.
+
+        Built so popularity and recency DISAGREE. A fixture where the same item
+        wins under both would pass whichever model was wired in.
+        """
+        return spark.createDataFrame(
+            [
+                ("N1", T0 - timedelta(hours=1), True),
+                *[("N2", T0 - timedelta(days=6), True) for _ in range(5)],
+                ("N3", T0 - timedelta(days=1), False),
+            ],
+            _TRAIN,
+        )
+
+    def _scores(self, frame: DataFrame) -> dict[str, float]:
+        return {r["item_id"]: r["score"] for r in frame.collect()}
+
+    def test_recency_beats_popularity_on_the_same_rows(
+        self, spark: SparkSession, recency_train: DataFrame
+    ) -> None:
+        """N2 has five clicks to N1's one, and still ranks below it."""
+        labels = spark.createDataFrame(
+            [("N1", 1, T0 + timedelta(hours=1)), ("N2", 1, T0 + timedelta(hours=1))],
+            _LABELS,
+        )
+
+        recent = self._scores(score_most_recent(labels, recency_train))
+        popular = self._scores(score_most_popular(labels, recency_train))
+
+        assert recent["N1"] > recent["N2"]
+        assert popular["N2"] > popular["N1"]
+
+    def test_it_agrees_with_a_very_short_half_life(
+        self, spark: SparkSession, recency_train: DataFrame
+    ) -> None:
+        """The claim that this IS the limit, as a test rather than a docstring.
+
+        0.02 days is the shortest half-life the exponential survives: below
+        roughly 0.013 days, exp() underflows for two-week-old clicks and the
+        decayed model stops being comparable. If these two ever disagree in
+        ORDER, one of them is wrong about what the limit is.
+        """
+        labels = spark.createDataFrame(
+            [
+                ("N1", 1, T0 + timedelta(hours=1)),
+                ("N2", 1, T0 + timedelta(hours=1)),
+                ("N3", 1, T0 + timedelta(hours=1)),
+            ],
+            _LABELS,
+        )
+
+        recent = self._scores(score_most_recent(labels, recency_train))
+        decayed = self._scores(score_decayed_popular(labels, recency_train, half_life_days=0.02))
+
+        by_recency = sorted(recent, key=lambda i: -recent[i])
+        by_decay = sorted(decayed, key=lambda i: -decayed[i])
+
+        assert by_recency == by_decay == ["N1", "N2", "N3"]
+
+    def test_a_click_after_the_label_does_not_count(self, spark: SparkSession) -> None:
+        """The label is scored at an instant BEFORE the only click there is."""
+        train = spark.createDataFrame([("N1", T0, True)], _TRAIN)
+        labels = spark.createDataFrame([("N1", 1, T0 - timedelta(hours=1))], _LABELS)
+
+        assert self._scores(score_most_recent(labels, train))["N1"] == 0.0
+
+    def test_an_unclicked_item_scores_zero_not_null(
+        self, spark: SparkSession, recency_train: DataFrame
+    ) -> None:
+        """N3 was shown and never clicked; the same honest zero the others give."""
+        labels = spark.createDataFrame([("N3", 1, T0 + timedelta(hours=1))], _LABELS)
+
+        assert self._scores(score_most_recent(labels, recency_train))["N3"] == 0.0
+
+    def test_a_cold_item_never_outranks_a_stale_one(
+        self, spark: SparkSession, recency_train: DataFrame
+    ) -> None:
+        """1/(1+age) is strictly positive, so any real click beats no click.
+
+        This is why the score is not -age: a negative-age score needs a sentinel
+        for "never clicked", and every sentinel is a number some real row can
+        reach.
+        """
+        labels = spark.createDataFrame(
+            [("N2", 1, T0 + timedelta(hours=1)), ("N3", 1, T0 + timedelta(hours=1))],
+            _LABELS,
+        )
+        got = self._scores(score_most_recent(labels, recency_train))
+
+        assert got["N2"] > got["N3"] == 0.0
+
+    def test_the_row_count_is_preserved(
+        self, spark: SparkSession, recency_train: DataFrame
+    ) -> None:
+        """An item with several clicks must collapse to one row, not several."""
+        labels = spark.createDataFrame(
+            [("N2", 1, T0 + timedelta(hours=1)), ("N2", 2, T0 + timedelta(hours=2))],
+            _LABELS,
+        )
+
+        assert score_most_recent(labels, recency_train).count() == 2

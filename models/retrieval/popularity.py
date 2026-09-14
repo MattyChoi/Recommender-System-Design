@@ -136,3 +136,41 @@ def score_decayed_popular(
         .agg(f.sum("weight").alias("score"))
         .withColumn("score", f.coalesce(f.col("score"), f.lit(0.0)))
     )
+
+
+def score_most_recent(labels: DataFrame, train: DataFrame) -> DataFrame:
+    """Rank by how recently an item was last clicked -- the half-life -> 0 limit.
+
+    Scored as ``1 / (1 + age_days)``, not as the raw timestamp. Any strictly
+    decreasing function of age induces the identical ranking, and this one is
+    bounded in (0, 1], keeps the "cold scores 0.0" convention the other
+    baselines use, and needs no sentinel for an item nobody has clicked --
+    which a negative-age score would.
+
+    Args:
+        labels: Rows to score, carrying ``item_id`` and ``ts``.
+        train: Training rows with ``item_id``, ``ts`` and ``clicked``.
+
+    Returns:
+        ``labels`` plus ``score``.
+    """
+    # The half-life argument is ignored by design; this is reused so that "a
+    # click" has one definition across every baseline in this module.
+    clicks = decayed_click_weights(train, 1.0)
+
+    age_days = (f.col("ts").cast("long") - f.col("click_ts").cast("long")) / _SECONDS_PER_DAY
+    # Same "<" rule as the as-of join: a click at or after the label instant was
+    # not knowable when the label was served.
+    knowable = f.col("click_ts").isNotNull() & (f.col("click_ts") < f.col("ts"))
+
+    keys = list(labels.columns)
+    return (
+        labels.join(f.broadcast(clicks), on="item_id", how="left")
+        .groupBy(*keys)
+        .agg(f.min(f.when(knowable, age_days)).alias("age_days"))
+        .withColumn(
+            "score",
+            f.coalesce(f.lit(1.0) / (f.lit(1.0) + f.col("age_days")), f.lit(0.0)),
+        )
+        .select(*keys, "score")
+    )

@@ -1,8 +1,8 @@
 {
   "model": "popularity",
   "split": "dev",
-  "generated": "2026-09-14T09:07:20.483992+00:00",
-  "git_sha": "ecf69e4",
+  "generated": "2026-09-14T21:31:54.545659+00:00",
+  "git_sha": "86da29c",
   "k": 10,
   "cohorts": {
     "overall": {
@@ -15,14 +15,17 @@
       "recall@10": 0.5439,
       "scored_impressions": 73152,
       "skipped_impressions": 0,
+      "flat_impressions": 5758,
+      "gauc_ceiling": 0.9606,
+      "headroom_used": 0.0528,
       "ci95": [
-        0.311,
-        0.3164
+        0.3111,
+        0.3162
       ],
       "ci_users": 50000,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3055,
-        0.3101
+        0.3056,
+        0.3102
       ],
       "ci_impressions": 73152
     },
@@ -36,14 +39,17 @@
       "recall@10": 0.5382,
       "scored_impressions": 8957,
       "skipped_impressions": 0,
+      "flat_impressions": 710,
+      "gauc_ceiling": 0.9604,
+      "headroom_used": 0.0411,
       "ci95": [
-        0.3039,
-        0.3196
+        0.3036,
+        0.3192
       ],
       "ci_users": 5941,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2969,
-        0.3097
+        0.2968,
+        0.3094
       ],
       "ci_impressions": 8957
     },
@@ -57,14 +63,17 @@
       "recall@10": 0.5446,
       "scored_impressions": 64195,
       "skipped_impressions": 0,
+      "flat_impressions": 5048,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.0545,
       "ci95": [
         0.3113,
-        0.3167
+        0.3169
       ],
       "ci_users": 44059,
       "ci95_by_impression_DO_NOT_QUOTE": [
         0.3061,
-        0.3109
+        0.3108
       ],
       "ci_impressions": 64195
     },
@@ -78,14 +87,17 @@
       "recall@10": 0.5945,
       "scored_impressions": 49762,
       "skipped_impressions": 0,
+      "flat_impressions": 1001,
+      "gauc_ceiling": 0.9899,
+      "headroom_used": 0.1631,
       "ci95": [
         0.3356,
-        0.3418
+        0.3417
       ],
       "ci_users": 37899,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3327,
-        0.3383
+        0.3329,
+        0.3382
       ],
       "ci_impressions": 49762
     },
@@ -99,14 +111,17 @@
       "recall@10": 0.436,
       "scored_impressions": 23390,
       "skipped_impressions": 0,
+      "flat_impressions": 4757,
+      "gauc_ceiling": 0.8983,
+      "headroom_used": -0.2177,
       "ci95": [
-        0.2459,
-        0.2542
+        0.2462,
+        0.2541
       ],
       "ci_users": 19532,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2452,
-        0.2527
+        0.245,
+        0.253
       ],
       "ci_impressions": 23390
     }

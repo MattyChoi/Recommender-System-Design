@@ -1,8 +1,8 @@
 {
   "model": "decayed_popularity",
   "split": "dev",
-  "generated": "2026-09-14T09:16:59.505787+00:00",
-  "git_sha": "ecf69e4",
+  "generated": "2026-09-14T21:58:27.083137+00:00",
+  "git_sha": "86da29c",
   "k": 10,
   "cohorts": {
     "overall": {
@@ -15,6 +15,9 @@
       "recall@10": 0.5582,
       "scored_impressions": 73152,
       "skipped_impressions": 0,
+      "flat_impressions": 5757,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.0723,
       "ci95": [
         0.3164,
         0.3214
@@ -36,6 +39,9 @@
       "recall@10": 0.5502,
       "scored_impressions": 8957,
       "skipped_impressions": 0,
+      "flat_impressions": 710,
+      "gauc_ceiling": 0.9604,
+      "headroom_used": 0.0591,
       "ci95": [
         0.3076,
         0.3222
@@ -57,6 +63,9 @@
       "recall@10": 0.5593,
       "scored_impressions": 64195,
       "skipped_impressions": 0,
+      "flat_impressions": 5047,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.074,
       "ci95": [
         0.3166,
         0.3221
@@ -78,6 +87,9 @@
       "recall@10": 0.6037,
       "scored_impressions": 49762,
       "skipped_impressions": 0,
+      "flat_impressions": 1000,
+      "gauc_ceiling": 0.99,
+      "headroom_used": 0.1874,
       "ci95": [
         0.3416,
         0.3475
@@ -99,6 +111,9 @@
       "recall@10": 0.4615,
       "scored_impressions": 23390,
       "skipped_impressions": 0,
+      "flat_impressions": 4757,
+      "gauc_ceiling": 0.8983,
+      "headroom_used": -0.2099,
       "ci95": [
         0.2503,
         0.258

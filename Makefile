@@ -1,4 +1,4 @@
-.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results data \
+.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results gap coverage compare data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
@@ -39,10 +39,15 @@ PARITY_SAMPLE ?= 200
 # Options for evaluating model metrics
 MODEL ?= random
 EVAL_SPLIT ?= dev
-# Sub-day values matter on a news corpus: an article's whole life is hours, so
-# a 3-day half-life is already long. The sweep is what shows that rather than
-# asserting it.
-HALF_LIVES ?= 0.25 0.5 1 2
+HALF_LIVES ?= 0.02 0.05 0.1 0.25 1 3
+# 24h, chosen from `make coverage`, not from the manual. 1h left 91% of dev
+# slates with every candidate tied at 0.0; 24h is where slate reach plateaus.
+COVISIT_MAX_GAP ?= 86400
+
+BASELINE ?= recency
+CANDIDATE ?= decayed_popularity@0.02
+# Seconds: 1h, 6h, 24h, 72h. The 1h default came from the manual, not this corpus.
+WINDOWS ?= 3600 21600 86400 259200
 
 
 help:  ## Show this help
@@ -93,14 +98,31 @@ feast:  ## Register feature definitions and materialise them into Redis
 	uv run feast -c $(FEAST_REPO) materialize $(FEAST_START) $(FEAST_END) \
 	    --views item_stats --views user_stats --views user_category_stats
 
+# Reads bronze, not silver: silver's session_id was cut with the very threshold
+# this measures, so measuring there would let the old answer pick the new one.
+gap:  ## Measure the inter-impression gap, to set session.gap_minutes
+	uv run python -m data_pipeline.transform.session_gap --split train
+
 eval:  ## Score a model into evaluation/results/ (make eval MODEL=random)
-	uv run python -m evaluation.offline.run_eval --model $(MODEL) --split $(EVAL_SPLIT)
+	uv run python -m evaluation.offline.run_eval --model $(MODEL) --split $(EVAL_SPLIT) \
+	    --max-gap-seconds $(COVISIT_MAX_GAP)
 
 # One card per half-life, so the results directory holds the ablation. The curve is
 # the deliverable: a lone tuned half-life reads as a number someone picked.
 sweep:  ## Half-life curve for decayed popularity (make sweep HALF_LIVES="0.5 1 3 7")
 	uv run python -m evaluation.offline.run_eval_sweep \
 	    --split $(EVAL_SPLIT) --half-lives $(HALF_LIVES)
+
+# Reach, not quality, and no cards written. A model that scores nothing and a
+# model that ranks badly produce near-identical cards; this tells them apart
+# cheaply, before spending eval runs on windows that cannot move the metric.
+coverage:
+	uv run python -m evaluation.offline.covisit_coverage \
+	    --split $(EVAL_SPLIT) --windows $(WINDOWS)
+
+compare:  ## Paired bootstrap between two models (make compare BASELINE=recency CANDIDATE=decayed_popularity@0.02)
+	uv run python -m evaluation.offline.compare \
+	    --baseline $(BASELINE) --candidate $(CANDIDATE) --split $(EVAL_SPLIT)
 
 # Rebuilt from the cards, never hand-edited: a table that disagrees with the
 # JSON it quotes is worse than no table. Pure stdlib, so no cluster is needed.

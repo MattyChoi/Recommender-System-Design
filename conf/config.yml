@@ -26,9 +26,21 @@ split:
   min_user_impressions: 3  # below this a user cannot be personalized to
 
 session:
-  gap_minutes: 30          # TODO: measure. Guide 5.2's default is a web-analytics
-                           # convention, not a number from this corpus. Compute the
-                           # inter-impression gap quantiles and set from the elbow.
+  gap_minutes: 30          # Measured, not defaulted: `make gap` over train's 106,965
+                           # inter-impression transitions (33,617 users with 2+).
+                           # Share-per-minute decays SMOOTHLY to about 4h (0.44%/min
+                           # under 5m, 0.09%/min by 240m), then collapses 66% in the
+                           # next bucket and flattens with a faint uptick at 12-24h.
+                           # So a sitting ends within ~4h and anything longer is a
+                           # next-day visit -- but that fall is only 1.8x the
+                           # next-sharpest, short of the 2x dominance rule, so the
+                           # curve does not pick out a threshold on its own.
+                           # The median gap is 765 minutes: MIND users check the news
+                           # once or twice a day, they do not browse in sittings. So 30m
+                           # keeps just 9.9% of transitions in-session and most sessions
+                           # are singletons. Kept at 30 because no value is better
+                           # supported and this one is the stated web convention --
+                           # a judgement against measured data, not an unexamined default.
 
 replay:
   topic: impressions       # must match the 'topic' in the Flink CREATE TABLE

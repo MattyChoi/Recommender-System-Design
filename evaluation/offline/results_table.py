@@ -57,9 +57,13 @@ def _row(card: dict[str, Any]) -> str:
     overall = card["cohorts"]["overall"]
     cold = card["cohorts"]["cold_item"]
     low, high = overall["ci95"]
+    # Older cards predate the ceiling; render them as unknown rather than
+    # inventing 1.0, which would read as "this model had full room".
+    ceiling = overall.get("gauc_ceiling")
+    ceiling_cell = f"{ceiling:.4f}" if ceiling is not None else "—"
     return (
-        f"| {_label(card)} | {overall['gauc']:.4f} | {overall['ndcg@10']:.4f} | "
-        f"[{low:.4f}, {high:.4f}] | {overall['mrr']:.4f} | "
+        f"| {_label(card)} | {overall['gauc']:.4f} | {ceiling_cell} | "
+        f"{overall['ndcg@10']:.4f} | [{low:.4f}, {high:.4f}] | {overall['mrr']:.4f} | "
         f"{overall['recall@10']:.4f} | {cold['gauc']:.4f} |"
     )
 
@@ -99,8 +103,8 @@ def render(cards: Sequence[dict[str, Any]]) -> str:
         "",
         f"Split `{split}`, ranking within the impression, k={k}.",
         "",
-        "| model | GAUC | NDCG@10 | NDCG@10 95% CI | MRR | Recall@10 | cold-item GAUC |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| model | GAUC | ceiling | NDCG@10 | NDCG@10 95% CI | MRR | Recall@10 | cold-item GAUC |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     lines += [_row(card) for card in cards]
     lines += [
@@ -122,6 +126,14 @@ def render(cards: Sequence[dict[str, Any]]) -> str:
         "which weights a user with one impression the same as a user with forty.",
         "They are two different estimands and the gap between them is the weighting,",
         "not noise.",
+        "",
+        "**`ceiling` is the most a perfect ranker could have scored.** A slate whose",
+        "scores are all equal contributes exactly 0.5 to GAUC whatever those scores",
+        "are, so a model that cannot discriminate within most slates is capped far",
+        "below 1.0 before it ranks anything. A GAUC near 0.50 next to a ceiling near",
+        "0.56 is a model that could barely see, not one that ranked badly; the cards",
+        "carry `headroom_used` for the exact share. A dash means the card predates",
+        "this field.",
         "",
         "**cold-item GAUC is here because it is where the baselines break.** An item",
         "unseen in train has no popularity to score, so these models rank it by a",

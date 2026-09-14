@@ -19,7 +19,12 @@ from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
 from evaluation.offline.report import default_cohorts, report_card
-from models.retrieval.popularity import score_decayed_popular, score_most_popular
+from models.retrieval.covisit import score_covisit
+from models.retrieval.popularity import (
+    score_decayed_popular,
+    score_most_popular,
+    score_most_recent,
+)
 
 RESULTS = Path("evaluation/results")
 
@@ -29,7 +34,12 @@ _NEEDED = ("user_id", "item_id", "impression_id", "clicked", "ts")
 
 
 def _score(
-    model: str, frame: DataFrame, train: DataFrame, seed: int, half_life: float
+    model: str,
+    frame: DataFrame,
+    train: DataFrame,
+    seed: int,
+    half_life: float,
+    max_gap_seconds: float = 3600.0,
 ) -> DataFrame:
     """Attach a ``score`` column.
 
@@ -44,6 +54,9 @@ def _score(
             the evaluation window, and it would look stronger for it.
         seed: Fixes the random scorer so a rerun reproduces the card.
         half_life: Days, for the decayed baseline.
+        max_gap_seconds: Pairing window for co-visitation. The matrix is built
+            from ``train`` alone; the user's prior clicks come from ``frame``
+            too, since those are the request rather than the model.
 
     Returns:
         ``frame`` plus ``score``.
@@ -58,11 +71,15 @@ def _score(
         return score_most_popular(frame, train)
     if model == "decayed_popularity":
         return score_decayed_popular(frame, train, half_life_days=half_life)
+    if model == "recency":
+        return score_most_recent(frame, train)
+    if model == "covisit":
+        return score_covisit(frame, train, max_gap_seconds=max_gap_seconds)
 
     raise NotImplementedError(
         f"no scorer for {model!r}. Available: random, popularity, "
-        "decayed_popularity. Co-visitation, ALS and the learned models arrive "
-        "in F2 onwards."
+        "decayed_popularity, recency, covisit. ALS, content similarity and the "
+        "learned models arrive in F3 onwards."
     )
 
 
@@ -73,12 +90,13 @@ def evaluate(
     split: str,
     seed: int,
     half_life: float = 3.0,
+    max_gap_seconds: float = 3600.0,
 ) -> dict[str, Any]:
     """Build one report card end to end."""
     examples = read_gold(spark, settings, f"training_examples/{split}")
     train = read_gold(spark, settings, "training_examples/train")
 
-    scored = _score(model, examples.select(*_NEEDED), train, seed, half_life)
+    scored = _score(model, examples.select(*_NEEDED), train, seed, half_life, max_gap_seconds)
 
     warm_users = train.select("user_id").distinct().withColumn("_wu", f.lit(True))
     warm_items = train.select("item_id").distinct().withColumn("_wi", f.lit(True))
@@ -146,13 +164,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=3.0,
         help="days, for decayed_popularity; sweep it, the curve is a free ablation",
     )
+    parser.add_argument(
+        "--max-gap-seconds",
+        type=float,
+        default=3600.0,
+        help="pairing window for covisit; sweep it, the curve is the deliverable",
+    )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
 
     settings = load_settings()
     spark = get_spark(settings, app=f"eval-{args.model}")
     try:
-        card = evaluate(spark, settings, args.model, args.split, args.seed, args.half_life)
+        card = evaluate(
+            spark,
+            settings,
+            args.model,
+            args.split,
+            args.seed,
+            args.half_life,
+            args.max_gap_seconds,
+        )
     finally:
         spark.stop()
 

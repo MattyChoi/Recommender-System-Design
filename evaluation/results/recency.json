@@ -1,7 +1,7 @@
 {
-  "model": "random",
+  "model": "recency",
   "split": "dev",
-  "generated": "2026-09-14T21:31:23.508182+00:00",
+  "generated": "2026-09-14T22:04:20.280606+00:00",
   "git_sha": "86da29c",
   "k": 10,
   "cohorts": {
@@ -9,23 +9,23 @@
       "rows": 2740998,
       "impressions": 73152,
       "users": 50000,
-      "gauc": 0.5007,
-      "mrr": 0.2449,
-      "ndcg@10": 0.2855,
-      "recall@10": 0.5223,
+      "gauc": 0.5418,
+      "mrr": 0.2762,
+      "ndcg@10": 0.3196,
+      "recall@10": 0.5634,
       "scored_impressions": 73152,
       "skipped_impressions": 0,
-      "flat_impressions": 0,
-      "gauc_ceiling": 1.0,
-      "headroom_used": 0.0014,
+      "flat_impressions": 5757,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.0907,
       "ci95": [
-        0.2851,
-        0.2903
+        0.3236,
+        0.3284
       ],
       "ci_users": 50000,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2832,
-        0.2877
+        0.3173,
+        0.3219
       ],
       "ci_impressions": 73152
     },
@@ -33,23 +33,23 @@
       "rows": 337102,
       "impressions": 8957,
       "users": 5941,
-      "gauc": 0.4973,
-      "mrr": 0.2458,
-      "ndcg@10": 0.2846,
-      "recall@10": 0.5183,
+      "gauc": 0.535,
+      "mrr": 0.2717,
+      "ndcg@10": 0.3147,
+      "recall@10": 0.5581,
       "scored_impressions": 8957,
       "skipped_impressions": 0,
-      "flat_impressions": 0,
-      "gauc_ceiling": 1.0,
-      "headroom_used": -0.0054,
+      "flat_impressions": 710,
+      "gauc_ceiling": 0.9604,
+      "headroom_used": 0.076,
       "ci95": [
-        0.2794,
-        0.2939
+        0.3152,
+        0.3292
       ],
       "ci_users": 5941,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2777,
-        0.2912
+        0.3081,
+        0.3205
       ],
       "ci_impressions": 8957
     },
@@ -57,23 +57,23 @@
       "rows": 2403896,
       "impressions": 64195,
       "users": 44059,
-      "gauc": 0.5012,
-      "mrr": 0.2448,
-      "ndcg@10": 0.2856,
-      "recall@10": 0.5229,
+      "gauc": 0.5427,
+      "mrr": 0.2769,
+      "ndcg@10": 0.3203,
+      "recall@10": 0.5642,
       "scored_impressions": 64195,
       "skipped_impressions": 0,
-      "flat_impressions": 0,
-      "gauc_ceiling": 1.0,
-      "headroom_used": 0.0024,
+      "flat_impressions": 5047,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.0927,
       "ci95": [
-        0.2851,
-        0.2905
+        0.3237,
+        0.3293
       ],
       "ci_users": 44059,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2831,
-        0.288
+        0.3179,
+        0.3225
       ],
       "ci_impressions": 64195
     },
@@ -81,23 +81,23 @@
       "rows": 1826037,
       "impressions": 49762,
       "users": 37899,
-      "gauc": 0.5023,
-      "mrr": 0.2357,
-      "ndcg@10": 0.2806,
-      "recall@10": 0.5241,
+      "gauc": 0.6029,
+      "mrr": 0.2989,
+      "ndcg@10": 0.3502,
+      "recall@10": 0.6099,
       "scored_impressions": 49762,
       "skipped_impressions": 0,
-      "flat_impressions": 0,
-      "gauc_ceiling": 1.0,
-      "headroom_used": 0.0046,
+      "flat_impressions": 1000,
+      "gauc_ceiling": 0.99,
+      "headroom_used": 0.21,
       "ci95": [
-        0.2783,
-        0.2844
+        0.3517,
+        0.3576
       ],
       "ci_users": 37899,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2779,
-        0.2832
+        0.3471,
+        0.3532
       ],
       "ci_impressions": 49762
     },
@@ -105,23 +105,23 @@
       "rows": 914961,
       "impressions": 23390,
       "users": 19532,
-      "gauc": 0.4976,
-      "mrr": 0.2647,
-      "ndcg@10": 0.2959,
-      "recall@10": 0.5185,
+      "gauc": 0.4198,
+      "mrr": 0.228,
+      "ndcg@10": 0.2545,
+      "recall@10": 0.4645,
       "scored_impressions": 23390,
       "skipped_impressions": 0,
-      "flat_impressions": 0,
-      "gauc_ceiling": 1.0,
-      "headroom_used": -0.0048,
+      "flat_impressions": 4757,
+      "gauc_ceiling": 0.8983,
+      "headroom_used": -0.2014,
       "ci95": [
-        0.2921,
-        0.3005
+        0.2518,
+        0.2596
       ],
       "ci_users": 19532,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2921,
-        0.2999
+        0.2508,
+        0.2582
       ],
       "ci_impressions": 23390
     }

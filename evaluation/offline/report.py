@@ -100,7 +100,8 @@ def _slice_report(
     user_ids: np.ndarray,
     k: int,
 ) -> dict[str, Any]:
-    """Every number reported for one cohort."""
+    """Every number reported for one cohort, including how much of the cohort
+    the model could discriminate within at all."""
     ranking = evaluate_ranking(scores.tolist(), labels.tolist(), impression_ids.tolist(), k=k)
 
     by_slate = group_slates(scores, labels, impression_ids)
@@ -112,6 +113,21 @@ def _slice_report(
     slate_ndcg = [ndcg_at_k(lab, sc, k) for lab, sc in by_slate.values()]
     slate_users = [slate_owner[slate] for slate in by_slate]
 
+    # A slate whose scores are all equal contributes exactly 0.5 to GAUC no
+    # matter what those scores are: every comparison is a tie, and a tie counts
+    # half. Counting those slates is what separates "the model ranked badly"
+    # from "the model had nothing to rank with" -- two states that otherwise
+    # produce near-identical cards. Co-visitation sat on random's GAUC to four
+    # decimals because 91% of its slates were flat, and nothing on the card
+    # said so.
+    #
+    # Defined on the SCORES alone, so it means the same thing for every model.
+    # A per-model rule such as "score > 0" would not: zero is a real score for
+    # popularity and an absence for co-visitation.
+    scorable = [(lab, sc) for lab, sc in by_slate.values() if 0 < sum(lab) < len(lab)]
+    flat = sum(1 for _, sc in scorable if max(sc) == min(sc))
+    flat_share = flat / len(scorable) if scorable else float("nan")
+
     report: dict[str, Any] = {
         "rows": len(scores),
         "impressions": len(by_slate),
@@ -122,7 +138,17 @@ def _slice_report(
         f"recall@{k}": round(ranking.recall.mean, _ROUND),
         "scored_impressions": ranking.gauc.scored,
         "skipped_impressions": ranking.gauc.skipped,
+        "flat_impressions": flat,
     }
+
+    if scorable:
+        ceiling = 1.0 - 0.5 * flat_share
+        report["gauc_ceiling"] = round(ceiling, _ROUND)
+        # None, not 0.0: with every slate flat there is no budget to take a
+        # share OF, and 0.0 would read as "used none of a budget it had".
+        report["headroom_used"] = (
+            round((report["gauc"] - 0.5) / (ceiling - 0.5), _ROUND) if ceiling > 0.5 else None
+        )
 
     # A cohort can be entirely clickless -- cold items especially -- in which
     # case there is no interval to quote and saying so beats a NaN triple.
