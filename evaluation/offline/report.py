@@ -180,6 +180,10 @@ def _slice_report(
     # case there is no interval to quote and saying so beats a NaN triple.
     if per_user_means(slate_ndcg, slate_users):
         interval = bootstrap_ci(slate_ndcg, slate_users)
+
+        # The ndcg above is a mean over IMPRESSIONS; this interval is a
+        # percentile bootstrap of the mean over USERS.
+        report[f"ndcg@{k}_by_user"] = round(interval.mean, _ROUND)
         report["ci95"] = [round(interval.lo, _ROUND), round(interval.hi, _ROUND)]
         report["ci_users"] = interval.n_users
 

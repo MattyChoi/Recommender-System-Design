@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
@@ -93,6 +94,54 @@ def _score(
     )
 
 
+def _canonical_order(rows: pd.DataFrame) -> pd.DataFrame:
+    """Row order that is a property of the data, not of the cluster.
+
+    ``toPandas()`` returns Spark's partition order, and ``spark.master`` is
+    ``local[*]`` -- however many cores this machine happens to have. Every
+    consumer downstream resolves ties by input order and by nothing else: the
+    three ``np.argsort(..., kind="stable")`` calls in ``metrics.py``,
+    ``group_slates`` bucketing in first-seen order, ``_served_items``' stable
+    ``list.sort``, and ``per_user_means``' dict, whose insertion order decides
+    which index the bootstrap's draws refer to.
+
+    So the same code over the same data disagreed with itself across machines.
+    Measured rather than feared: ``local[*]`` against ``local[1]`` on one
+    machine moved ``cold_item.ndcg@10`` by 0.0109 and ``cold_item.mrr`` by
+    0.0120, where the models in ``docs/results.md`` are separated by about half
+    that. GAUC and ``gauc_ceiling`` did not move at all, because
+    ``impression_auc`` counts ties as half and never sorts.
+
+    Note:
+        This makes the metrics reproducible. It does not make them meaningful
+        for a model that ties everything -- such a model still scores whatever
+        the tie-break hands it, which is what ``gauc_ceiling`` is on the card to
+        say.
+
+    Args:
+        rows: Collected evaluation rows, carrying ``impression_id`` and
+            ``item_idx``.
+
+    Returns:
+        The same rows, deterministically ordered.
+    """
+    tiebreak = pd.util.hash_pandas_object(
+        pd.DataFrame(
+            {
+                "impression_id": rows["impression_id"].astype(str),
+                "item_idx": rows["item_idx"].astype("int64"),
+            }
+        ),
+        index=False,
+    ).to_numpy()
+
+    return (
+        rows.assign(_tiebreak=tiebreak)
+        .sort_values(["impression_id", "_tiebreak"], kind="stable", ignore_index=True)
+        .drop(columns="_tiebreak")
+    )
+
+
 def evaluate(
     spark: SparkSession,
     settings: Settings,
@@ -133,7 +182,10 @@ def evaluate(
         .drop("_wu", "_wi")
     )
 
-    rows = labelled.toPandas()
+    # Ordered here, once, so every metric below inherits a row order that does
+    # not depend on this machine's core count. Must precede default_cohorts:
+    # the cohort masks are positional.
+    rows = _canonical_order(labelled.toPandas())
 
     # The FULL item map, not the items dev happened to show.
     catalogue_size = spark.read.parquet(str(settings.paths.bronze / "item_map")).count()
