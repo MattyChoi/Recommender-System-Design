@@ -94,7 +94,9 @@ def describe(gaps: DataFrame) -> dict[str, float]:
             for threshold in _CANDIDATES
         ]
     ).first()
-    out.update({name: float(kept[name]) for name in kept.asDict()})  # type: ignore[index]
+    # A global aggregate always yields exactly one row, even over no input.
+    assert kept is not None
+    out.update({name: float(kept[name]) for name in kept.asDict()})
 
     out["transitions"] = float(total)
     out["users_with_gaps"] = float(gaps.select("user_id").distinct().count())

@@ -49,22 +49,26 @@ def _label(card: dict[str, Any]) -> str:
     """Row label, carrying the half-life when there is one."""
     half_life = card.get("half_life_days")
     if half_life is None:
-        return card["model"]
+        return str(card["model"])
     return f"{card['model']} (hl={half_life:g}d)"
 
 
 def _row(card: dict[str, Any]) -> str:
     overall = card["cohorts"]["overall"]
     cold = card["cohorts"]["cold_item"]
+    cold_user = card["cohorts"]["cold_user"]
     low, high = overall["ci95"]
     # Older cards predate the ceiling; render them as unknown rather than
     # inventing 1.0, which would read as "this model had full room".
     ceiling = overall.get("gauc_ceiling")
     ceiling_cell = f"{ceiling:.4f}" if ceiling is not None else "—"
+    coverage = overall.get("coverage@10")
+    coverage_cell = f"{coverage:.4f}" if coverage is not None else "—"
     return (
         f"| {_label(card)} | {overall['gauc']:.4f} | {ceiling_cell} | "
         f"{overall['ndcg@10']:.4f} | [{low:.4f}, {high:.4f}] | {overall['mrr']:.4f} | "
-        f"{overall['recall@10']:.4f} | {cold['gauc']:.4f} |"
+        f"{overall['recall@10']:.4f} | {cold_user['gauc']:.4f} | {cold['gauc']:.4f} "
+        f"| {coverage_cell} |"
     )
 
 
@@ -103,13 +107,25 @@ def render(cards: Sequence[dict[str, Any]]) -> str:
         "",
         f"Split `{split}`, ranking within the impression, k={k}.",
         "",
-        "| model | GAUC | ceiling | NDCG@10 | NDCG@10 95% CI | MRR | Recall@10 | cold-item GAUC |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| model | GAUC | ceiling | NDCG@10 | NDCG@10 95% CI | MRR | Recall@10 "
+        "| cold-user GAUC | cold-item GAUC | coverage@10 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     lines += [_row(card) for card in cards]
     lines += [
         "",
         "## Reading this table",
+        "",
+        "**Every row here is a RANKING measurement, not a retrieval one.** Each model",
+        "was asked to reorder the ~37 items MSN already chose to show, so every number",
+        "is conditional on someone else's shortlist. None of these models has been",
+        "asked to find candidates in the 65,238-item catalogue, and nothing here says",
+        "whether it could. In particular `recall@10` is WITHIN-SLATE recall -- did the",
+        "clicked item reach the top ten of the items shown -- and is not comparable to",
+        "a retrieval Recall@10 over the full catalogue, which would be far smaller.",
+        "The models live under `models/retrieval/` because they are candidate",
+        "generators by nature; `evaluate_retrieval` exists and has not yet been run",
+        "against any of them.",
         "",
         "**GAUC is the headline, not AUC.** Ranking only ever happens inside one",
         "impression, so a global AUC scores comparisons the system is never asked to",
@@ -134,6 +150,24 @@ def render(cards: Sequence[dict[str, Any]]) -> str:
         "0.56 is a model that could barely see, not one that ranked badly; the cards",
         "carry `headroom_used` for the exact share. A dash means the card predates",
         "this field.",
+        "",
+        "**`coverage@10` is the share of the FULL catalogue a model ever puts in a",
+        "slate's top ten.** Accuracy metrics cannot see the difference between a model",
+        "that serves the whole catalogue well and one that serves the same few popular",
+        "items to everyone, and on a news corpus the second is the easy way to a good",
+        "NDCG. The denominator is the whole item map, not the items dev happened to",
+        "show, so the number is small by construction and comparable across models.",
+        "",
+        "**Coverage only means something next to the ceiling.** A model that ties",
+        "most slates has its ties resolved by row order, which scatters items across",
+        "top-tens more evenly than any deliberate choice would -- so random posts the",
+        "highest coverage in this table while choosing nothing at all. Read a high",
+        "coverage as breadth only when the ceiling shows the model could discriminate.",
+        "",
+        "**Two cold cohorts, and they answer different questions.** cold-user GAUC is",
+        "a user absent from train -- 88% of this split, so it tracks the headline",
+        "closely. cold-item GAUC is a slate whose CLICKED item was absent from train,",
+        "which is where the interaction-based baselines structurally fail.",
         "",
         "**cold-item GAUC is here because it is where the baselines break.** An item",
         "unseen in train has no popularity to score, so these models rank it by a",

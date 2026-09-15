@@ -167,7 +167,9 @@ class TestMatrix:
             {"top_k": 0},
         ],
     )
-    def test_a_non_positive_bound_is_refused(self, train: DataFrame, kwargs: dict) -> None:
+    def test_a_non_positive_bound_is_refused(
+        self, train: DataFrame, kwargs: dict[str, int]
+    ) -> None:
         """An empty matrix reads downstream as "co-visitation does not work on
         news". Refusing the configuration is the only way that cannot happen."""
         with pytest.raises(ValueError):
@@ -175,7 +177,7 @@ class TestMatrix:
 
 
 class TestScoring:
-    def _labels(self, spark: SparkSession, rows: list[tuple]) -> DataFrame:
+    def _labels(self, spark: SparkSession, rows: list[tuple[object, ...]]) -> DataFrame:
         return spark.createDataFrame(rows, _EVENTS)
 
     def test_only_clicks_before_the_label_score(

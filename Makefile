@@ -1,4 +1,4 @@
-.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results gap coverage compare data \
+.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results gap coverage compare baselines data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
@@ -37,6 +37,7 @@ PARITY_SAMPLE ?= 200
 
 
 # Options for evaluating model metrics
+MODELS ?= random popularity recency content covisit als als_item
 MODEL ?= random
 EVAL_SPLIT ?= dev
 HALF_LIVES ?= 0.02 0.05 0.1 0.25 1 3
@@ -123,6 +124,14 @@ coverage:
 compare:  ## Paired bootstrap between two models (make compare BASELINE=recency CANDIDATE=decayed_popularity@0.02)
 	uv run python -m evaluation.offline.compare \
 	    --baseline $(BASELINE) --candidate $(CANDIDATE) --split $(EVAL_SPLIT)
+
+baselines:  ## Re-score every baseline and rebuild docs/results.md from one commit
+	@for model in $(MODELS); do \
+	    $(MAKE) --no-print-directory eval MODEL=$$model || exit 1; \
+	done
+	$(MAKE) --no-print-directory sweep HALF_LIVES="0.02 0.05 0.1 0.25"
+	$(MAKE) --no-print-directory sweep HALF_LIVES="0.5 1 2 3"
+	$(MAKE) --no-print-directory results
 
 # Rebuilt from the cards, never hand-edited: a table that disagrees with the
 # JSON it quotes is worse than no table. Pure stdlib, so no cluster is needed.

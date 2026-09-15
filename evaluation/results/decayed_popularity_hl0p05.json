@@ -1,8 +1,8 @@
 {
   "model": "decayed_popularity",
   "split": "dev",
-  "generated": "2026-09-14T21:57:38.439831+00:00",
-  "git_sha": "86da29c",
+  "generated": "2026-09-15T01:28:02.100980+00:00",
+  "git_sha": "6ecedc3",
   "k": 10,
   "cohorts": {
     "overall": {
@@ -10,120 +10,135 @@
       "impressions": 73152,
       "users": 50000,
       "gauc": 0.5415,
-      "mrr": 0.2711,
-      "ndcg@10": 0.3162,
-      "recall@10": 0.5643,
+      "mrr": 0.2715,
+      "ndcg@10": 0.3165,
+      "recall@10": 0.5645,
       "scored_impressions": 73152,
       "skipped_impressions": 0,
       "flat_impressions": 5757,
       "gauc_ceiling": 0.9607,
       "headroom_used": 0.0901,
       "ci95": [
-        0.3195,
-        0.3243
+        0.3194,
+        0.3248
       ],
       "ci_users": 50000,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3139,
-        0.3185
+        0.3142,
+        0.3188
       ],
-      "ci_impressions": 73152
+      "ci_impressions": 73152,
+      "coverage@10": 0.0275,
+      "distinct_items_served": 1791,
+      "catalogue_size": 65238
     },
     "warm_user": {
       "rows": 337102,
       "impressions": 8957,
       "users": 5941,
       "gauc": 0.5345,
-      "mrr": 0.264,
-      "ndcg@10": 0.3099,
-      "recall@10": 0.5583,
+      "mrr": 0.2638,
+      "ndcg@10": 0.3092,
+      "recall@10": 0.5563,
       "scored_impressions": 8957,
       "skipped_impressions": 0,
       "flat_impressions": 710,
       "gauc_ceiling": 0.9604,
       "headroom_used": 0.0749,
       "ci95": [
-        0.3102,
-        0.3247
+        0.3097,
+        0.3238
       ],
       "ci_users": 5941,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3037,
-        0.3156
+        0.3033,
+        0.3157
       ],
-      "ci_impressions": 8957
+      "ci_impressions": 8957,
+      "coverage@10": 0.0139,
+      "distinct_items_served": 906,
+      "catalogue_size": 65238
     },
     "cold_user": {
       "rows": 2403896,
       "impressions": 64195,
       "users": 44059,
       "gauc": 0.5425,
-      "mrr": 0.2721,
-      "ndcg@10": 0.317,
-      "recall@10": 0.5651,
+      "mrr": 0.2726,
+      "ndcg@10": 0.3175,
+      "recall@10": 0.5656,
       "scored_impressions": 64195,
       "skipped_impressions": 0,
       "flat_impressions": 5047,
       "gauc_ceiling": 0.9607,
       "headroom_used": 0.0923,
       "ci95": [
-        0.3198,
-        0.3252
+        0.3202,
+        0.3256
       ],
       "ci_users": 44059,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3147,
-        0.3192
+        0.3152,
+        0.3199
       ],
-      "ci_impressions": 64195
+      "ci_impressions": 64195,
+      "coverage@10": 0.0265,
+      "distinct_items_served": 1732,
+      "catalogue_size": 65238
     },
     "warm_item": {
       "rows": 1826037,
       "impressions": 49762,
       "users": 37899,
       "gauc": 0.6026,
-      "mrr": 0.2907,
-      "ndcg@10": 0.3449,
-      "recall@10": 0.6112,
+      "mrr": 0.291,
+      "ndcg@10": 0.3455,
+      "recall@10": 0.6125,
       "scored_impressions": 49762,
       "skipped_impressions": 0,
       "flat_impressions": 1000,
       "gauc_ceiling": 0.99,
       "headroom_used": 0.2094,
       "ci95": [
-        0.3454,
-        0.3515
+        0.3457,
+        0.3517
       ],
       "ci_users": 37899,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.342,
-        0.3477
+        0.3428,
+        0.3483
       ],
-      "ci_impressions": 49762
+      "ci_impressions": 49762,
+      "coverage@10": 0.0225,
+      "distinct_items_served": 1471,
+      "catalogue_size": 65238
     },
     "cold_item": {
       "rows": 914961,
       "impressions": 23390,
       "users": 19532,
       "gauc": 0.4196,
-      "mrr": 0.2296,
-      "ndcg@10": 0.255,
-      "recall@10": 0.4643,
+      "mrr": 0.23,
+      "ndcg@10": 0.2548,
+      "recall@10": 0.4624,
       "scored_impressions": 23390,
       "skipped_impressions": 0,
       "flat_impressions": 4757,
       "gauc_ceiling": 0.8983,
       "headroom_used": -0.2019,
       "ci95": [
-        0.2522,
-        0.26
+        0.2517,
+        0.2598
       ],
       "ci_users": 19532,
       "ci95_by_impression_DO_NOT_QUOTE": [
         0.2514,
-        0.2589
+        0.2586
       ],
-      "ci_impressions": 23390
+      "ci_impressions": 23390,
+      "coverage@10": 0.0209,
+      "distinct_items_served": 1362,
+      "catalogue_size": 65238
     }
   },
   "half_life_days": 0.05

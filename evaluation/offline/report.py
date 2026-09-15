@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from evaluation.offline.metrics import group_slates, ndcg_at_k
+from evaluation.offline.metrics import catalog_coverage, group_slates, ndcg_at_k
 from evaluation.offline.protocols import evaluate_ranking
 from evaluation.offline.stats import (
     bootstrap_ci,
@@ -93,12 +93,38 @@ def default_cohorts(
     }
 
 
+def _served_items(
+    scores: np.ndarray, item_ids: np.ndarray, impression_ids: np.ndarray, k: int
+) -> list[Any]:
+    """Every item this model ranks into some slate's top k.
+
+    Ties are broken by the order rows arrive in, which is the same resolution
+    the metrics themselves use -- a model that ties everything therefore
+    "serves" the first k of each slate rather than nothing, and its coverage
+    reads as narrow rather than as zero. That is the honest reading: it does
+    surface items, it just is not choosing them.
+    """
+    buckets: dict[Any, list[tuple[float, Any]]] = {}
+    for score, item, slate in zip(
+        scores.tolist(), item_ids.tolist(), impression_ids.tolist(), strict=True
+    ):
+        buckets.setdefault(slate, []).append((score, item))
+
+    served: list[Any] = []
+    for pairs in buckets.values():
+        pairs.sort(key=lambda pair: -pair[0])
+        served.extend(item for _, item in pairs[:k])
+    return served
+
+
 def _slice_report(
     scores: np.ndarray,
     labels: np.ndarray,
     impression_ids: np.ndarray,
     user_ids: np.ndarray,
     k: int,
+    item_ids: np.ndarray | None = None,
+    catalogue_size: int | None = None,
 ) -> dict[str, Any]:
     """Every number reported for one cohort, including how much of the cohort
     the model could discriminate within at all."""
@@ -168,6 +194,18 @@ def _slice_report(
         report["ci95"] = None
         report["ci_users"] = 0
 
+    # Coverage answers a question no accuracy metric asks: a model can win on
+    # NDCG by surfacing the same few popular items to everyone, and the whole
+    # catalogue beyond them is dead inventory. Measured against the FULL item
+    # map rather than the items that happened to appear in the evaluation
+    # window -- per catalog_coverage's own contract and ADR 0005, the window
+    # denominator flatters the number badly on this corpus.
+    if item_ids is not None and catalogue_size:
+        served = _served_items(scores, item_ids, impression_ids, k)
+        report[f"coverage@{k}"] = round(catalog_coverage(served, catalogue_size), _ROUND)
+        report["distinct_items_served"] = len(set(served))
+        report["catalogue_size"] = catalogue_size
+
     return report
 
 
@@ -180,6 +218,8 @@ def report_card(
     cohorts: Mapping[str, npt.ArrayLike],
     split: str = "dev",
     k: int = 10,
+    item_ids: npt.ArrayLike | None = None,
+    catalogue_size: int | None = None,
 ) -> dict[str, Any]:
     """Score one model and return the comparable record of it.
 
@@ -192,6 +232,11 @@ def report_card(
         cohorts: Cohort name to a row mask, from :func:`default_cohorts`.
         split: Which evaluation split produced these rows.
         k: Cutoff for NDCG and recall.
+        item_ids: Item id per row. Omit and coverage is left OFF the card
+            rather than reported as zero -- an absent measurement and a
+            measured zero are different claims.
+        catalogue_size: Items that COULD be served, i.e. ``len(item_map)``.
+            Required alongside ``item_ids``; without it there is no denominator.
 
     Returns:
         A JSON-serialisable report card.
@@ -210,6 +255,8 @@ def report_card(
         "cohorts": {},
     }
 
+    items_arr = None if item_ids is None else np.asarray(item_ids, dtype=object)
+
     for name, mask in cohorts.items():
         selector = np.asarray(mask, dtype=bool)
         if not selector.any():
@@ -221,6 +268,8 @@ def report_card(
             impressions_arr[selector],
             users_arr[selector],
             k=k,
+            item_ids=None if items_arr is None else items_arr[selector],
+            catalogue_size=catalogue_size,
         )
 
     return card

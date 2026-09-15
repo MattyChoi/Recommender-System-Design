@@ -19,6 +19,8 @@ from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
 from evaluation.offline.report import default_cohorts, report_card
+from models.retrieval.als import score_als, score_als_item
+from models.retrieval.content import score_content
 from models.retrieval.covisit import score_covisit
 from models.retrieval.popularity import (
     score_decayed_popular,
@@ -30,7 +32,7 @@ RESULTS = Path("evaluation/results")
 
 # ts is needed by the decayed baseline, which measures a click's age from the
 # label's own instant rather than from one global "now".
-_NEEDED = ("user_id", "item_id", "impression_id", "clicked", "ts")
+_NEEDED = ("user_id", "item_id", "user_idx", "item_idx", "impression_id", "clicked", "ts")
 
 
 def _score(
@@ -40,6 +42,7 @@ def _score(
     seed: int,
     half_life: float,
     max_gap_seconds: float = 3600.0,
+    catalogue: DataFrame | None = None,
 ) -> DataFrame:
     """Attach a ``score`` column.
 
@@ -71,6 +74,14 @@ def _score(
         return score_most_popular(frame, train)
     if model == "decayed_popularity":
         return score_decayed_popular(frame, train, half_life_days=half_life)
+    if model == "content":
+        if catalogue is None:
+            raise ValueError("content similarity needs a catalogue of item titles")
+        return score_content(frame, train, catalogue)
+    if model == "als":
+        return score_als(frame, train)
+    if model == "als_item":
+        return score_als_item(frame, train)
     if model == "recency":
         return score_most_recent(frame, train)
     if model == "covisit":
@@ -78,8 +89,7 @@ def _score(
 
     raise NotImplementedError(
         f"no scorer for {model!r}. Available: random, popularity, "
-        "decayed_popularity, recency, covisit. ALS, content similarity and the "
-        "learned models arrive in F3 onwards."
+        "decayed_popularity, recency, covisit, als, als_item, content."
     )
 
 
@@ -96,7 +106,22 @@ def evaluate(
     examples = read_gold(spark, settings, f"training_examples/{split}")
     train = read_gold(spark, settings, "training_examples/train")
 
-    scored = _score(model, examples.select(*_NEEDED), train, seed, half_life, max_gap_seconds)
+    catalogue = (
+        examples.select("item_id", "title")
+        .unionByName(train.select("item_id", "title"))
+        .groupBy("item_id")
+        .agg(f.first("title", ignorenulls=True).alias("title"))
+    )
+
+    scored = _score(
+        model,
+        examples.select(*_NEEDED),
+        train,
+        seed,
+        half_life,
+        max_gap_seconds,
+        catalogue,
+    )
 
     warm_users = train.select("user_id").distinct().withColumn("_wu", f.lit(True))
     warm_items = train.select("item_id").distinct().withColumn("_wi", f.lit(True))
@@ -109,6 +134,9 @@ def evaluate(
     )
 
     rows = labelled.toPandas()
+
+    # The FULL item map, not the items dev happened to show.
+    catalogue_size = spark.read.parquet(str(settings.paths.bronze / "item_map")).count()
 
     return report_card(
         model_name=model,
@@ -123,6 +151,8 @@ def evaluate(
             rows["clicked"].astype(int).to_numpy(),
         ),
         split=split,
+        item_ids=rows["item_id"].astype(str).to_numpy(),
+        catalogue_size=catalogue_size,
     )
 
 

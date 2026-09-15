@@ -358,6 +358,13 @@ selected by MSN's own recommender; the question is whether the model orders that
 better than they did. This is MIND's leaderboard task, so GAUC, MRR and NDCG@10 reported
 here are comparable to published MIND results.
 
+**Everything measured so far is ranking.** `docs/results.md` reports the popularity
+family, recency and co-visitation under the ranking protocol only. They are retrieval-family
+models — candidate generators that can score any item — but they have only ever been asked to
+reorder MSN's shortlist, so their `recall@10` is within-slate and says nothing about whether
+they could retrieve from the catalogue. `evaluate_retrieval` is implemented and tested and has
+not yet been run against a model; that measurement arrives with the two-tower retriever.
+
 **Retrieval is scored against the whole catalogue** — all 65,238 articles, never a sampled
 pool. Scoring one positive against ~100 random negatives is biased and does not
 rank-correlate with full ranking ([Krichene & Rendle, 2020](https://dl.acm.org/doi/10.1145/3394486.3403226)),

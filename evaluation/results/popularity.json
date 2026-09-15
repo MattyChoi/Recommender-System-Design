@@ -1,8 +1,8 @@
 {
   "model": "popularity",
   "split": "dev",
-  "generated": "2026-09-14T21:31:54.545659+00:00",
-  "git_sha": "86da29c",
+  "generated": "2026-09-15T01:22:56.838267+00:00",
+  "git_sha": "6ecedc3",
   "k": 10,
   "cohorts": {
     "overall": {
@@ -19,15 +19,18 @@
       "gauc_ceiling": 0.9606,
       "headroom_used": 0.0528,
       "ci95": [
-        0.3111,
-        0.3162
+        0.311,
+        0.3164
       ],
       "ci_users": 50000,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3056,
-        0.3102
+        0.3055,
+        0.3101
       ],
-      "ci_impressions": 73152
+      "ci_impressions": 73152,
+      "coverage@10": 0.028,
+      "distinct_items_served": 1825,
+      "catalogue_size": 65238
     },
     "warm_user": {
       "rows": 337102,
@@ -43,15 +46,18 @@
       "gauc_ceiling": 0.9604,
       "headroom_used": 0.0411,
       "ci95": [
-        0.3036,
-        0.3192
+        0.3039,
+        0.3196
       ],
       "ci_users": 5941,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.2968,
-        0.3094
+        0.2969,
+        0.3097
       ],
-      "ci_impressions": 8957
+      "ci_impressions": 8957,
+      "coverage@10": 0.0152,
+      "distinct_items_served": 989,
+      "catalogue_size": 65238
     },
     "cold_user": {
       "rows": 2403896,
@@ -68,14 +74,17 @@
       "headroom_used": 0.0545,
       "ci95": [
         0.3113,
-        0.3169
+        0.3167
       ],
       "ci_users": 44059,
       "ci95_by_impression_DO_NOT_QUOTE": [
         0.3061,
-        0.3108
+        0.3109
       ],
-      "ci_impressions": 64195
+      "ci_impressions": 64195,
+      "coverage@10": 0.0269,
+      "distinct_items_served": 1752,
+      "catalogue_size": 65238
     },
     "warm_item": {
       "rows": 1826037,
@@ -92,14 +101,17 @@
       "headroom_used": 0.1631,
       "ci95": [
         0.3356,
-        0.3417
+        0.3418
       ],
       "ci_users": 37899,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.3329,
-        0.3382
+        0.3327,
+        0.3383
       ],
-      "ci_impressions": 49762
+      "ci_impressions": 49762,
+      "coverage@10": 0.0238,
+      "distinct_items_served": 1550,
+      "catalogue_size": 65238
     },
     "cold_item": {
       "rows": 914961,
@@ -115,15 +127,18 @@
       "gauc_ceiling": 0.8983,
       "headroom_used": -0.2177,
       "ci95": [
-        0.2462,
-        0.2541
+        0.2459,
+        0.2542
       ],
       "ci_users": 19532,
       "ci95_by_impression_DO_NOT_QUOTE": [
-        0.245,
-        0.253
+        0.2452,
+        0.2527
       ],
-      "ci_impressions": 23390
+      "ci_impressions": 23390,
+      "coverage@10": 0.0208,
+      "distinct_items_served": 1358,
+      "catalogue_size": 65238
     }
   }
 }
