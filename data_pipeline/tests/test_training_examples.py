@@ -106,7 +106,8 @@ def test_a_cold_item_gets_the_category_prior_not_a_zero_rate(
     """
     got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N2"]
 
-    assert got["item_ctr_smoothed"] == pytest.approx(0.03), "cold item was zero-filled"
+    assert got["item_ctr_smoothed"] is None, "the measured rate was overwritten"
+    assert got["item_ctr_effective"] == pytest.approx(0.03), "cold item was zero-filled"
     assert got["has_item_features"] is False
 
 

@@ -43,5 +43,4 @@ notebooks/*
 .ipynb_checkpoints/
 
 # defer tracking for now
-docs/adr/*
 personal_README.md

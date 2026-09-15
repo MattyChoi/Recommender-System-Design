@@ -28,6 +28,8 @@ from data_pipeline.features.item_dynamic_features import (
     smoothed_ctr_by_category,
 )
 from data_pipeline.features.recsys_store.feature_repo.definition import (
+    context_features,
+    derived_features,
     item_stats,
     ranker_v1,
     user_category_stats,
@@ -147,9 +149,17 @@ def test_the_feature_service_covers_every_batch_view() -> None:
     A FeatureService is what serving requests; a view dropped from it becomes a
     feature the ranker was trained on and is no longer served.
     """
+    views = (
+        item_stats,
+        user_stats,
+        user_category_stats,
+        context_features,
+        derived_features,
+    )
+    expected = {view.name for view in views}
     served = {projection.name for projection in ranker_v1.feature_view_projections}
 
-    assert served == {"item_stats", "user_stats", "user_category_stats", "context_features"}
+    assert served == expected
 
 
 def test_the_feature_service_excludes_the_unwritten_push_view() -> None:

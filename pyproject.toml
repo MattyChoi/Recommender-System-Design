@@ -22,7 +22,17 @@ dependencies = [
     "pyspark>=4.2.0",
     "pyyaml>=6.0.3",
     "s3fs>=2026.7.0",
+    "torch>=2.6.0",
+    "sentence-transformers>=3.3.0",
+    "mlflow>=2.19.0",
+    "ray[train]>=2.40.0",
 ]
+
+[project.optional-dependencies]
+# TorchRec ships Linux/CUDA wheels and does not install on macOS. G4 is written
+# against it and gated behind an optional import, so the sharding code is real
+# and reviewable without making `uv sync` fail on this machine. See ADR 0012.
+sharded = ["torchrec>=1.0.0"]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]

@@ -1,4 +1,4 @@
-.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results gap coverage compare baselines data \
+.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
@@ -181,6 +181,12 @@ consume:  ## Tail the replay topic (make consume CONSUME_ARGS=--from-beginning)
 offsets:  ## Message count per partition of the replay topic
 	@$(KAFKA_EXEC)/kafka-get-offsets.sh --bootstrap-server $(KAFKA_BROKER) --topic $(TOPIC) \
 	  | awk -F: '{printf "  partition %s: %8d\n", $$2, $$3; t += $$3} END {printf "  %-11s %8d\n", "total:", t}'
+
+# Prints torch version, selected device and whether autocast is on, so a metric
+# in MLflow can always be traced back to the hardware that produced it.
+torch-env:  ## Report the torch device this machine will train on
+	uv run python -c "from common.torch_env import describe, select_device; \
+	    print(describe(select_device()))"
 
 train:  ## Train retrieval + ranking models
 	@echo "TODO: training"; exit 1
