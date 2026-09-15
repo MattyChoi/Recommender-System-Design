@@ -36,9 +36,11 @@ mlartifacts/
 .env.*
 !.env.example
 
-# Extra folders and files
+# Scratch that is genuinely personal and should not ship
 outline.md
+logs.txt
+notebooks/*
+.ipynb_checkpoints/
 
-# Exclude for now
-docs/
+# defer tracking for now
 personal_README.md

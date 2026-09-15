@@ -1,0 +1,23 @@
+// The raw interaction event log.
+//
+// Regenerate stubs after any edit:  make proto
+
+syntax = "proto3";
+package recsys.v1;
+option go_package = "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb";
+
+message InteractionEvent {
+  string event_id     = 1;
+  string user_id      = 2;
+  string item_id      = 3;
+  string event_type   = 4;   // impression|click|watch|cart|purchase
+  int64  event_ts_ms  = 5;   // when it HAPPENED
+  int64  ingest_ts_ms = 6;   // when we LEARNED about it
+  string session_id   = 7;
+  int32  position     = 8;   // slot shown in -- for position bias
+  string request_id   = 9;   // joins impressions to clicks
+  int64  dwell_ms     = 10;
+  float  propensity   = 11;  // P(shown | policy) -- log it, thank yourself later
+  string device       = 12;
+  string surface      = 13;  // home_rail|search|detail_page
+}

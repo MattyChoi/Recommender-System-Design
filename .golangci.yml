@@ -1,0 +1,23 @@
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - errcheck        # unchecked errors -- the single most valuable Go linter
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - bodyclose       # leaked HTTP response bodies; matters once retrievers call out
+    - contextcheck    # a dropped context, which is how per-source deadlines die
+
+  exclusions:
+    rules:
+      # Generated protobuf code is machine-written and not worth linting.
+      - path: internal/pb/
+        linters: [errcheck, govet, staticcheck, unused]
+
+formatters:
+  enable: [gofmt, goimports]

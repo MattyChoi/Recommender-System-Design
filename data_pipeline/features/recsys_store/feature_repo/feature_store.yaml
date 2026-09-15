@@ -1,0 +1,17 @@
+project: recsys_store
+
+registry: ${FEAST_REGISTRY}
+provider: local
+
+online_store:
+  type: redis
+  # localhost from the host, redis:6379 from inside the compose network.
+  connection_string: ${FEAST_REDIS_CONNECTION}
+  key_ttl_seconds: 604800
+
+offline_store:
+  type: dask
+
+# v3 keys entities by name as well as value, so two entities that share a
+# value cannot collide in Redis. Required for new repos.
+entity_key_serialization_version: 3

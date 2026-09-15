@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 permissions:
@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15   # a hung job otherwise runs for six hours
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -34,11 +34,38 @@ jobs:
       - name: Format check
         run: uv run ruff format --check .
 
+      - name: Notebooks are not importable
+        run: |
+          ! rg -q "^\s*(from|import) notebooks" --type py . \
+            || { echo "notebooks/ must not be imported -- move the logic into a package"; exit 1; }
+
       - name: Typecheck
         run: uv run mypy .
 
       - name: Test
+        # Redundant with the fixture, which pins it too but writing for visibility
+        env:
+          RECSYS_STORAGE__BACKEND: local
         run: uv run pytest
 
       - name: Pre-commit hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  go:
+    name: go lint / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+          cache-dependency-path: serving/go/go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: serving/go
+      - run: go build ./...
+        working-directory: serving/go
+      - run: go test ./...
+        working-directory: serving/go

@@ -1,0 +1,145 @@
+{
+  "model": "decayed_popularity",
+  "split": "dev",
+  "generated": "2026-09-15T01:28:30.960088+00:00",
+  "git_sha": "6ecedc3",
+  "k": 10,
+  "cohorts": {
+    "overall": {
+      "rows": 2740998,
+      "impressions": 73152,
+      "users": 50000,
+      "gauc": 0.5379,
+      "mrr": 0.2707,
+      "ndcg@10": 0.3153,
+      "recall@10": 0.5618,
+      "scored_impressions": 73152,
+      "skipped_impressions": 0,
+      "flat_impressions": 5757,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.0823,
+      "ci95": [
+        0.318,
+        0.3233
+      ],
+      "ci_users": 50000,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.313,
+        0.3176
+      ],
+      "ci_impressions": 73152,
+      "coverage@10": 0.0279,
+      "distinct_items_served": 1817,
+      "catalogue_size": 65238
+    },
+    "warm_user": {
+      "rows": 337102,
+      "impressions": 8957,
+      "users": 5941,
+      "gauc": 0.5311,
+      "mrr": 0.2641,
+      "ndcg@10": 0.3082,
+      "recall@10": 0.5518,
+      "scored_impressions": 8957,
+      "skipped_impressions": 0,
+      "flat_impressions": 710,
+      "gauc_ceiling": 0.9604,
+      "headroom_used": 0.0676,
+      "ci95": [
+        0.3085,
+        0.3229
+      ],
+      "ci_users": 5941,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.3021,
+        0.3149
+      ],
+      "ci_impressions": 8957,
+      "coverage@10": 0.0143,
+      "distinct_items_served": 932,
+      "catalogue_size": 65238
+    },
+    "cold_user": {
+      "rows": 2403896,
+      "impressions": 64195,
+      "users": 44059,
+      "gauc": 0.5388,
+      "mrr": 0.2717,
+      "ndcg@10": 0.3163,
+      "recall@10": 0.5632,
+      "scored_impressions": 64195,
+      "skipped_impressions": 0,
+      "flat_impressions": 5047,
+      "gauc_ceiling": 0.9607,
+      "headroom_used": 0.0842,
+      "ci95": [
+        0.3188,
+        0.3242
+      ],
+      "ci_users": 44059,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.314,
+        0.3186
+      ],
+      "ci_impressions": 64195,
+      "coverage@10": 0.0269,
+      "distinct_items_served": 1754,
+      "catalogue_size": 65238
+    },
+    "warm_item": {
+      "rows": 1826037,
+      "impressions": 49762,
+      "users": 37899,
+      "gauc": 0.5978,
+      "mrr": 0.2905,
+      "ndcg@10": 0.3443,
+      "recall@10": 0.6094,
+      "scored_impressions": 49762,
+      "skipped_impressions": 0,
+      "flat_impressions": 1000,
+      "gauc_ceiling": 0.99,
+      "headroom_used": 0.1996,
+      "ci95": [
+        0.3442,
+        0.3501
+      ],
+      "ci_users": 37899,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.3414,
+        0.3472
+      ],
+      "ci_impressions": 49762,
+      "coverage@10": 0.0229,
+      "distinct_items_served": 1495,
+      "catalogue_size": 65238
+    },
+    "cold_item": {
+      "rows": 914961,
+      "impressions": 23390,
+      "users": 19532,
+      "gauc": 0.4182,
+      "mrr": 0.2288,
+      "ndcg@10": 0.2536,
+      "recall@10": 0.4605,
+      "scored_impressions": 23390,
+      "skipped_impressions": 0,
+      "flat_impressions": 4757,
+      "gauc_ceiling": 0.8983,
+      "headroom_used": -0.2054,
+      "ci95": [
+        0.2506,
+        0.2586
+      ],
+      "ci_users": 19532,
+      "ci95_by_impression_DO_NOT_QUOTE": [
+        0.2502,
+        0.2574
+      ],
+      "ci_impressions": 23390,
+      "coverage@10": 0.0212,
+      "distinct_items_served": 1381,
+      "catalogue_size": 65238
+    }
+  },
+  "half_life_days": 0.1
+}

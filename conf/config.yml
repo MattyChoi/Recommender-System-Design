@@ -1,0 +1,56 @@
+# Every value here is validated on load, and any of them can be overridden from the
+# environment without editing this file:
+#
+#   RECSYS_SPLIT__HOLDOUT_DAYS=1 uv run <command>
+
+paths:
+  raw: data/raw/MIND       # train/ and dev/ as downloaded -- kept, not regenerated
+  bronze: data/bronze      # one row per item shown, partitioned by date
+  silver: data/silver      # bronze + article metadata + integer ID indices
+  gold: data/gold          # point-in-time feature tables
+
+storage:
+  backend: s3              # MinIO must be up: `make up`. `make demo` overrides to local.
+  bucket: recsys           # created by hand: mc mb local/recsys
+  endpoint_url: "http://localhost:9000"   # minio:9000 from inside the compose network
+  gold_prefix: gold        # key prefix under the bucket, mirroring the local layout
+
+spark:
+  master: "local[*]"       # local[1] when debugging something non-deterministic
+  driver_memory: "8g"      # local mode has no executors: this is the whole budget
+  shuffle_partitions: 32   # ~2-4x core count; Spark's default of 200 is cluster-tuned
+
+split:
+  holdout_days: 1          # train impressions span ~1 week (week 5); custom ablations only.
+                           # Primary evaluation uses MIND's official train/dev split.
+  min_user_impressions: 3  # below this a user cannot be personalized to
+
+session:
+  gap_minutes: 30          # Measured, not defaulted: `make gap` over train's 106,965
+                           # inter-impression transitions (33,617 users with 2+).
+                           # Share-per-minute decays SMOOTHLY to about 4h (0.44%/min
+                           # under 5m, 0.09%/min by 240m), then collapses 66% in the
+                           # next bucket and flattens with a faint uptick at 12-24h.
+                           # So a sitting ends within ~4h and anything longer is a
+                           # next-day visit -- but that fall is only 1.8x the
+                           # next-sharpest, short of the 2x dominance rule, so the
+                           # curve does not pick out a threshold on its own.
+                           # The median gap is 765 minutes: MIND users check the news
+                           # once or twice a day, they do not browse in sittings. So 30m
+                           # keeps just 9.9% of transitions in-session and most sessions
+                           # are singletons. Kept at 30 because no value is better
+                           # supported and this one is the stated web convention --
+                           # a judgement against measured data, not an unexamined default.
+
+replay:
+  topic: impressions       # must match the 'topic' in the Flink CREATE TABLE
+  bootstrap_servers: "localhost:9092"   # kafka:29092 from inside the compose network
+  speed: 3600              # an hour of event time per wall second; 0 = unthrottled
+  max_lateness_seconds: 30 # MUST NOT exceed the Flink watermark's INTERVAL '30' SECOND,
+                           # or the extra delay shows up as dropped records, not late ones
+  late_fraction: 0.02      # enough to exercise the late path without making it the norm
+  seed: 0                  # a fixed seed is what makes the batch/stream parity test valid
+
+filter:
+  min_item_impressions: 5     # below this, nothing is learnable about the article
+  max_impressions_per_user: 500   # stops heavy users dominating row-averaged metrics

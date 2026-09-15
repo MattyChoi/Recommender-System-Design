@@ -4,5 +4,5 @@ import importlib
 
 
 def test_packages_import() -> None:
-    for name in ("data_pipeline", "models", "indexing", "evaluation"):
+    for name in ("common", "data_pipeline", "models", "indexing", "evaluation"):
         assert importlib.import_module(name) is not None
