@@ -218,6 +218,24 @@ class FilterConfig(BaseModel):
     max_impressions_per_user: int = 500
 
 
+class MLflowConfig(BaseModel):
+    """Where training runs are recorded.
+
+    Attributes:
+        enabled: False skips tracking entirely. The server is a compose service,
+            so anything that must run without ``make up`` -- CI, every test --
+            turns it off rather than depending on Docker.
+        tracking_uri: The server's host-visible address. A process inside the
+            compose network would use ``http://mlflow:9001``.
+        experiment: Experiment name. The manual's verify step is
+            ``mlflow runs list --experiment-name two_tower``.
+    """
+
+    enabled: bool = True
+    tracking_uri: str = "http://localhost:5001"
+    experiment: str = "two_tower"
+
+
 class Settings(BaseSettings):
     """Root configuration object, assembled from YAML and the environment.
 
@@ -235,6 +253,7 @@ class Settings(BaseSettings):
         session: Optional; sessionization parameters.
         replay: Optional; Kafka replay harness parameters.
         filter: Optional; corpus filters.
+        mlflow: Optional; where training runs are recorded.
     """
 
     model_config = SettingsConfigDict(
@@ -249,6 +268,7 @@ class Settings(BaseSettings):
     session: SessionConfig = SessionConfig()
     replay: ReplayConfig = ReplayConfig()
     filter: FilterConfig = FilterConfig()
+    mlflow: MLflowConfig = MLflowConfig()
 
     def gold_uri(self, name: str, scheme: str = "s3a") -> str:
         """Resolve a gold table to a location the calling client can open.

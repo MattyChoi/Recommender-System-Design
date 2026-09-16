@@ -12,13 +12,14 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import pyarrow.parquet as pq
 import torch
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
 from common.config import Settings
@@ -149,6 +150,60 @@ def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> 
     )
 
 
+def _clicked_rows(examples: DataFrame) -> DataFrame:
+    """The positives, with ``ts`` kept so a window can still be cut."""
+    columns = [*USER_FEATURES, *USER_FLAGS, "hour_of_day", "day_of_week"]
+    return examples.where(f.col("clicked")).select("impression_id", "item_idx", "ts", *columns)
+
+
+def _tensors_from(
+    examples: DataFrame,
+    spark: SparkSession,
+    settings: Settings,
+    split: str,
+    max_len: int,
+    max_negs: int,
+) -> SplitTensors:
+    """Join the two per-impression tables onto ``examples`` and collect.
+
+    Split out so ``load_split`` and :func:`load_train_and_validation` assemble
+    tensors the same way; only which rows reach here differs.
+    """
+    history = read_gold(spark, settings, f"user_history/{split}")
+    negatives = read_gold(spark, settings, f"impression_negatives/{split}")
+
+    rows = (
+        examples.join(
+            history.select("impression_id", "history_idx"), on="impression_id", how="left"
+        )
+        .join(negatives.select("impression_id", "neg_idx"), on="impression_id", how="left")
+        .toPandas()
+    )
+
+    numeric = []
+    for name in USER_FEATURES:
+        column = rows[name].fillna(0.0).to_numpy(dtype="float32")
+        numeric.append(np.log1p(column) if name in LOG1P_FEATURES else column)
+    for name in USER_FLAGS:
+        numeric.append(rows[name].fillna(False).to_numpy(dtype="float32"))
+    # Spark's dayofweek is 1..7, hour is 0..23; both wrap, so both get sin/cos.
+    numeric.extend(_cyclic(rows["hour_of_day"].to_numpy(dtype="float32"), 24))
+    numeric.extend(_cyclic(rows["day_of_week"].to_numpy(dtype="float32") - 1.0, 7))
+
+    ids, mask = _pad_ragged(rows["history_idx"], max_len)
+    neg_ids, neg_mask = _pad_ragged(rows["neg_idx"], max_negs)
+
+    return SplitTensors(
+        user_feats=torch.from_numpy(np.stack(numeric, axis=1)),
+        history_ids=ids,
+        history_mask=mask,
+        item_ids=torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64")),
+        impression_ids=torch.from_numpy(rows["impression_id"].to_numpy(dtype="int64")),
+        neg_ids=neg_ids,
+        neg_mask=neg_mask,
+    )
+
+
 def load_split(
     spark: SparkSession,
     settings: Settings,
@@ -176,40 +231,62 @@ def load_split(
     Returns:
         A :class:`SplitTensors`.
     """
-    examples = read_gold(spark, settings, f"training_examples/{split}")
-    history = read_gold(spark, settings, f"user_history/{split}")
-    negatives = read_gold(spark, settings, f"impression_negatives/{split}")
-
-    columns = [*USER_FEATURES, *USER_FLAGS, "hour_of_day", "day_of_week"]
-    rows = (
-        examples.where(f.col("clicked"))
-        .select("impression_id", "item_idx", *columns)
-        .join(history.select("impression_id", "history_idx"), on="impression_id", how="left")
-        .join(negatives.select("impression_id", "neg_idx"), on="impression_id", how="left")
-        .toPandas()
+    return _tensors_from(
+        _clicked_rows(read_gold(spark, settings, f"training_examples/{split}")),
+        spark,
+        settings,
+        split,
+        max_len,
+        max_negs,
     )
 
-    numeric = []
-    for name in USER_FEATURES:
-        column = rows[name].fillna(0.0).to_numpy(dtype="float32")
-        numeric.append(np.log1p(column) if name in LOG1P_FEATURES else column)
-    for name in USER_FLAGS:
-        numeric.append(rows[name].fillna(False).to_numpy(dtype="float32"))
-    # Spark's dayofweek is 1..7, hour is 0..23; both wrap, so both get sin/cos.
-    numeric.extend(_cyclic(rows["hour_of_day"].to_numpy(dtype="float32"), 24))
-    numeric.extend(_cyclic(rows["day_of_week"].to_numpy(dtype="float32") - 1.0, 7))
 
-    ids, mask = _pad_ragged(rows["history_idx"], max_len)
-    neg_ids, neg_mask = _pad_ragged(rows["neg_idx"], max_negs)
+def load_train_and_validation(
+    spark: SparkSession,
+    settings: Settings,
+    max_len: int,
+    max_negs: int = 4,
+    holdout_hours: int = 24,
+) -> tuple[SplitTensors, SplitTensors]:
+    """Train, and a TEMPORAL tail of train to early-stop on.
 
-    return SplitTensors(
-        user_feats=torch.from_numpy(np.stack(numeric, axis=1)),
-        history_ids=ids,
-        history_mask=mask,
-        item_ids=torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64")),
-        impression_ids=torch.from_numpy(rows["impression_id"].to_numpy(dtype="int64")),
-        neg_ids=neg_ids,
-        neg_mask=neg_mask,
+    **Never dev.** Early-stopping on dev selects the checkpoint that scores best
+    on the test set, which contaminates every reported dev number -- the model
+    would have been chosen using the thing it is about to be judged by.
+
+    Args:
+        spark: Active session.
+        settings: The root configuration object.
+        max_len: History width.
+        max_negs: Slate negatives per row.
+        holdout_hours: Width of the validation window, taken off the end of
+            train. MIND's train week is short, so this is in hours rather than
+            ``SplitConfig.holdout_days``; 24 leaves six days to train on.
+
+    Returns:
+        ``(train, validation)``.
+
+    Raises:
+        ValueError: If the window would leave no training rows.
+    """
+    examples = _clicked_rows(read_gold(spark, settings, "training_examples/train"))
+    end = examples.agg(f.max("ts").alias("end")).collect()[0]["end"]
+    boundary = end - timedelta(hours=holdout_hours)
+
+    before = examples.where(f.col("ts") < f.lit(boundary))
+    if before.limit(1).count() == 0:
+        raise ValueError(f"holdout_hours={holdout_hours} leaves no training rows; train ends {end}")
+
+    return (
+        _tensors_from(before, spark, settings, "train", max_len, max_negs),
+        _tensors_from(
+            examples.where(f.col("ts") >= f.lit(boundary)),
+            spark,
+            settings,
+            "train",
+            max_len,
+            max_negs,
+        ),
     )
 
 

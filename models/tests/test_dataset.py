@@ -17,6 +17,7 @@ guard at the bottom of this file is what stops it being re-added.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import torch
+from pyspark.sql import SparkSession
 
 from common.config import Settings, load_settings
 from models.retrieval.dataset import (
@@ -35,6 +37,7 @@ from models.retrieval.dataset import (
     _cyclic,
     _pad_ragged,
     load_item_tables,
+    load_train_and_validation,
 )
 from tests.test_config import REPO_ROOT
 
@@ -136,6 +139,102 @@ class TestAlignment:
 
         for variant in ("vec_title", "vec_title_abstract"):
             assert isinstance(load_item_tables(settings, variant), ItemTables)
+
+
+def _write_gold(spark: SparkSession, settings: Settings) -> None:
+    """Six clicked impressions an hour apart, plus two unclicked rows.
+
+    ``item_idx`` rises with ``ts``, so a temporal cut is checkable from the
+    tensors alone -- which matters, because ``ts`` deliberately does not survive
+    into :class:`SplitTensors` and the assertion has to use something that does.
+    """
+    start = datetime(2019, 11, 14, 0, 0, 0)
+    rows = [
+        {
+            "impression_id": 100 + i,
+            "item_idx": i + 1,
+            "ts": start + timedelta(hours=i),
+            "clicked": clicked,
+            "user_impressions_24h": 1.0,
+            "user_clicks_24h": 1.0,
+            "user_ctr_smoothed": 0.1,
+            "user_tenure_hours": 2.0,
+            "has_user_features": True,
+            "hour_of_day": i,
+            "day_of_week": 5,
+        }
+        for i, clicked in enumerate([True] * 6 + [False, False])
+    ]
+    gold = Path(settings.paths.gold)
+    spark.createDataFrame(rows).write.parquet(str(gold / "training_examples" / "train"))
+    spark.createDataFrame(
+        [{"impression_id": 100 + i, "history_idx": [1, 2]} for i in range(8)],
+        "impression_id long, history_idx array<int>",
+    ).write.parquet(str(gold / "user_history" / "train"))
+    spark.createDataFrame(
+        [{"impression_id": 100 + i, "neg_idx": [7, 8]} for i in range(8)],
+        "impression_id long, neg_idx array<int>",
+    ).write.parquet(str(gold / "impression_negatives" / "train"))
+
+
+class TestTheValidationCarve:
+    """The cut must be temporal, and it must come out of TRAIN.
+
+    Early-stopping on dev would pick the checkpoint that scores best on the test
+    set. A random carve inside train would let the model see later impressions
+    to predict earlier ones, which is C5's argument one level in. Neither
+    failure reports anything.
+    """
+
+    def test_it_cuts_on_time_not_at_random(self, spark: SparkSession, settings: Settings) -> None:
+        _write_gold(spark, settings)
+
+        train, validation = load_train_and_validation(
+            spark, settings, max_len=4, max_negs=2, holdout_hours=2
+        )
+
+        # Clicked rows run 00:00..05:00, so a 2h window opens at 03:00 and ts
+        # rises with item_idx: the later window is the higher indices.
+        assert set(train.item_ids.tolist()) == {1, 2, 3}
+        assert set(validation.item_ids.tolist()) == {4, 5, 6}
+
+    def test_the_two_windows_partition_the_clicked_rows(
+        self, spark: SparkSession, settings: Settings
+    ) -> None:
+        """No row in both, none missing, and the unclicked rows in neither."""
+        _write_gold(spark, settings)
+
+        train, validation = load_train_and_validation(
+            spark, settings, max_len=4, max_negs=2, holdout_hours=2
+        )
+        seen = train.item_ids.tolist() + validation.item_ids.tolist()
+
+        assert sorted(seen) == [1, 2, 3, 4, 5, 6]
+
+    def test_a_window_that_swallows_training_is_refused(
+        self, spark: SparkSession, settings: Settings
+    ) -> None:
+        """Silently returning an empty train set would look like a broken model
+        rather than a bad argument."""
+        _write_gold(spark, settings)
+
+        with pytest.raises(ValueError, match="no training rows"):
+            load_train_and_validation(spark, settings, max_len=4, max_negs=2, holdout_hours=999)
+
+    def test_both_windows_assemble_the_same_shapes(
+        self, spark: SparkSession, settings: Settings
+    ) -> None:
+        """One assembly path, two row sets -- so a feature that appears in
+        training cannot go missing in validation."""
+        _write_gold(spark, settings)
+
+        train, validation = load_train_and_validation(
+            spark, settings, max_len=4, max_negs=2, holdout_hours=2
+        )
+
+        assert train.user_feats.shape[1] == validation.user_feats.shape[1]
+        assert train.history_ids.shape[1] == validation.history_ids.shape[1] == 4
+        assert train.neg_ids.shape[1] == validation.neg_ids.shape[1] == 2
 
 
 class TestRaggedPadding:

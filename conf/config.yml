@@ -51,6 +51,11 @@ replay:
   late_fraction: 0.02      # enough to exercise the late path without making it the norm
   seed: 0                  # a fixed seed is what makes the batch/stream parity test valid
 
+mlflow:
+  enabled: true            # false skips tracking; CI and the tests do not need Docker
+  tracking_uri: "http://localhost:5001"   # mlflow:5000 from inside the compose network
+  experiment: two_tower    # `mlflow runs list --experiment-name two_tower`
+
 filter:
   min_item_impressions: 5     # below this, nothing is learnable about the article
   max_impressions_per_user: 500   # stops heavy users dominating row-averaged metrics

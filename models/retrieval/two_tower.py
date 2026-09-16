@@ -231,6 +231,36 @@ class TwoTower(nn.Module):
         )
         return embedded
 
+    def forward(
+        self,
+        user_feats: torch.Tensor,
+        history_ids: torch.Tensor,
+        history_mask: torch.Tensor,
+        item_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Both towers for one batch, and the temperature.
+
+        The temperature is RETURNED rather than read off the module because
+        ``log_temp`` is consumed by the loss, not by either tower: a forward
+        returning only embeddings leaves it with no gradient, and DDP waits for
+        every tracked parameter before it reduces anything.
+
+        Args:
+            user_feats: ``[B, n_user_feats]``.
+            history_ids: ``[B, L]``.
+            history_mask: ``[B, L]``.
+            item_ids: ``[N]`` every candidate column -- positives and negatives
+                together, so the item tower runs once per step rather than twice.
+
+        Returns:
+            ``(user_emb [B, out_dim], item_emb [N, out_dim], temperature)``.
+        """
+        return (
+            self.encode_user(user_feats, history_ids, history_mask),
+            self.encode_item(item_ids),
+            self.temperature,
+        )
+
     @torch.no_grad()
     def precompute_items(self, batch_size: int = 4096) -> torch.Tensor:
         """Every item's embedding
@@ -241,8 +271,14 @@ class TwoTower(nn.Module):
         Returns:
             ``[n_items + 1, out_dim]``.
         """
+        was_training = self.training
         self.eval()
-        device = self.item_category.device
-        ids = torch.arange(self.n_items + 1, device=device)
-        chunks = [self.encode_item(ids[i : i + batch_size]) for i in range(0, len(ids), batch_size)]
-        return torch.cat(chunks, dim=0)
+        try:
+            device = self.item_category.device
+            ids = torch.arange(self.n_items + 1, device=device)
+            chunks = [
+                self.encode_item(ids[i : i + batch_size]) for i in range(0, len(ids), batch_size)
+            ]
+            return torch.cat(chunks, dim=0)
+        finally:
+            self.train(was_training)

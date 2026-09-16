@@ -1,6 +1,6 @@
-.PHONY: proto help up down clean raw bronze silver gold content feast parity eval sweep results gap coverage compare baselines torch-env data \
+.PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        train index serve bench demo lint fmt types test check
+        index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -17,6 +17,12 @@ FORCE_ID_MAPS ?=
 REPLAY_SPLIT ?= train
 REPLAY_ARGS ?=
 MIN_COUNT ?= 25
+
+### Two-tower training
+EPOCHS ?= 10
+BATCH ?= 8192
+LR ?= 1e-3
+TRAIN_ARGS ?=
 
 # --- Kafka, for the replay harness ---------------------------------------
 # These targets shell INTO the broker container, so they use the PLAINTEXT
@@ -206,8 +212,14 @@ torch-env:  ## Report the torch device this machine will train on
 	uv run python -c "from common.torch_env import describe, select_device; \
 	    print(describe(select_device()))"
 
-train:  ## Train retrieval + ranking models
-	@echo "TODO: training"; exit 1
+# MLflow must be up (`make up`) unless RECSYS_MLFLOW__ENABLED=false. The arms:
+#   make train TRAIN_ARGS="--no-logq"                  # G2's gate
+#   make train TRAIN_ARGS="--no-use-content"           # ID only
+#   make train TRAIN_ARGS="--no-use-id"                # content only
+#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 4"   # uniform arm
+train:  ## gold + item_content -> a trained two-tower, logged to MLflow
+	uv run python -m models.retrieval.train --epochs $(EPOCHS) \
+	    --batch-size $(BATCH) --lr $(LR) $(TRAIN_ARGS)
 
 index:  ## Build the FAISS index
 	@echo "TODO: index build"; exit 1
