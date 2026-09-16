@@ -4,13 +4,18 @@ One place decides where tensors live, so no module reaches for
 ``torch.device("cuda")`` and no test quietly runs somewhere else than training
 did.
 
-**This machine has no CUDA.** The guide's Part G is written for GPUs --
-``torch.autocast("cuda", bfloat16)`` and ``GradScaler`` throughout -- and
-transplanting that verbatim onto an Apple-silicon Mac does not fail loudly, it
-fails subtly: ``GradScaler`` on a non-CUDA device is a silent no-op in some
-torch versions and an error in others, and ``autocast("cuda")`` on MPS raises
-only once a tensor reaches it. So both are chosen here from the device rather
-than assumed, and the CPU/MPS path takes neither.
+**This project is built on two machines**: an Apple-silicon Mac (MPS) and a
+Windows box with an RTX 4090 under WSL2 (CUDA). Retrieval sysmem is built for GPUs
+--``torch.autocast("cuda", bfloat16)`` and ``GradScaler`` throughout -- and
+transplanting that verbatim onto MPS does not fail loudly, it fails subtly:
+``autocast("cuda")`` on MPS raises only once a tensor reaches it, and a
+``GradScaler`` off CUDA is a silent no-op in some torch versions and an error
+in others.
+
+So every device-dependent choice is made HERE, from the device, and nothing
+under ``models/`` names a device at all. That is enforced rather than
+remembered: ``tests/test_torch_env.py`` fails the build on a ``"cuda"`` or
+``"mps"`` literal anywhere outside this module.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import os
 import random
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
+from typing import Any
 
 import numpy as np
 import torch
@@ -62,14 +68,59 @@ def autocast_for(device: torch.device) -> torch.amp.autocast_mode.autocast | nul
 
 
 def grad_scaler_for(device: torch.device) -> torch.amp.GradScaler:
-    """A GradScaler that is enabled only where it means anything.
+    """A GradScaler that is disabled on every device, deliberately.
 
-    Loss scaling exists to stop fp16 gradients underflowing. bf16 has fp32's
-    exponent range and does not need it, and neither does fp32 -- but the loop
-    still calls ``scaler.scale(...)``/``step``/``update`` unconditionally, so a
-    disabled scaler keeps one code path instead of two.
+    Loss scaling exists to stop fp16 gradients underflowing. This project never
+    trains in fp16: :func:`autocast_for` selects **bf16** on CUDA, which carries
+    fp32's exponent range, and no autocast at all on MPS and CPU. There is
+    nothing to scale anywhere.
+
+    It still returns a scaler rather than ``None`` so the training loop can call
+    ``scaler.scale(...)``/``step``/``update`` unconditionally and keep one code
+    path instead of two. A disabled scaler makes all three pass-throughs.
+
+    Note:
+        This read ``enabled=device.type == "cuda"`` until 2026-09-15, which
+        enabled scaling on precisely the device where autocast selects bf16 --
+        the one place it is both unnecessary and not free, since
+        ``scaler.step`` runs an inf/nan check and can skip an optimiser step.
+        The condition was inverted relative to the paragraph above it. It never
+        fired on the Mac, so it stayed invisible until this ran on CUDA.
     """
-    return torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
+    return torch.amp.GradScaler(device.type, enabled=False)
+
+
+def distributed_backend(device: torch.device) -> str:
+    """The ``torch.distributed`` backend this device can actually use.
+
+    NCCL is CUDA-only; MPS and CPU get gloo. Naming the backend rather than
+    defaulting matters because the default is chosen from what is *compiled in*,
+    not from what the tensors are on, so a Mac picks up a backend that then
+    fails at the first collective rather than at initialisation.
+
+    Note:
+        At ``world_size == 1`` the all-gather in G5's loss is a no-op on either
+        backend. The reason to initialise a process group on a single device at
+        all is to exercise the gradient-flowing gather -- a plain
+        ``dist.all_gather`` detaches, silently training on 1/N of the negatives,
+        and a code path that is never entered cannot be tested.
+    """
+    return "nccl" if device.type == "cuda" else "gloo"
+
+
+def dataloader_kwargs(device: torch.device) -> dict[str, Any]:
+    """DataLoader options that depend on the device rather than on the task.
+
+    ``pin_memory`` allocates page-locked host memory so the host-to-device copy
+    can overlap compute. That is a CUDA concept: MPS shares memory with the
+    host, so pinning buys nothing there and several torch versions warn about it
+    on every epoch.
+
+    Worker count and prefetch depth are deliberately NOT here -- they are task
+    and dataset decisions, and putting them behind a device lookup would make
+    them look like physics.
+    """
+    return {"pin_memory": device.type == "cuda"}
 
 
 def set_seed(seed: int = 0) -> None:
