@@ -24,6 +24,7 @@ from data_pipeline.features.item_dynamic_features import (
 )
 from data_pipeline.features.user_category_features import user_category_hourly_features
 from data_pipeline.features.user_dynamic_features import smoothed_user_ctr, user_hourly_features
+from data_pipeline.features.user_history import MAX_HISTORY, point_in_time_history
 
 
 def build_item_hourly(spark: SparkSession, settings: Settings, splits: Sequence[str]) -> None:
@@ -85,6 +86,61 @@ def build_training_examples(spark: SparkSession, settings: Settings, split: str)
     )
 
 
+def build_user_history(
+    spark: SparkSession,
+    settings: Settings,
+    split: str,
+    splits: Sequence[str],
+    max_len: int = MAX_HISTORY,
+) -> None:
+    """Write one split's point-in-time click sequence to ``gold/user_history``.
+
+    Keyed on ``impression_id`` rather than on rows: the history belongs to the
+    request, and every row of a slate shares it.
+
+    Stays on local disk like ``training_examples``.
+
+    The click timeline spans EVERY split even though one is keyed, exactly as
+    in :func:`build_user_hourly`: a dev impression by a user who read during the
+    train week should see those clicks, because the system serving it would
+    have. The official boundary is temporally clean, so this cannot reach
+    forward.
+    """
+    requests = (
+        spark.read.parquet(str(settings.paths.silver / "impressions" / split))
+        .select("impression_id", "user_id", "ts")
+        .distinct()
+    )
+    clicks = read_silver(spark, settings, splits).where(f.col("clicked"))
+    history = spark.read.parquet(*[str(settings.paths.bronze / "history" / s) for s in splits])
+    item_map = spark.read.parquet(str(settings.paths.bronze / "item_map"))
+
+    (
+        point_in_time_history(requests, clicks, history, item_map, max_len)
+        .write.mode("overwrite")
+        .parquet(str(settings.paths.gold / "user_history" / split))
+    )
+
+
+def _history_counts(spark: SparkSession, settings: Settings, split: str) -> dict[str, float]:
+    """History depth broken out by source, for the build log."""
+    written = spark.read.parquet(str(settings.paths.gold / "user_history" / split))
+    row = written.agg(
+        f.count("*").alias("rows"),
+        f.avg(f.col("has_history").cast("double")).alias("with_history"),
+        f.avg("history_len").alias("mean_len"),
+        f.avg("inwindow_len").alias("mean_in"),
+        f.avg("snapshot_len").alias("mean_snap"),
+    ).collect()[0]
+    return {
+        "rows": int(row["rows"]),
+        "with_history": row["with_history"],
+        "mean_len": row["mean_len"],
+        "mean_in": row["mean_in"],
+        "mean_snap": row["mean_snap"],
+    }
+
+
 def _example_counts(spark: SparkSession, settings: Settings, split: str) -> dict[str, float]:
     """Row counts, warm-up loss and both cold-start shares, for the build log."""
     labels = spark.read.parquet(str(settings.paths.silver / "impressions" / split))
@@ -121,6 +177,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "will ever score against: a split left out here gets null features.",
     )
     parser.add_argument(
+        "--max-history",
+        type=int,
+        default=MAX_HISTORY,
+        help="Click-history entries kept per request, most recent first. A "
+        "tensor-shape contract, not a tuned value: it binds above p99 on train "
+        "and never on dev.",
+    )
+    parser.add_argument(
         "--force", action="store_true", help="Rebuild tables that are already built."
     )
     args = parser.parse_args(argv)
@@ -138,7 +202,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         for s in args.splits
         if args.force or not _is_built(settings, "gold", f"training_examples/{s}")
     ]
-    if series_built and not todo and not args.force:
+    history_todo = [
+        s for s in args.splits if args.force or not _is_built(settings, "gold", f"user_history/{s}")
+    ]
+    if series_built and not todo and not history_todo and not args.force:
         print("gold: already built, skipping")
         return 0
 
@@ -165,6 +232,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{counts['with_item']:.1%} with item history, "
                 f"{counts['with_user']:.1%} with user history, "
                 f"{counts['dropped']:,} dropped as unknowable"
+            )
+
+        for split in history_todo:
+            dest = settings.paths.gold / "user_history" / split
+            print(f"{split}: snapshot + in-window clicks -> {dest}")
+            build_user_history(spark, settings, split, args.splits, args.max_history)
+            depth = _history_counts(spark, settings, split)
+            print(
+                f"  {depth['rows']:,} impressions, "
+                f"{depth['with_history']:.1%} with history, "
+                f"mean length {depth['mean_len']:.1f} "
+                f"(in-window {depth['mean_in']:.1f} + snapshot {depth['mean_snap']:.1f})"
             )
     finally:
         spark.stop()

@@ -10,6 +10,7 @@ export UV_ENV_FILE=.env
 
 MIND_SIZE ?= small
 SPLITS ?= train dev
+MAX_HISTORY ?= 50
 FORCE ?=
 FORCE_ID_MAPS ?=
 REPLAY_SPLIT ?= train
@@ -88,7 +89,8 @@ silver:  ## bronze -> silver (rebuild an existing layer: make silver FORCE=1)
 # stays on disk. `RECSYS_STORAGE__BACKEND=local make gold` puts everything back
 # on disk and needs nothing running.
 gold:  ## silver -> gold feature tables (rebuild an existing layer: make gold FORCE=1)
-	uv run python -m data_pipeline.features.gold --splits $(SPLITS) $(if $(FORCE),--force)
+	uv run python -m data_pipeline.features.gold --splits $(SPLITS) \
+	    --max-history $(MAX_HISTORY) $(if $(FORCE),--force)
 
 # Reads the series from MinIO, so `make up` first. Note that apply RESOLVES the
 # source paths and bakes them into the registry: running this under a different

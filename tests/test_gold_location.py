@@ -61,6 +61,21 @@ def test_training_examples_stays_local_even_on_s3(s3_settings: Settings) -> None
     assert not got.startswith("s3")
 
 
+def test_user_history_stays_local_even_on_s3(s3_settings: Settings) -> None:
+    """Part G's click sequence is a training-side table, not a store source.
+
+    Same reasoning as ``training_examples``: the trainer reads it on the machine
+    that wrote it, and nothing outside this repo consumes it. Pinned separately
+    because "it is in gold, so it should follow the backend" is the exact
+    tidying-up this module exists to make someone argue with.
+    """
+    assert "user_history" not in FEATURE_TABLES
+
+    got = gold_location(s3_settings, "user_history/dev")
+    assert got == str(s3_settings.paths.gold / "user_history" / "dev")
+    assert not got.startswith("s3")
+
+
 def test_is_built_reads_the_marker_for_a_local_table(
     local_settings: Settings, tmp_path: Path
 ) -> None:
