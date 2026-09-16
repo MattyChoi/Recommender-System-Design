@@ -18,6 +18,7 @@ from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import SPLITS, _is_built, gold_location, read_gold, read_silver
 from data_pipeline.features.asof import attach_point_in_time_features
+from data_pipeline.features.impression_negatives import MAX_NEGATIVES, slate_negatives
 from data_pipeline.features.item_dynamic_features import (
     item_hourly_features,
     smoothed_ctr_by_category,
@@ -122,6 +123,49 @@ def build_user_history(
     )
 
 
+def build_impression_negatives(
+    spark: SparkSession,
+    settings: Settings,
+    split: str,
+    max_negs: int = MAX_NEGATIVES,
+) -> None:
+    """Write one split's slate negatives to ``gold/impression_negatives``.
+
+    Keyed on ``impression_id``, and stays on local disk like
+    ``training_examples`` and ``user_history``.
+    """
+    impressions = spark.read.parquet(str(settings.paths.silver / "impressions" / split)).select(
+        "impression_id", "item_idx", "clicked"
+    )
+
+    (
+        slate_negatives(impressions, max_negs)
+        .write.mode("overwrite")
+        .parquet(str(settings.paths.gold / "impression_negatives" / split))
+    )
+
+
+def _negative_counts(spark: SparkSession, settings: Settings, split: str) -> dict[str, float]:
+    """Slate depth, and how many impressions have no negative at all."""
+    slates = spark.read.parquet(str(settings.paths.silver / "impressions" / split)).select(
+        "impression_id"
+    )
+    written = spark.read.parquet(str(settings.paths.gold / "impression_negatives" / split))
+    row = written.agg(
+        f.count("*").alias("rows"),
+        f.avg("neg_len").alias("mean_len"),
+        f.sum(f.when(f.col("neg_len") >= MAX_NEGATIVES, 1).otherwise(0)).alias("at_cap"),
+    ).collect()[0]
+    return {
+        "rows": int(row["rows"]),
+        # Impressions with no row at all: every item in the slate was clicked,
+        # so they can supply nothing and must fall back to in-batch negatives.
+        "without": slates.distinct().count() - int(row["rows"]),
+        "mean_len": row["mean_len"],
+        "at_cap": int(row["at_cap"]),
+    }
+
+
 def _history_counts(spark: SparkSession, settings: Settings, split: str) -> dict[str, float]:
     """History depth broken out by source, for the build log."""
     written = spark.read.parquet(str(settings.paths.gold / "user_history" / split))
@@ -185,6 +229,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "and never on dev.",
     )
     parser.add_argument(
+        "--max-negatives",
+        type=int,
+        default=MAX_NEGATIVES,
+        help="Slate negatives STORED per impression. The loader takes a prefix "
+        "of this, so the training-time count is swept without a gold rebuild.",
+    )
+    parser.add_argument(
         "--force", action="store_true", help="Rebuild tables that are already built."
     )
     args = parser.parse_args(argv)
@@ -205,7 +256,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     history_todo = [
         s for s in args.splits if args.force or not _is_built(settings, "gold", f"user_history/{s}")
     ]
-    if series_built and not todo and not history_todo and not args.force:
+    negatives_todo = [
+        s
+        for s in args.splits
+        if args.force or not _is_built(settings, "gold", f"impression_negatives/{s}")
+    ]
+    if series_built and not todo and not history_todo and not negatives_todo and not args.force:
         print("gold: already built, skipping")
         return 0
 
@@ -244,6 +300,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{depth['with_history']:.1%} with history, "
                 f"mean length {depth['mean_len']:.1f} "
                 f"(in-window {depth['mean_in']:.1f} + snapshot {depth['mean_snap']:.1f})"
+            )
+
+        for split in negatives_todo:
+            dest = settings.paths.gold / "impression_negatives" / split
+            print(f"{split}: shown-and-not-clicked -> {dest}")
+            build_impression_negatives(spark, settings, split, args.max_negatives)
+            slate = _negative_counts(spark, settings, split)
+            print(
+                f"  {slate['rows']:,} impressions with negatives, "
+                f"mean {slate['mean_len']:.1f} kept, "
+                f"{slate['at_cap']:,} at the cap, "
+                f"{slate['without']:,} with none at all"
             )
     finally:
         spark.stop()

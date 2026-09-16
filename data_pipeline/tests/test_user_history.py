@@ -122,7 +122,7 @@ class TestSnapshot:
             [("N1", 1), ("N2", 2), ("N3", 3)], "item_id string, item_idx int"
         )
 
-    def _history(self, spark: SparkSession, rows: list[tuple[int, str, str]]) -> DataFrame:
+    def _history(self, spark: SparkSession, rows: list[tuple[int, str, str | None]]) -> DataFrame:
         return spark.createDataFrame(rows, "impression_id long, user_id string, history string")
 
     def test_the_string_is_reversed_into_most_recent_first(

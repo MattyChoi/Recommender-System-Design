@@ -16,6 +16,8 @@ GOLD_TABLES = (
     "user_category_cross_features",
     "training_examples",
     "user_history",
+    "impression_negatives",
+    "item_content",
 )
 
 # The gold tables that follow storage.backend. These three are the feature

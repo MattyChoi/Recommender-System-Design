@@ -1,4 +1,4 @@
-.PHONY: proto help up down clean raw bronze silver gold feast parity eval sweep results gap coverage compare baselines torch-env data \
+.PHONY: proto help up down clean raw bronze silver gold content feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
         train index serve bench demo lint fmt types test check
 
@@ -11,10 +11,12 @@ export UV_ENV_FILE=.env
 MIND_SIZE ?= small
 SPLITS ?= train dev
 MAX_HISTORY ?= 50
+MAX_NEGATIVES ?= 20
 FORCE ?=
 FORCE_ID_MAPS ?=
 REPLAY_SPLIT ?= train
 REPLAY_ARGS ?=
+MIN_COUNT ?= 25
 
 # --- Kafka, for the replay harness ---------------------------------------
 # These targets shell INTO the broker container, so they use the PLAINTEXT
@@ -50,6 +52,11 @@ BASELINE ?= recency
 CANDIDATE ?= decayed_popularity@0.02
 # Seconds: 1h, 6h, 24h, 72h. The 1h default came from the manual, not this corpus.
 WINDOWS ?= 3600 21600 86400 259200
+
+### Model variables
+# The encoder ablation knob. Swap it and rebuild with FORCE=1; 
+ENCODER ?= BAAI/bge-base-en-v1.5
+ENCODE_BATCH ?= 256
 
 
 help:  ## Show this help
@@ -90,7 +97,16 @@ silver:  ## bronze -> silver (rebuild an existing layer: make silver FORCE=1)
 # on disk and needs nothing running.
 gold:  ## silver -> gold feature tables (rebuild an existing layer: make gold FORCE=1)
 	uv run python -m data_pipeline.features.gold --splits $(SPLITS) \
-	    --max-history $(MAX_HISTORY) $(if $(FORCE),--force)
+	    --max-history $(MAX_HISTORY) --max-negatives $(MAX_NEGATIVES) $(if $(FORCE),--force)
+
+# Writes to gold, but NOT part of `make gold`: this needs torch, a downloaded
+# encoder and ideally a GPU, and `make gold` must stay runnable on a machine
+# with none of them. Two variants are cached -- title only, matching what F3's
+# content baseline tokenises, and title+abstract, which the model should use.
+content:  ## catalogue -> gold/item_content, the frozen sentence vectors for G1
+	uv run python -m models.retrieval.content_cache --splits $(SPLITS) \
+	    --model $(ENCODER) --batch-size $(ENCODE_BATCH) \
+	    --min-count $(MIN_COUNT) $(if $(FORCE),--force)
 
 # Reads the series from MinIO, so `make up` first. Note that apply RESOLVES the
 # source paths and bakes them into the registry: running this under a different
