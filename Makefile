@@ -213,6 +213,8 @@ torch-env:  ## Report the torch device this machine will train on
 	    print(describe(select_device()))"
 
 # MLflow must be up (`make up`) unless RECSYS_MLFLOW__ENABLED=false. The arms:
+#   make train TRAIN_ARGS="--geometry-every 1"         # the first-epoch collapse
+#   make train TRAIN_ARGS="--lr 1e-4 --geometry-every 1"
 #   make train TRAIN_ARGS="--no-logq"                  # G2's gate
 #   make train TRAIN_ARGS="--no-use-content"           # ID only
 #   make train TRAIN_ARGS="--no-use-id"                # content only

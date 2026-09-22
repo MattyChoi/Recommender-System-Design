@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import torch
@@ -21,10 +21,10 @@ from common.torch_env import (
 )
 from common.tracking import provenance, require_reachable, track
 from data_pipeline.features.user_history import MAX_HISTORY
-from evaluation.offline.geometry import spread_of
+from evaluation.offline.geometry import _geometry
 from models.classes.batching import Batch
 from models.classes.dataset import ItemTables, SplitTensors
-from models.classes.train import Counters, Hits
+from models.classes.train import Counters, Hits, TrainingRun
 from models.retrieval.dataloader.batching import (
     HISTORY_DROPOUT,
     assemble_pool,
@@ -51,7 +51,10 @@ def _unwrap(model: torch.nn.Module) -> TwoTower:
 def _arm(args: argparse.Namespace) -> str:
     """A short name for what this run is, for the MLflow run and the checkpoint."""
     towers = "both" if args.use_id and args.use_content else "id" if args.use_id else "content"
-    return f"{towers}-{'logq' if args.logq else 'nologq'}-n{args.max_negs}u{args.uniform_negs}"
+    return (
+        f"{towers}-{'logq' if args.logq else 'nologq'}-n{args.max_negs}u{args.uniform_negs}"
+        f"-b{args.batch_size}e{args.epochs}lr{args.lr:g}"
+    )
 
 
 @torch.no_grad()
@@ -155,8 +158,16 @@ def run_epoch(
     device: torch.device,
     n_items: int,
     epoch: int,
+    on_step: Callable[[], None] | None = None,
 ) -> float:
-    """One pass. Returns the mean loss."""
+    """One pass. Returns the mean loss.
+
+    Args:
+        on_step: Called after every optimiser step. A hook rather than a
+            geometry argument so this function keeps knowing only how to train;
+            the caller owns the step counter and decides what is worth
+            measuring and how often.
+    """
     if isinstance(loader.sampler, DistributedSampler):
         loader.sampler.set_epoch(epoch)
 
@@ -166,26 +177,12 @@ def run_epoch(
     for batch in loader:
         total += train_step(model, batch, counters, optimiser, scaler, device, n_items)
         steps += 1
+        if on_step is not None:
+            on_step()
     return float(total / max(steps, 1))
 
 
 def validate(
-    model: torch.nn.Module,
-    loader: DataLoader[Batch],
-    device: torch.device,
-    k: int = 100,
-) -> float:
-    """Recall@k over the full catalogue, aggregated -- the early-stop signal.
-
-    A thin wrapper over :func:`retrieval_hits` rather than its own loop, so the
-    number that selects the checkpoint and the number the per-band report
-    aggregates cannot come apart.
-    """
-    hit = retrieval_hits(model, loader, device, k).hit
-    return float(hit.float().mean()) if len(hit) else 0.0
-
-
-def evaluate_epoch(
     model: torch.nn.Module,
     loader: DataLoader[Batch],
     device: torch.device,
@@ -201,12 +198,22 @@ def evaluate_epoch(
     finally:
         tower.train(was_training)
 
-    spread = spread_of(items)
-    return {
-        f"recall@{k}": float(hit.float().mean()) if len(hit) else 0.0,
-        "item_rank": spread.effective_rank,
-        "item_cosine": spread.cosine,
-    }
+    return {f"recall@{k}": float(hit.float().mean()) if len(hit) else 0.0, **_geometry(items)}
+
+
+def item_geometry(model: torch.nn.Module) -> dict[str, float]:
+    """The item table's spread, with nothing scored against it.
+
+    Cheaper than :func:`validate` by the whole validation pass, which is what
+    makes it affordable every few optimiser steps.
+    """
+    tower = _unwrap(model)
+    was_training = tower.training
+    tower.eval()
+    try:
+        return _geometry(tower.precompute_items()[1:])
+    finally:
+        tower.train(was_training)
 
 
 def fit(
@@ -221,15 +228,30 @@ def fit(
     learning_rate: float = 1e-3,
     patience: int = 2,
     k: int = 100,
-) -> list[dict[str, float]]:
+    geometry_every: int = 0,
+) -> TrainingRun:
     """Train until validation recall stops improving.
 
+    Args:
+        geometry_every: Sample the item geometry every N optimiser steps. 0
+            disables it. Each sample encodes the whole catalogue, so this is
+            for a diagnostic run rather than for every run.
+
     Returns:
-        One record per epoch: ``loss``, ``recall@k`` and the item geometry. The
-        caller logs it; this function does not know about MLflow.
+        A :class:`TrainingRun`. The caller logs it; this function does not know
+        about MLflow.
     """
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scaler = grad_scaler_for(device)
+
+    trace: list[dict[str, float]] = []
+    taken = 0
+
+    def sample() -> None:
+        nonlocal taken
+        taken += 1
+        if geometry_every and taken % geometry_every == 0:
+            trace.append({"step": float(taken), **item_geometry(model)})
 
     history: list[dict[str, float]] = []
     best = -1.0
@@ -238,8 +260,18 @@ def fit(
     stale = 0
 
     for epoch in range(epochs):
-        loss = run_epoch(model, train_loader, counters, optimiser, scaler, device, n_items, epoch)
-        measured = evaluate_epoch(model, val_loader, device, k)
+        loss = run_epoch(
+            model,
+            train_loader,
+            counters,
+            optimiser,
+            scaler,
+            device,
+            n_items,
+            epoch,
+            on_step=sample if geometry_every else None,
+        )
+        measured = validate(model, val_loader, device, k)
         recall = measured[f"recall@{k}"]
         history.append({"epoch": float(epoch), "loss": loss, **measured})
 
@@ -259,7 +291,7 @@ def fit(
     if best_model is not None and best_counters is not None:
         _unwrap(model).load_state_dict(best_model)
         counters.load_state_dict(best_counters)
-    return history
+    return TrainingRun(history=history, trace=trace)
 
 
 def _fit_locally(
@@ -271,7 +303,7 @@ def _fit_locally(
     device: torch.device,
     marks: Mapping[str, str],
     run_name: str,
-) -> list[dict[str, float]]:
+) -> TrainingRun:
     """Build everything, train, and record the run."""
     n_items = items.content.shape[0] - 1
     model = TwoTower(
@@ -304,7 +336,7 @@ def _fit_locally(
     )
 
     with track(settings, run_name, {**marks, **vars(args)}) as run:
-        history = fit(
+        result = fit(
             model,
             train_loader,
             val_loader,
@@ -315,11 +347,17 @@ def _fit_locally(
             learning_rate=args.lr,
             patience=args.patience,
             k=args.k,
+            geometry_every=args.geometry_every,
         )
-        for record in history:
+        for record in result.history:
             run.log_metrics(
                 {name: value for name, value in record.items() if name != "epoch"},
                 step=int(record["epoch"]),
+            )
+        for record in result.trace:
+            run.log_metrics(
+                {f"step_{name}": value for name, value in record.items() if name != "step"},
+                step=int(record["step"]),
             )
 
         destination = args.checkpoint or Path(settings.paths.gold).parent / "checkpoints" / (
@@ -334,7 +372,7 @@ def _fit_locally(
         run.log_artifact(str(destination))
         print(f"  checkpoint -> {destination}")
 
-    return history
+    return result
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -365,6 +403,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-use-id", dest="use_id", action="store_false")
     parser.add_argument("--no-use-content", dest="use_content", action="store_false")
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--geometry-every",
+        type=int,
+        default=0,
+        help=("Sample item_rank every N optimiser steps. 0 disables."),
+    )
     return parser
 
 
@@ -401,10 +445,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"  {len(train_split.item_ids):,} train rows, {len(val_split.item_ids):,} validation")
 
-    history = _fit_locally(args, settings, items, train_split, val_split, device, marks, run_name)
-    best = max(row[f"recall@{args.k}"] for row in history)
-    print(f"  best recall@{args.k} = {best:.4f} over {len(history)} epochs")
-    print("  item rank: " + " ".join(f"{row['item_rank']:.1f}" for row in history))
+    result = _fit_locally(args, settings, items, train_split, val_split, device, marks, run_name)
+    best = max(row[f"recall@{args.k}"] for row in result.history)
+    print(f"  best recall@{args.k} = {best:.4f} over {len(result.history)} epochs")
+    print("  item rank by epoch: " + " ".join(f"{row['item_rank']:.1f}" for row in result.history))
+    if result.trace:
+        print(
+            "  item rank by step : "
+            + " ".join(f"{row['item_rank']:.1f}" for row in result.trace[:40])
+        )
     return 0
 
 

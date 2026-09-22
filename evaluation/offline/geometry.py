@@ -82,6 +82,11 @@ def spread_of(embeddings: torch.Tensor, sample: int = 2000, seed: int = 0) -> Sp
     )
 
 
+def _geometry(items: torch.Tensor) -> dict[str, float]:
+    spread = spread_of(items)
+    return {"item_rank": spread.effective_rank, "item_cosine": spread.cosine}
+
+
 def render_spread(name: str, spread: Spread) -> None:
     print(f"{name}  ({spread.rows:,} rows)")
     print(f"  ||mean embedding||    : {spread.centroid:.4f}   (1.0 = every row identical)")

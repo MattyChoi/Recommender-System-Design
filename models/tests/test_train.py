@@ -34,8 +34,8 @@ from models.retrieval.sampling import StreamingLogQ
 from models.retrieval.train import (
     _arm,
     _parser,
-    evaluate_epoch,
     fit,
+    retrieval_hits,
     run_epoch,
     train_step,
     validate,
@@ -195,7 +195,7 @@ class TestValidation:
         with deterministic(0):
             got = validate(_model(), _loader(split, device, training=False), device, k=5)
 
-        assert 0.0 <= got <= 1.0
+        assert 0.0 <= got["recall@5"] <= 1.0
 
     def test_a_full_k_finds_everything(self, split: SplitTensors, device: torch.device) -> None:
         """k = the whole catalogue must recall every held-out click. If it does
@@ -204,7 +204,7 @@ class TestValidation:
         with deterministic(0):
             got = validate(_model(), _loader(split, device, training=False), device, k=N_ITEMS)
 
-        assert got == 1.0
+        assert got[f"recall@{N_ITEMS}"] == 1.0
 
     def test_it_leaves_the_model_in_the_mode_it_found(
         self, split: SplitTensors, device: torch.device
@@ -218,7 +218,7 @@ class TestValidation:
 
         assert model.training
 
-    def test_the_epoch_record_carries_geometry_beside_recall(
+    def test_it_carries_geometry_beside_recall(
         self, split: SplitTensors, device: torch.device
     ) -> None:
         """Recall cannot distinguish a retriever that spans the catalogue from
@@ -226,34 +226,25 @@ class TestValidation:
         trained on this project before anyone noticed a 774-item universe, which
         is the argument for measuring it every epoch rather than in a probe."""
         with deterministic(0):
-            got = evaluate_epoch(_model(), _loader(split, device, training=False), device, k=5)
+            got = validate(_model(), _loader(split, device, training=False), device, k=5)
 
         assert set(got) == {"recall@5", "item_rank", "item_cosine"}
         assert 1.0 <= got["item_rank"] <= 8.0  # out_dim is 8 in this fixture
         assert -1.0 <= got["item_cosine"] <= 1.0
 
-    def test_the_epoch_record_and_validate_agree(
+    def test_its_recall_is_the_mean_of_the_per_row_hits(
         self, split: SplitTensors, device: torch.device
     ) -> None:
-        """One catalogue encoding feeds the hits and the geometry, so the two
-        numbers cannot end up describing different item tables."""
+        """One catalogue encoding feeds the hits and the geometry. Encoding it
+        twice would let the reported recall and the reported rank describe two
+        different item tables, and nothing in the output would say so."""
         with deterministic(0):
             loader = _loader(split, device, training=False)
             model = _model()
-            got = evaluate_epoch(model, loader, device, k=5)
-            expected = validate(model, loader, device, k=5)
+            got = validate(model, loader, device, k=5)
+            rows = retrieval_hits(model, loader, device, k=5).hit
 
-        assert got["recall@5"] == pytest.approx(expected)
-
-    def test_the_epoch_record_leaves_the_model_training(
-        self, split: SplitTensors, device: torch.device
-    ) -> None:
-        with deterministic(0):
-            model = _model()
-            model.train()
-            evaluate_epoch(model, _loader(split, device, training=False), device, k=5)
-
-        assert model.training
+        assert got["recall@5"] == pytest.approx(float(rows.float().mean()))
 
     def test_dropout_is_a_property_of_the_loader_not_of_the_caller(
         self, split: SplitTensors, device: torch.device
@@ -337,17 +328,35 @@ class TestTheCommandLine:
     @pytest.mark.parametrize(
         ("flags", "expected"),
         [
-            ([], "both-logq-n4u0"),
-            (["--no-logq"], "both-nologq-n4u0"),
-            (["--no-use-content"], "id-logq-n4u0"),
-            (["--no-use-id"], "content-logq-n4u0"),
-            (["--max-negs", "0", "--uniform-negs", "4"], "both-logq-n0u4"),
+            ([], "both-logq-n4u0-b8192e10lr0.001"),
+            (["--no-logq"], "both-nologq-n4u0-b8192e10lr0.001"),
+            (["--no-use-content"], "id-logq-n4u0-b8192e10lr0.001"),
+            (["--no-use-id"], "content-logq-n4u0-b8192e10lr0.001"),
+            (["--max-negs", "0", "--uniform-negs", "4"], "both-logq-n0u4-b8192e10lr0.001"),
+            (["--lr", "1e-4"], "both-logq-n4u0-b8192e10lr0.0001"),
+            (["--batch-size", "2048", "--epochs", "40"], "both-logq-n4u0-b2048e40lr0.001"),
         ],
     )
     def test_each_arm_gets_a_distinct_name(self, flags: list[str], expected: str) -> None:
         """The run name reaches MLflow and the checkpoint filename, so two arms
-        sharing one would overwrite each other's artifact."""
+        sharing one would overwrite each other's artifact.
+
+        The budget is in the name, not only in ``config_hash``, because the hash
+        digests the WHOLE settings object: an unrelated edit to conf/config.yml
+        renames every checkpoint and the mapping back to a run is lost. Four of
+        them became unidentifiable that way.
+        """
         assert _arm(_parser().parse_args(flags)) == expected
+
+    def test_the_name_is_safe_to_put_in_a_filename(self) -> None:
+        """It becomes a path. A backslash line-continuation inside the f-string
+        keeps the next line's indentation, which is how eight spaces got into
+        this name once already -- and a space in a checkpoint path survives
+        quietly until something shells out."""
+        name = _arm(_parser().parse_args([]))
+
+        assert name == name.strip()
+        assert not any(character.isspace() for character in name)
 
 
 class TestFit:
@@ -355,7 +364,7 @@ class TestFit:
         self, split: SplitTensors, device: torch.device
     ) -> None:
         with deterministic(0):
-            history = fit(
+            result = fit(
                 _model(),
                 _loader(split, device, training=True),
                 _loader(split, device, training=False),
@@ -367,9 +376,59 @@ class TestFit:
                 k=5,
             )
 
-        assert len(history) == 3
-        assert all(math.isfinite(row["loss"]) for row in history)
-        assert all(0.0 <= row["recall@5"] <= 1.0 for row in history)
+        assert len(result.history) == 3
+        assert all(math.isfinite(row["loss"]) for row in result.history)
+        assert all(0.0 <= row["recall@5"] <= 1.0 for row in result.history)
+        assert result.trace == []  # geometry_every defaults off
+
+    def test_the_step_trace_is_off_unless_asked_for(
+        self, split: SplitTensors, device: torch.device
+    ) -> None:
+        """Each sample encodes the whole catalogue. Free on this fixture, minutes
+        on 65,238 articles, so it is opt-in rather than always-on."""
+        with deterministic(0):
+            sampled = fit(
+                _model(),
+                _loader(split, device, training=True),
+                _loader(split, device, training=False),
+                _counters(),
+                device,
+                N_ITEMS,
+                epochs=2,
+                patience=99,
+                k=5,
+                geometry_every=2,
+            )
+
+        # ROWS // BATCH steps per epoch, 2 epochs, sampled every 2nd.
+        assert len(sampled.trace) == (ROWS // BATCH) * 2 // 2
+        assert [row["step"] for row in sampled.trace] == [2.0, 4.0, 6.0, 8.0]
+        assert all("item_rank" in row for row in sampled.trace)
+
+    def test_the_step_counter_does_not_restart_each_epoch(
+        self, split: SplitTensors, device: torch.device
+    ) -> None:
+        """The collapse happens inside the FIRST epoch, so a counter that reset
+        per epoch would stack every epoch's curve on top of the one window the
+        trace exists to resolve."""
+        with deterministic(0):
+            sampled = fit(
+                _model(),
+                _loader(split, device, training=True),
+                _loader(split, device, training=False),
+                _counters(),
+                device,
+                N_ITEMS,
+                epochs=3,
+                patience=99,
+                k=5,
+                geometry_every=1,
+            )
+
+        steps = [row["step"] for row in sampled.trace]
+
+        assert steps == sorted(steps)
+        assert steps[-1] == float(len(steps))
 
     def test_it_stops_when_recall_stops_improving(
         self, split: SplitTensors, device: torch.device
@@ -377,7 +436,7 @@ class TestFit:
         """Early stopping is on RECALL, not loss: loss keeps falling well past
         the point retrieval quality stops."""
         with deterministic(0):
-            history = fit(
+            result = fit(
                 _model(),
                 _loader(split, device, training=True),
                 _loader(split, device, training=False),
@@ -389,7 +448,7 @@ class TestFit:
                 k=5,
             )
 
-        assert len(history) < 50
+        assert len(result.history) < 50
 
     def test_an_epoch_runs_without_a_distributed_sampler(
         self, split: SplitTensors, device: torch.device

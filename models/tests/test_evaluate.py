@@ -38,7 +38,7 @@ from models.retrieval.evaluate import (
     render,
     summarise,
 )
-from models.retrieval.train import retrieval_hits, validate
+from models.retrieval.train import retrieval_hits
 from models.retrieval.two_tower import TwoTower
 
 N_ITEMS = 12
@@ -288,16 +288,9 @@ class TestPerRowHits:
         assert torch.equal(hits.item_ids, split.item_ids)
         assert torch.equal(hits.user_ids, split.user_ids)
 
-    def test_the_aggregate_is_the_mean_of_the_rows(self, split: SplitTensors) -> None:
-        """validate is a wrapper over retrieval_hits, so this documents the
-        contract rather than testing two implementations against each other."""
-        device = select_device("cpu")
-        model = _model(_items()).to(device)
-        loader = make_loader(split, N_ITEMS, 5, device, training=False, history_dropout=0.0)
-
-        hits = retrieval_hits(model, loader, device, k=3)
-
-        assert validate(model, loader, device, k=3) == pytest.approx(float(hits.hit.float().mean()))
+    # "validate's recall is the mean of these rows" lives in test_train.py, with
+    # the function it constrains. Asserting it here as well would be one contract
+    # pinned in two files, which drift independently.
 
     def test_scoring_leaves_the_model_in_training_mode(self, split: SplitTensors) -> None:
         """Dropout left off improves the training loss, so the damage reads as

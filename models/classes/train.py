@@ -91,6 +91,24 @@ class Counters:
 
 
 @dataclass(frozen=True)
+class TrainingRun:
+    """What one call to ``fit`` produced, on two different clocks.
+
+    Attributes:
+        history: One record per EPOCH -- loss, recall, and the item geometry.
+            This is what selects the checkpoint and what the run reports.
+        trace: Item geometry every N OPTIMISER STEPS, empty unless asked for.
+            Separate from ``history`` because the interesting window turned out
+            to be inside the first epoch: an untrained item tower carries an
+            effective rank of 53 of 128 and the first 26 steps take it to 9.8,
+            so a per-epoch series only ever samples the aftermath.
+    """
+
+    history: list[dict[str, float]]
+    trace: list[dict[str, float]]
+
+
+@dataclass(frozen=True)
 class Hits:
     """One row per scored request, on CPU.
 
