@@ -521,6 +521,92 @@ rules that out. Revisit after Part K.
 
 ---
 
+## The ANN index (Part J)
+
+Three index types over the item tower's 65,238 x 128 output: exact
+(`IndexFlatIP`), a navigable graph (`IndexHNSWFlat`) and a clustered, compressed
+index (`IndexIVFPQ`). Full sweep, latency and memory in
+[benchmarks.md](benchmarks.md#the-ann-index-part-j); this page is what it cost
+in clicks.
+
+### Two different things are called Recall@100
+
+An ANN benchmark conventionally reports **overlap with exact search** and names
+it recall. That is a property of the index, and on its own it cannot say whether
+the approximation cost anything: the candidates an index drops may be ones
+nobody was going to click. So both are measured, under names that cannot be
+confused -- `agreement` for the overlap, `recall` for the share of clicked
+articles found.
+
+The gap is not small. On one checkpoint, HNSW at `efSearch=64` lost **5.0% of
+exact search's candidates** and **0.8% of the clicks**.
+
+### The exact index is not the bottleneck it is assumed to be
+
+| | p50 ms | p99 ms | QPS | MB |
+| --- | ---: | ---: | ---: | ---: |
+| exact | 0.35-0.41 | 0.51-0.63 | ~27,000 | 33.4 |
+| HNSW `efSearch=128` | 0.036 | 0.055-0.068 | ~280,000 | 51.2 |
+| IVF-PQ exhaustive | 0.86 | 0.95-0.99 | ~10,000 | 3.3 |
+
+**Brute force costs 0.6 ms at p99 against a 90 ms budget**, and it is linear in
+catalogue size at ~5.6 ns per item per query -- so on a 10 ms retrieval budget it
+stays viable to about **1.8 million articles**, 27x this corpus. The premise ANN
+search exists to answer does not hold here yet. HNSW buys 10x the throughput for
+**more** memory than storing the vectors exactly; IVF-PQ buys 10x less memory for
+no throughput at all.
+
+### Two seeds, and the second one retracts a finding
+
+The first checkpoint measured showed the **compressed** index beating exact
+search at finding clicks -- disagreeing with it about 9% of its candidates and
+recalling more. A dose-response test supported it: halving the compression
+halved the gain. It did not survive a second checkpoint.
+
+| | seed A | seed B |
+| --- | ---: | ---: |
+| exact, Recall@100 | 0.3776 | 0.3668 |
+| IVF-PQ exhaustive, agreement | 0.9099 | 0.9098 |
+| IVF-PQ exhaustive, **vs exact** | **+0.0029** [+0.0007, +0.0051] * | **-0.0021** [-0.0045, +0.0005] |
+| HNSW `efSearch=128`, agreement | 0.9866 | 0.9876 |
+| HNSW `efSearch=128`, **vs exact** | -0.0005 [-0.0015, +0.0005] | **-0.0034** [-0.0047, -0.0021] * |
+| HNSW `efSearch=512`, **vs exact** | -0.0000 [-0.0001, +0.0000] | **-0.0013** [-0.0019, -0.0006] * |
+
+**The quantisation gain is withdrawn.** Significant and positive on one
+checkpoint, insignificant and negative on the next. Nothing differed but the
+training seed. The mechanism proposed for it -- that compression mostly destroys
+the ~119 dimensions the item table does not use, given its effective rank of 8.8
+of 128 -- remains plausible and is now untested rather than supported.
+
+### What the second seed did establish
+
+**Agreement is reproducible; its translation into clicks is not.** Agreement
+moved by less than 0.001 between checkpoints at every setting. The click cost of
+the same agreement moved by 7x for HNSW at `efSearch=128` (-0.0005 to -0.0034)
+and reversed sign for IVF-PQ. An index's fidelity to exact search is a property
+of the geometry it was built over; what that fidelity is worth depends on where
+the clicked items happen to sit in that geometry, and the seed moves them.
+
+**That is an operational finding, not a statistical footnote.** `efSearch=128`
+is indistinguishable from exact on seed A and significantly worse on seed B --
+so a parameter tuned once against one checkpoint can silently degrade when the
+model is retrained. Anything rebuilding an index on a schedule must either
+re-tune per rebuild or use an index with nothing to tune.
+
+### The decision
+
+**Ship exact search.** 33.4 MB, 0.6 ms p99, no build step, no training step, no
+parameters to re-tune per rebuild, and exact by construction. Revisit at roughly
+**1.8 million articles**, where a 10 ms retrieval budget stops covering a linear
+scan.
+
+The machinery is built and measured anyway, which is what makes the
+recommendation a result rather than an omission -- and it is the same shape of
+answer the sharding work reached: the crossover is stated, and this corpus is a
+long way below it.
+
+---
+
 ## Seed variance, and what it costs this page
 
 Measured in Part H, and it should have been measured in Part G.

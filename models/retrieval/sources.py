@@ -168,15 +168,32 @@ def two_tower_source(
     """
     with torch.no_grad():
         items = tower.precompute_items()[1:]
-        out = []
-        for start, end in _chunks(len(split.item_ids)):
-            user = tower.encode_user(
-                split.user_feats[start:end].to(device),
-                split.history_ids[start:end].to(device),
-                split.history_mask[start:end].to(device),
-            )
-            out.append(top_k_from_scores(user @ items.T, k).cpu())
+        users = encode_users(tower, split, device)
+        out = [
+            top_k_from_scores(users[start:end].to(device) @ items.T, k).cpu()
+            for start, end in _chunks(len(users))
+        ]
     return torch.cat(out)
+
+
+def encode_users(tower: TwoTower, split: SplitTensors, device: torch.device) -> torch.Tensor:
+    """``[R, out_dim]`` unit-norm request vectors, one per row of the split.
+
+    Split out because the ANN benchmark needs the same queries the exact search
+    uses. Encoding them twice from two expressions is how an index gets measured
+    against a slightly different set of requests than the thing it approximates.
+    """
+    with torch.no_grad():
+        return torch.cat(
+            [
+                tower.encode_user(
+                    split.user_feats[start:end].to(device),
+                    split.history_ids[start:end].to(device),
+                    split.history_mask[start:end].to(device),
+                ).cpu()
+                for start, end in _chunks(len(split.item_ids))
+            ]
+        )
 
 
 def trending_source(prior: torch.Tensor, rows: int, k: int = DEFAULT_K) -> torch.Tensor:

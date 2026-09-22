@@ -31,6 +31,9 @@ dependencies = [
 
 [project.optional-dependencies]
 sharded = ["torchrec==1.8.0", "fbgemm-gpu==1.8.0"]
+# Airflow drags in ~100 packages and a web stack. It is needed to PARSE and test
+# the index DAG, not to train or to serve, so it stays out of the base install.
+orchestration = ["apache-airflow>=3.0"]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]

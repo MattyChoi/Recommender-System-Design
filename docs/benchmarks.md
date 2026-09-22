@@ -316,9 +316,103 @@ The user-encode figures above are **one component** of that budget, not a draft
 of it. They exclude the feature fetch, the ANN search and the network, which are
 where a 90 ms budget is actually spent.
 
+---
+
+# The ANN index (Part J)
+
+**Hardware: RTX 4090 host, faiss-cpu 1.15.1 · 65,238 items x 128d · 19,006
+queries · nlist=1021, m=32, nbits=8 · HNSW M=32, efConstruction=200.**
+
+Everything here is **measured**: real indexes, real searches, real clocks. The
+quality side -- and one retracted finding -- is in
+[retrieval.md](retrieval.md#the-ann-index-part-j).
+
+## The sweep
+
+Seed A, checkpoint `both-logq-n4u0-...-ab7e1d500b9bf792`. `agreement` is overlap
+with exact search's top 100; `recall` is the share of clicked articles found.
+
+| index | param | agreement | recall@100 | vs exact | p50 ms | p99 ms | QPS | MB |
+| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| flat | exact | 1.0000 | 0.3776 | -- | 0.354 | 0.511 | 27,404 | 33.4 |
+| hnsw | efSearch=16 | 0.6396 | 0.3179 | -0.0600 * | 0.013 | 0.028 | 1,041,489 | 51.2 |
+| hnsw | efSearch=32 | 0.8233 | 0.3602 | -0.0183 * | 0.018 | 0.035 | 695,961 | 51.2 |
+| hnsw | efSearch=64 | 0.9499 | 0.3744 | -0.0033 * | 0.024 | 0.043 | 467,588 | 51.2 |
+| hnsw | efSearch=128 | 0.9866 | 0.3769 | -0.0005 | 0.036 | 0.055 | 319,588 | 51.2 |
+| hnsw | efSearch=256 | 0.9960 | 0.3774 | -0.0004 | 0.072 | 0.098 | 136,265 | 51.2 |
+| hnsw | efSearch=512 | 0.9997 | 0.3776 | -0.0000 | 0.162 | 0.210 | 63,395 | 51.2 |
+| ivfpq | nprobe=1 | 0.1653 | 0.1776 | -0.1971 * | 0.012 | 0.023 | 34,291 | 3.3 |
+| ivfpq | nprobe=4 | 0.5522 | 0.3235 | -0.0525 * | 0.017 | 0.030 | 33,202 | 3.3 |
+| ivfpq | nprobe=16 | 0.8901 | 0.3772 | -0.0002 | 0.027 | 0.040 | 34,176 | 3.3 |
+| ivfpq | nprobe=32 | 0.9085 | 0.3782 | +0.0008 | 0.039 | 0.058 | 35,023 | 3.3 |
+| ivfpq | nprobe=64 | 0.9098 | 0.3792 | +0.0021 | 0.063 | 0.100 | 32,134 | 3.3 |
+| ivfpq | nprobe=128 | 0.9099 | 0.3797 | +0.0028 * | 0.109 | 0.137 | 40,741 | 3.3 |
+| ivfpq | nprobe=1021 | 0.9099 | 0.3798 | +0.0029 * | 0.863 | 0.987 | 10,009 | 3.3 |
+
+`nprobe=1021` searches every cell, so what remains is quantisation and nothing
+else. Without that row a difference from exact search cannot be told apart from
+having looked at only part of the catalogue.
+
+⚠️ **The positive rows do not reproduce on a second checkpoint** -- see
+[retrieval.md](retrieval.md#two-seeds-and-the-second-one-retracts-a-finding).
+They are left in because the retraction is the result.
+
+## What the three indexes actually trade
+
+| | wins on | costs | measured |
+| --- | --- | --- | --- |
+| flat | exact, no parameters, no build | linear in catalogue size | 33.4 MB, 0.51 ms p99 |
+| HNSW | **latency**, ~10x QPS | **more** memory than the vectors | 51.2 MB |
+| IVF-PQ | **memory**, 10x smaller | lossy, trained, no speed here | 3.3 MB, ~33k QPS flat across `nprobe` |
+
+**IVF-PQ is not faster than brute force on this corpus.** Skipping 98% of the
+catalogue does not pay when the catalogue is small enough that the lookup-table
+overhead eats the saving. Only HNSW's graph walk converts to speed at this size.
+
+**HNSW costs more memory than storing the vectors exactly.** `IndexHNSWFlat`
+keeps the vectors intact and adds the graph, so 33.4 MB becomes 51.2 MB. It
+approximates the *search*, not the data, which is why cranking `efSearch`
+converges on exact answers.
+
+## When exact search stops being enough
+
+Brute force is one pass over the table: **5.6 ns per item per query** from the
+0.354 ms p50 over 65,238 items.
+
+| retrieval budget | items a linear scan covers |
+| ---: | ---: |
+| 1 ms | ~180,000 |
+| 10 ms | **~1,800,000** |
+| 50 ms | ~9,000,000 |
+
+MIND-small sits at 65,238, **27x below the 10 ms line**. The 2M-item design
+target is roughly at it. The same arithmetic as the sharding crossover, and the
+same conclusion: build it, measure it, and state where it would start to matter.
+
+## Two runs, and the parameter stability problem
+
+Seed B, checkpoint `...-07934b9e86dd5c4c`, same everything else:
+
+| | seed A | seed B | moved by |
+| --- | ---: | ---: | ---: |
+| flat recall@100 | 0.3776 | 0.3668 | 0.0108 |
+| hnsw ef=128 agreement | 0.9866 | 0.9876 | 0.0010 |
+| hnsw ef=128 **vs exact** | -0.0005 | **-0.0034** * | **7x** |
+| ivfpq exhaustive agreement | 0.9099 | 0.9098 | 0.0001 |
+| ivfpq exhaustive **vs exact** | **+0.0029** * | **-0.0021** | sign |
+
+**Agreement is stable across checkpoints to within 0.001. What that agreement
+costs in clicks is not.** So an `efSearch` chosen against one checkpoint can be
+indistinguishable from exact on that one and significantly worse on the next.
+An index rebuilt on a schedule against a retrained model must either re-tune its
+parameters per rebuild or use an index that has none.
+
+That is the operational argument for exact search, and it is separate from the
+latency one.
+
 ## Index: recall@k vs. QPS
 
-`TODO` -- Part J.
+Measured above.
 
 ## Diversity/relevance tradeoff
 
