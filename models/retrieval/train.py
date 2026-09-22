@@ -229,6 +229,7 @@ def fit(
     patience: int = 2,
     k: int = 100,
     geometry_every: int = 0,
+    on_epoch: Callable[[dict[str, float]], None] | None = None,
 ) -> TrainingRun:
     """Train until validation recall stops improving.
 
@@ -236,6 +237,7 @@ def fit(
         geometry_every: Sample the item geometry every N optimiser steps. 0
             disables it. Each sample encodes the whole catalogue, so this is
             for a diagnostic run rather than for every run.
+        on_epoch: Called with each epoch's record as it is produced.
 
     Returns:
         A :class:`TrainingRun`. The caller logs it; this function does not know
@@ -273,7 +275,10 @@ def fit(
         )
         measured = validate(model, val_loader, device, k)
         recall = measured[f"recall@{k}"]
-        history.append({"epoch": float(epoch), "loss": loss, **measured})
+        record = {"epoch": float(epoch), "loss": loss, **measured}
+        history.append(record)
+        if on_epoch is not None:
+            on_epoch(record)
 
         if recall > best:
             best, stale = recall, 0
@@ -378,6 +383,12 @@ def _fit_locally(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train the two-tower retriever.")
     parser.add_argument("--workers", type=int, default=1, help="1 runs in-process, no Ray.")
+    parser.add_argument(
+        "--gpu-workers",
+        action="store_true",
+        help="Give each Ray worker a GPU. NCCL cannot put two ranks on one device, "
+        "so on a single-GPU box --workers 2 --gpu-workers will not start.",
+    )
     parser.add_argument("--batch-size", type=int, default=8192)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -399,6 +410,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-use-content", dest="use_content", action="store_false")
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument(
+        "--limit-rows",
+        type=int,
+        default=0,
+        help="SMOKE TEST ONLY: keep the first N training rows. Any recall from a "
+        "limited run is meaningless and must never be quoted. 0 disables.",
+    )
+    parser.add_argument(
         "--geometry-every",
         type=int,
         default=0,
@@ -411,8 +429,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point."""
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.workers != 1:
-        parser.error("--workers > 1 needs the Ray launcher, which is not built yet")
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
 
     settings = load_settings()
     device = select_device()
@@ -421,6 +439,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     tables_read = ["training_examples", "user_history", "impression_negatives", "item_content"]
     marks = provenance(settings, vars(args), tables_read)
     run_name = f"{_arm(args)}-{marks['config_hash']}"
+    if args.workers > 1:
+        run_name = f"{run_name}-w{args.workers}"
+    if args.limit_rows:
+        run_name = f"{run_name}-limit{args.limit_rows}"
     print(f"{run_name}: {describe(device)}")
     if marks["git_dirty"] == "true":
         print("  WARNING: the working tree is dirty; this run's git_sha does not describe it")
@@ -438,12 +460,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         spark.stop()
 
+    if args.limit_rows:
+        # BOTH splits. Limiting only training leaves validation scoring every
+        # held-out row against the whole catalogue -- a [batch, 65238] temporary
+        # per step, on every rank, which is the expensive half and was the half
+        # the first version of this flag did not touch.
+        train_split = train_split.head(args.limit_rows)
+        val_split = val_split.head(args.limit_rows)
+        print(f"  ** --limit-rows {args.limit_rows}: this run's numbers are NOT a result **")
+
     print(f"  {len(train_split.item_ids):,} train rows, {len(val_split.item_ids):,} validation")
 
-    result = _fit_locally(args, settings, items, train_split, val_split, device, marks, run_name)
+    if args.workers > 1:
+        from models.retrieval.launcher import fit_distributed
+
+        result = fit_distributed(args, settings, items, train_split, val_split, marks, run_name)
+    else:
+        result = _fit_locally(
+            args, settings, items, train_split, val_split, device, marks, run_name
+        )
+
+    if not result.history:
+        print("  no epochs recorded")
+        return 1
+
     best = max(row[f"recall@{args.k}"] for row in result.history)
     print(f"  best recall@{args.k} = {best:.4f} over {len(result.history)} epochs")
-    print("  item rank by epoch: " + " ".join(f"{row['item_rank']:.1f}" for row in result.history))
+    ranks = [row["item_rank"] for row in result.history if "item_rank" in row]
+    print("  item rank by epoch: " + " ".join(f"{value:.1f}" for value in ranks))
     if result.trace:
         print(
             "  item rank by step : "

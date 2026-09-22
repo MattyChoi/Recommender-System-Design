@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 
 import torch
 
@@ -56,3 +56,23 @@ class SplitTensors:
     user_ids: torch.Tensor
     neg_ids: torch.Tensor
     neg_mask: torch.Tensor
+
+    def head(self, rows: int) -> SplitTensors:
+        """The first ``rows`` requests, every field cut together.
+
+        A PREFIX, not a sample. These rows arrive in time order, so a prefix is
+        a shorter window ending earlier -- coherent, if not the window anything
+        was measured on. A random subsample would instead redraw the popularity
+        distribution the logQ counters estimate, which is the one axis a smoke
+        test must not quietly change.
+
+        Cutting every field by iterating ``fields()`` rather than naming eight
+        of them: a ninth column added later is included automatically, where a
+        hand-written list would silently leave it full-length and misaligned
+        against the rest.
+        """
+        if rows >= len(self.item_ids):
+            return self
+        return replace(
+            self, **{field.name: getattr(self, field.name)[:rows] for field in fields(self)}
+        )

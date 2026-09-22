@@ -108,6 +108,11 @@ def distributed_backend(device: torch.device) -> str:
     return "nccl" if device.type == "cuda" else "gloo"
 
 
+def backend_for_accelerator(use_accelerator: bool) -> str:
+    """The collective backend, chosen from a launcher's GPU flag."""
+    return "nccl" if use_accelerator else "gloo"
+
+
 def dataloader_kwargs(device: torch.device) -> dict[str, Any]:
     """DataLoader options that depend on the device rather than on the task.
 

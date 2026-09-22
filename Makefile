@@ -1,12 +1,17 @@
 .PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        bands ablation shard-plan hash-bench index serve bench demo lint fmt types test check
+        bands ablation shard-plan hash-bench train-dist index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
 
 -include .env
 export UV_ENV_FILE=.env
+
+# `uv run` for everything EXCEPT the Ray driver -- see train-dist.
+PYTHON ?= uv run python
+DOTENV ?=
+SOURCE_DOTENV = set -a; [ -f .env ] && . ./.env; set +a;
 
 MIND_SIZE ?= small
 SPLITS ?= train dev
@@ -225,8 +230,14 @@ torch-env:  ## Report the torch device this machine will train on
 #   make train                                                        # slate negatives
 # ex: `make train TRAIN_ARGS="--batch-size 2048 --epochs 40 --patience 5"`
 train:  ## gold + item_content -> a trained two-tower, logged to MLflow
-	uv run python -m models.retrieval.train --epochs $(EPOCHS) \
+	$(DOTENV) $(PYTHON) -m models.retrieval.train --epochs $(EPOCHS) \
 	    --batch-size $(BATCH) --lr $(LR) $(TRAIN_ARGS)
+
+# Distributed training under Ray (see the note above)
+#   make train-dist TRAIN_ARGS="--workers 2 --limit-rows 20000 --epochs 1"
+train-dist: PYTHON = .venv/bin/python
+train-dist: DOTENV = $(SOURCE_DOTENV)
+train-dist: train
 
 # HOLDOUT must match the run that wrote CHECKPOINT
 CHECKPOINT ?=
