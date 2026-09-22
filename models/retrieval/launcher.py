@@ -21,7 +21,7 @@ from models.classes.dataset import ItemTables, SplitTensors
 from models.classes.train import Counters, TrainingRun
 from models.retrieval.dataloader.batching import make_loader
 from models.retrieval.sampling import StreamingLogQ
-from models.retrieval.train import _unwrap, fit
+from models.retrieval.train import _experiment, _unwrap, fit
 from models.retrieval.two_tower import TwoTower
 
 
@@ -131,7 +131,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     # gives one training job N MLflow runs, which is the exact provenance lie
     # `--workers` was refused over before this module existed.
     params = {**marks, **config["args"], "workers": context.get_world_size()}
-    with track(settings, run_name, params) as run:
+    with track(settings, run_name, params, experiment=_experiment(args)) as run:
         result = train(run)
         for record in result.trace:
             run.log_metrics(

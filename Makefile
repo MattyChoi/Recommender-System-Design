@@ -1,6 +1,6 @@
-.PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
+.PHONY: proto help up down clean raw bronze silver gold content retrieval feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        bands ablation shard-plan hash-bench train-dist sources blend index serve bench demo lint fmt types test check
+        bands ablation shard-plan hash-bench retrieval-dist sources blend rank rank-neural rank-dist index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -8,7 +8,7 @@
 -include .env
 export UV_ENV_FILE=.env
 
-# `uv run` for everything EXCEPT the Ray driver -- see train-dist.
+# `uv run` for everything EXCEPT the Ray drivers -- see retrieval-dist.
 PYTHON ?= uv run python
 DOTENV ?=
 SOURCE_DOTENV = set -a; [ -f .env ] && . ./.env; set +a;
@@ -218,26 +218,26 @@ torch-env:  ## Report the torch device this machine will train on
 	    print(describe(select_device()))"
 
 # MLflow must be up (`make up`) unless RECSYS_MLFLOW__ENABLED=false. The arms:
-#   make train TRAIN_ARGS="--geometry-every 1"         # the first-epoch collapse
-#   make train TRAIN_ARGS="--lr 1e-4 --geometry-every 1"
-#   make train TRAIN_ARGS="--no-logq"                  # G2's gate
-#   make train TRAIN_ARGS="--no-use-content"           # ID only
-#   make train TRAIN_ARGS="--no-use-id"                # content only
+#   make retrieval TRAIN_ARGS="--geometry-every 1"     # the first-epoch collapse
+#   make retrieval TRAIN_ARGS="--lr 1e-4 --geometry-every 1"
+#   make retrieval TRAIN_ARGS="--no-logq"              # G2's gate
+#   make retrieval TRAIN_ARGS="--no-use-content"       # ID only
+#   make retrieval TRAIN_ARGS="--no-use-id"            # content only
 # G3's five-row table, rows 1-3 and 5 (row 4 is deferred -- see the notes):
-#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 0 --no-logq"   # in-batch only
-#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 0"             # + logQ
-#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 4"             # + uniform
-#   make train                                                        # slate negatives
-# ex: `make train TRAIN_ARGS="--batch-size 2048 --epochs 40 --patience 5"`
-train:  ## gold + item_content -> a trained two-tower, logged to MLflow
+#   make retrieval TRAIN_ARGS="--max-negs 0 --uniform-negs 0 --no-logq"   # in-batch only
+#   make retrieval TRAIN_ARGS="--max-negs 0 --uniform-negs 0"             # + logQ
+#   make retrieval TRAIN_ARGS="--max-negs 0 --uniform-negs 4"             # + uniform
+#   make retrieval                                                        # slate negatives
+# ex: `make retrieval TRAIN_ARGS="--batch-size 2048 --epochs 40 --patience 5"`
+retrieval:  ## gold + item_content -> a trained two-tower, logged to MLflow
 	$(DOTENV) $(PYTHON) -m models.retrieval.train --epochs $(EPOCHS) \
 	    --batch-size $(BATCH) --lr $(LR) $(TRAIN_ARGS)
 
 # Distributed training under Ray (see the note above)
-#   make train-dist TRAIN_ARGS="--workers 2 --limit-rows 20000 --epochs 1"
-train-dist: PYTHON = .venv/bin/python
-train-dist: DOTENV = $(SOURCE_DOTENV)
-train-dist: train
+#   make retrieval-dist TRAIN_ARGS="--workers 2 --limit-rows 20000 --epochs 1"
+retrieval-dist: PYTHON = .venv/bin/python
+retrieval-dist: DOTENV = $(SOURCE_DOTENV)
+retrieval-dist: retrieval
 
 # HOLDOUT must match the run that wrote CHECKPOINT
 CHECKPOINT ?=
@@ -282,6 +282,30 @@ sources:  ## Five retrieval sources -> their top-100 per request
 BLEND_ARGS ?=
 blend:  ## Union the sources, then leave-one-source-out
 	uv run python -m models.retrieval.blend $(BLEND_ARGS)
+
+# Trained on the candidates retrieval actually returns, never on random
+# negatives: a ranker fitted on easy negatives and served real ones degrades
+# while every offline metric still looks healthy.
+RANK_ARGS ?=
+rank:  ## Fit the GBDT ranker over retrieved candidates and score the funnel
+	@test -f "$(SOURCE_CHECKPOINT)" || \
+	  { echo "set SOURCE_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
+	uv run python -m models.ranking.baselines.train $(SOURCE_CHECKPOINT) $(RANK_ARGS)
+
+# The contender. `rank` above is the bar it has to clear.
+#   make rank-neural RANK_ARGS="--model mmoe --epochs 5"
+rank-neural:  ## Fit DCN v2 or MMoE over the same candidates
+	@test -f "$(SOURCE_CHECKPOINT)" || \
+	  { echo "set SOURCE_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
+	$(DOTENV) $(PYTHON) -m models.ranking.train $(SOURCE_CHECKPOINT) $(RANK_ARGS)
+
+# Ray under `uv run` re-resolves the environment inside each worker and has
+# dropped the sharded extras before; the driver runs from .venv directly for
+# the same reason retrieval-dist does.
+#   make rank-dist RANK_ARGS="--model dcn --workers 2 --epochs 2"
+rank-dist: PYTHON = .venv/bin/python
+rank-dist: DOTENV = $(SOURCE_DOTENV)
+rank-dist: rank-neural
 
 INDEX_CHECKPOINT ?= data/checkpoints/both-logq-n4u0-b8192e10lr0.001-ab7e1d500b9bf792.pt
 INDEX_ARGS ?=

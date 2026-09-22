@@ -22,29 +22,60 @@ from typing import Any
 from common.config import Settings
 from common.utils import gold_location
 
+# An untracked file is read up to here when digesting the working tree. Enough
+# for any source file; bounded so an accidentally-unignored artifact cannot make
+# provenance slow.
+UNTRACKED_BYTE_CAP = 1_000_000
 
-def git_revision(root: Path | None = None) -> dict[str, str]:
-    """The commit that is checked out, and whether the tree matches it."""
+
+def _git(arguments: Sequence[str], root: Path | None = None) -> str | None:
+    """One git command's stdout, or ``None`` where git cannot answer."""
     try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=root,
-        ).stdout.strip()
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
+        return subprocess.run(
+            ["git", *arguments],
             capture_output=True,
             text=True,
             check=True,
             cwd=root,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def working_tree_hash(sha: str, root: Path | None = None) -> str:
+    """A digest of the code that actually ran, uncommitted changes included."""
+    digest = hashlib.sha256(sha.encode())
+    digest.update((_git(["diff", "HEAD"], root) or "").encode())
+
+    listing = _git(["ls-files", "--others", "--exclude-standard"], root) or ""
+    base = root if root is not None else Path.cwd()
+    for name in sorted(line for line in listing.splitlines() if line):
+        digest.update(name.encode())
+        try:
+            blob = (base / name).read_bytes()[:UNTRACKED_BYTE_CAP]
+        except OSError:
+            # A dangling symlink or a permission error. Recorded as its own
+            # state rather than skipped, so the file's presence still counts.
+            blob = b"<unreadable>"
+        digest.update(hashlib.sha256(blob).digest())
+    return digest.hexdigest()[:12]
+
+
+def git_revision(root: Path | None = None) -> dict[str, str]:
+    """The commit that is checked out, whether the tree matches it, and what ran."""
+    sha = _git(["rev-parse", "HEAD"], root)
+    status = _git(["status", "--porcelain"], root)
+    if sha is None or status is None:
         # A tarball or a container with no git. Say so rather than logging a
         # plausible-looking blank.
-        return {"git_sha": "unknown", "git_dirty": "unknown"}
-    return {"git_sha": sha, "git_dirty": str(bool(status)).lower()}
+        return {"git_sha": "unknown", "git_dirty": "unknown", "code_hash": "unknown"}
+
+    dirty = bool(status)
+    return {
+        "git_sha": sha,
+        "git_dirty": str(dirty).lower(),
+        "code_hash": working_tree_hash(sha, root) if dirty else sha[:12],
+    }
 
 
 def dataset_version(settings: Settings, tables: Sequence[str]) -> str:
@@ -88,6 +119,11 @@ def provenance(
         "config_hash": config_hash(settings, arguments),
         "dataset_version": dataset_version(settings, tables),
     }
+
+
+def run_label(arm: str, marks: Mapping[str, str]) -> str:
+    """The name a run is recorded and checkpointed under."""
+    return f"{arm}-{marks['config_hash']}-{marks['code_hash']}"
 
 
 def require_reachable(settings: Settings, timeout: float = 2.0) -> None:
@@ -167,11 +203,20 @@ def track(
     settings: Settings,
     run_name: str,
     params: Mapping[str, Any],
+    experiment: str | None = None,
 ) -> Iterator[Recorder]:
     """An MLflow run, or a no-op when tracking is disabled.
 
     mlflow is imported lazily: it pulls in a large dependency tree, and every
     test runs with tracking off.
+
+    Args:
+        experiment: Which experiment to record under. ``None`` takes the one in
+            the settings. Callers name **the model they trained**, so the
+            experiment list reads as the set of models this project has and a
+            run can be found without knowing which stage produced it. Every run
+            landing in one experiment is the alternative, and it makes the
+            experiment name carry no information at all.
     """
     if not settings.mlflow.enabled:
         yield Recorder()
@@ -180,7 +225,7 @@ def track(
     import mlflow
 
     mlflow.set_tracking_uri(settings.mlflow.tracking_uri)
-    mlflow.set_experiment(settings.mlflow.experiment)
+    mlflow.set_experiment(experiment or settings.mlflow.experiment)
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({mlflow_name(key): value for key, value in params.items()})
         yield _MlflowRecorder(mlflow)

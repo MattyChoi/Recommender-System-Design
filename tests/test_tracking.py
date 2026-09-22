@@ -24,6 +24,7 @@ from common.tracking import (
     mlflow_name,
     provenance,
     require_reachable,
+    run_label,
     track,
 )
 from tests.test_config import REPO_ROOT
@@ -65,7 +66,86 @@ class TestTheGitRevision:
         a plausible-looking blank."""
         got = git_revision(tmp_path / "not-a-repo")
 
-        assert got == {"git_sha": "unknown", "git_dirty": "unknown"}
+        assert got == {"git_sha": "unknown", "git_dirty": "unknown", "code_hash": "unknown"}
+
+
+class TestTheCodeHash:
+    """Written after two runs scoring 0.1040 and 0.1172 shared a name, a commit,
+    a dirty flag and a checkpoint path -- the second overwrote the first."""
+
+    @staticmethod
+    def _repository(root: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "x"], cwd=root, check=True)
+
+    def test_a_clean_tree_names_its_commit(self, tmp_path: Path) -> None:
+        self._repository(tmp_path)
+
+        got = git_revision(tmp_path)
+
+        assert got["code_hash"] == got["git_sha"][:12]
+
+    def test_two_dirty_trees_at_one_commit_differ(self, tmp_path: Path) -> None:
+        """**The bug, as a test.** Both states below share a SHA and a dirty
+        flag, so a name built from either would collide. Only a digest of the
+        working tree separates them."""
+        self._repository(tmp_path)
+        edited = tmp_path / "tracked.py"
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+        edited.write_text("init_fn = None\n")
+        first = git_revision(tmp_path)
+        edited.write_text("init_fn = normal_\n")
+        second = git_revision(tmp_path)
+
+        assert first["git_sha"] == second["git_sha"]
+        assert first["git_dirty"] == second["git_dirty"] == "true"
+        assert first["code_hash"] != second["code_hash"]
+
+    def test_an_untracked_file_counts(self, tmp_path: Path) -> None:
+        """The edit that caused the collision was in a file git had never seen,
+        so `git diff HEAD` alone would not have noticed it."""
+        self._repository(tmp_path)
+        before = git_revision(tmp_path)
+
+        (tmp_path / "torchrec_block.py").write_text("x = 1\n")
+        after = git_revision(tmp_path)
+
+        assert before["code_hash"] != after["code_hash"]
+
+    def test_editing_an_untracked_file_counts_too(self, tmp_path: Path) -> None:
+        """The control. Hashing only the FILE NAMES would pass the test above
+        and still miss every edit to a new module."""
+        self._repository(tmp_path)
+        new = tmp_path / "torchrec_block.py"
+
+        new.write_text("init_fn = None\n")
+        before = git_revision(tmp_path)
+        new.write_text("init_fn = normal_\n")
+
+        assert git_revision(tmp_path)["code_hash"] != before["code_hash"]
+
+    def test_an_unchanged_dirty_tree_is_stable(self, tmp_path: Path) -> None:
+        """A digest that moved on its own would make every rerun a new run and
+        turn the overwrite bug into an infinite pile of checkpoints."""
+        self._repository(tmp_path)
+        (tmp_path / "changed.py").write_text("x = 1\n")
+
+        assert git_revision(tmp_path)["code_hash"] == git_revision(tmp_path)["code_hash"]
+
+
+class TestTheRunLabel:
+    def test_it_carries_both_hashes(self) -> None:
+        marks = {"config_hash": "cccccccccccccccc", "code_hash": "dddddddddddd"}
+
+        assert run_label("lgbm-c100", marks) == "lgbm-c100-cccccccccccccccc-dddddddddddd"
+
+    def test_a_code_change_alone_moves_the_name(self) -> None:
+        """Which is exactly what the old name could not do."""
+        config = {"config_hash": "cccccccccccccccc", "code_hash": "dddddddddddd"}
+        edited = {**config, "code_hash": "eeeeeeeeeeee"}
+
+        assert run_label("arm", config) != run_label("arm", edited)
 
 
 class TestTheConfigHash:
@@ -169,7 +249,13 @@ class TestTrack:
 
         require_reachable(settings, timeout=0.25)
 
-    def test_provenance_carries_all_three(self, tmp_path: Path) -> None:
+    def test_provenance_carries_every_mark(self, tmp_path: Path) -> None:
         got = provenance(_settings(tmp_path), {"lr": 0.1}, ["training_examples"])
 
-        assert set(got) == {"git_sha", "git_dirty", "config_hash", "dataset_version"}
+        assert set(got) == {
+            "git_sha",
+            "git_dirty",
+            "code_hash",
+            "config_hash",
+            "dataset_version",
+        }

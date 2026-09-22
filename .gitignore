@@ -32,6 +32,7 @@ mlruns/
 mlartifacts/
 evaluation/results/retrieval
 evaluation/results/sources
+evaluation/results/ranking
 
 # Secrets and local config
 .env

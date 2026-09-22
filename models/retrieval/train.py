@@ -19,7 +19,7 @@ from common.torch_env import (
     select_device,
     set_seed,
 )
-from common.tracking import provenance, require_reachable, track
+from common.tracking import provenance, require_reachable, run_label, track
 from data_pipeline.features.user_history import MAX_HISTORY
 from evaluation.offline.geometry import _geometry
 from models.classes.batching import Batch
@@ -46,6 +46,18 @@ def _unwrap(model: torch.nn.Module) -> TwoTower:
     inner = model.module if isinstance(model, DistributedDataParallel) else model
     assert isinstance(inner, TwoTower)
     return inner
+
+
+def _experiment(args: argparse.Namespace) -> str:
+    """The model this run trains, which is what names the experiment.
+
+    ``--encoder sasrec`` replaces the user tower's reduction with a transformer,
+    so it is a different model and gets its own experiment. The pooled arm keeps
+    the configured name, which is what every run recorded before this existed
+    landed under -- renaming it would orphan the history it should be compared
+    against.
+    """
+    return "sasrec" if args.encoder == "sasrec" else "two_tower"
 
 
 def _arm(args: argparse.Namespace) -> str:
@@ -343,7 +355,7 @@ def _fit_locally(
         val_split, n_items, args.batch_size, device, training=False, history_dropout=0.0
     )
 
-    with track(settings, run_name, {**marks, **vars(args)}) as run:
+    with track(settings, run_name, {**marks, **vars(args)}, experiment=_experiment(args)) as run:
         result = fit(
             model,
             train_loader,
@@ -447,7 +459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     tables_read = ["training_examples", "user_history", "impression_negatives", "item_content"]
     marks = provenance(settings, vars(args), tables_read)
-    run_name = f"{_arm(args)}-{marks['config_hash']}"
+    run_name = run_label(_arm(args), marks)
     if args.workers > 1:
         run_name = f"{run_name}-w{args.workers}"
     if args.limit_rows:

@@ -670,7 +670,7 @@ sentence.
 ## Reproducing
 
 ```
-make train  CHECKPOINT-producing run, see TRAIN_ARGS for the arm flags
+make retrieval  CHECKPOINT-producing run, see TRAIN_ARGS for the arm flags
 make bands  CHECKPOINT=data/checkpoints/<run>.pt
 make ablation BASELINE_NPZ=... CANDIDATE_NPZ=...
 ```
