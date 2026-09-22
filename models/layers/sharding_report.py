@@ -101,9 +101,7 @@ def run(scenario: Scenario, compute_device: str) -> Outcome:
         An :class:`Outcome`, carrying a refusal rather than raising one.
     """
     collection = build_ebc(scenario.rows, MIND_USERS, dim=DIM)
-    topology = synthetic_topology(
-        scenario.world_size, compute_device, hbm_gb=scenario.hbm_gb
-    )
+    topology = synthetic_topology(scenario.world_size, compute_device, hbm_gb=scenario.hbm_gb)
     try:
         plan = plan_for(collection, topology)
     except Exception as error:  # broad: any refusal is a cell value, not a crash
@@ -207,7 +205,7 @@ def render(
         "",
         "**The corpus is not in the regime this machinery is for.** MIND-small's",
         f"`item_map` is {MIND_ITEMS:,} rows -- a {table_bytes(MIND_ITEMS, DIM) / 1024**2:.1f} MiB",
-        "table. The manual's own G4 text says \"160K MIND articles\"; the measured",
+        'table. The manual\'s own G4 text says "160K MIND articles"; the measured',
         "number is less than half that, and below the 100K floor ADR 0004 claims the",
         "corpus sits inside.",
         "",
@@ -219,7 +217,7 @@ def render(
         "**The crossover is a function of per-device HBM, not of the model.** A table",
         "is placed whole whenever it fits on one device after reservation, so the",
         "boundary moves with the card and not with anything a recsys engineer",
-        "controls -- which is the actual answer to \"when should I reach for this\".",
+        'controls -- which is the actual answer to "when should I reach for this".',
         "",
         "**What is NOT measured here.** These are planner decisions on `meta` tensors:",
         "no kernel ran, no all-to-all happened, no throughput was observed. The plan is",

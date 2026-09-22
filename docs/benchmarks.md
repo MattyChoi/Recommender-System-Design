@@ -3,18 +3,19 @@
 Each table records the hardware and the commit it was produced on. Sections still
 marked `TODO` are not yet measured; nothing below is a placeholder number.
 
-Retrieval quality lives in [results.md](results.md) under **Part G -- retrieval**.
-This file is for the cost side: memory, sharding, latency and throughput.
+Retrieval quality lives in [retrieval.md](retrieval.md); ranking quality in
+[baselines.md](baselines.md). This file is for the cost side: memory, sharding,
+latency and throughput.
 
 ## Quality vs. baselines
 
-`TODO` -- see [results.md](results.md). Part F's ranking table and Part G's three
-retrieval gates are both there.
+`TODO` -- see [baselines.md](baselines.md) for the ranking table and
+[retrieval.md](retrieval.md) for the retrieval gates.
 
 ## Per-source contribution and leave-one-out ablations
 
-`TODO` -- Part I. G1's three-arm ablation (ID / content / both) is in
-[results.md](results.md) and is the closest thing that exists.
+`TODO` -- Part I. The three-arm item-tower ablation (ID / content / both) in
+[retrieval.md](retrieval.md) is the closest thing that exists.
 
 ---
 
@@ -87,8 +88,10 @@ design target demonstrates the mechanism; it does not produce a decision. Every
 
 **So the honest recommendation is: do not shard this.** That is a stronger result
 than a clean demo, because it says when *not* to reach for the machinery -- and it
-agrees with G1's gate, which measured the entire ID table as worth **+0.0049
-recall** while costing **0.0037 of cold-band recall**.
+agrees with the item-tower gate, which could not distinguish the entire ID table
+from **zero recall** while measuring it at **0.0037 of cold-band recall to the
+bad**. That gate reads +0.0049 overall, against a between-run sd of 0.0103; see
+[retrieval.md](retrieval.md#seed-variance-and-what-it-costs-this-page).
 
 ## G4d -- the hashing trick
 
@@ -159,8 +162,9 @@ for the technique and the whole argument against it here -- 8 MiB on a card with
 
 **The recall cost.** Nothing here trains a model with a hashed table, so nothing
 here says what a collision does to Recall@100. The collision rate is an input to
-that question, not an answer. G1's gate bounds how much it could matter on this
-corpus: the entire ID table is worth +0.0049.
+that question, not an answer. The item-tower gate bounds how much it could matter
+on this corpus: the entire ID table is worth +0.0049 at the most, and that delta
+is inside seed noise.
 
 ## G4e -- what actually ran
 
@@ -204,13 +208,113 @@ two-table collection would force a dummy user feature through every item-tower
 call. Two separate collections avoid it -- at the cost of the planner losing the
 chance to balance both tables against each other, which is most of the reason to
 use TorchRec at all. **A fourth independent argument against adoption at this
-scale**, alongside the +0.0049, the 15.9 MiB, and the 1,312x.
+scale**, alongside the unsupported +0.0049, the 15.9 MiB, and the 1,312x.
+
+---
+
+# Sequence pooling (Part H3)
+
+**Hardware: RTX 4090, 24,564 MiB, WSL2.** What the SASRec user-tower pooler costs
+to train and to serve, against the mean pooler it replaces. Quality -- which is
+what actually decided H3 -- is in
+[retrieval.md](retrieval.md#sequence-pooling-part-h).
+
+## Serving: per-request user encode
+
+`uv run python -m scripts.probe_encode_latency <pooled.pt> <sasrec.pt>` ·
+10,000 timed iterations, **batch size 1**, 100 warm-up calls discarded, 512 real
+validation histories cycled.
+
+| encoder | p50 ms | p90 ms | p99 ms |
+| --- | ---: | ---: | ---: |
+| mean pool | **0.2800** | 0.3322 | 0.4393 |
+| SASRec 2x2 | **1.0150** | 1.0784 | 1.3290 |
+| ratio | **3.63x** | 3.25x | 3.03x |
+
+**Quote the p50 ratio.** The tail ratio is *smaller*, and that is an artefact
+rather than a result: scheduling jitter is additive, so a fixed ~0.15 ms inflates
+the smaller number proportionally more. Both encoders are under 1.5% of
+`docs/design.md`'s 90 ms budget, so latency did not decide anything here.
+
+### What the numbers exclude
+
+User-tower forward only. **No feature fetch, no ANN search, no serialisation, no
+network, no host-to-device copy** -- requests are built on the device before the
+timer starts. This is a floor on request latency and not a budget; 0.28 ms
+against 90 ms does not mean 89.72 ms is spare.
+
+### The measurement has a floor and a resolution, and they are different
+
+| | p50 | p99 |
+| --- | ---: | ---: |
+| floor -- empty synchronised loop | 0.0027 | 0.0038 |
+| resolution -- spread over 3 repeats of one identical configuration | **0.0067** | **0.0489** |
+
+The floor says the timer can see the work; both encoders sit 100x above it. The
+**resolution** says what "no difference" looks like on this machine, and it is
+the number that governs any comparison between two rows. Two figures can each be
+a hundred times the floor while their difference sits inside the noise.
+
+That is not hypothetical. **Trimming each request to its real history length was
+reported as a 2.7% saving and is a null**: measured at +0.0019 ms (mean pool) and
++0.0063 ms (SASRec) against a resolution of 0.0067, and not reproducible in
+magnitude across runs. At batch 1 the cost is kernel launches, not arithmetic, so
+a 29-slot history costs what a 50-slot one costs. The probe now prints
+`NOT resolvable` on both rather than leaving the subtraction to the reader.
+
+**p99 is measured but not precise.** It moves 0.0489 ms across identical
+repeats even at 10,000 iterations, because a p99 rests on its slowest 1% and
+those are scheduling outliers. At 1,000 iterations it moved 37%.
+
+## Training: seconds per epoch
+
+Two budgets per encoder, so the fixed setup cost **cancels**: a wall-clock total
+is `setup + epochs x rate`, and `(t6 - t3) / 3` is the rate alone. Same arm
+(`both`), `--patience 99` so neither run early-stops.
+
+| encoder | 3 epochs | 6 epochs | **s/epoch** | implied setup |
+| --- | ---: | ---: | ---: | ---: |
+| mean pool | 6.7s | 11.3s | **1.533** | 2.10s |
+| SASRec 2x2 | 9.8s | 17.1s | **2.433** | 2.50s |
+
+**SASRec costs 1.59x per epoch.** The two independently implied setup constants
+agree to 0.4s, which is the check on the linear model -- if it were wrong they
+would not.
+
+### Why the first attempt at this was wrong
+
+Run durations pulled straight from MLflow gave 34.4s over 10 pooled epochs and
+16.9s over 6 SASRec epochs, which reads as SASRec training **faster** -- and the
+8-head/6-block variant faster still. More capacity cannot cost less time, so the
+numbers were not published.
+
+Fitting the controlled runs above explains it. Predicted against observed:
+
+| run | predicted | observed |
+| --- | ---: | ---: |
+| SASRec, 6 epochs | 17.1s | 16.9s |
+| mean pool, 10 epochs | 17.4s | **34.4s** |
+
+**The 34.4s pooled run is the outlier**, by a factor of two, for reasons its
+record does not carry -- different flags, a contended GPU, geometry logging. The
+whole "SASRec trains faster" reading came from that one number. Inverting it
+gives the physically sensible answer: the encoder that is 3.63x slower to serve
+is 1.59x dearer to train.
+
+**Single runs, and that is the caveat.** Each cell above is one measurement, and
+the strongest evidence on this page about training wall-clock is that it varied
+2x under uncontrolled conditions. The latency figures have a measured resolution;
+these do not.
 
 ## Latency: before and after optimization
 
 `TODO` -- Part M. `docs/design.md` carries the 90 ms budget with the `Actual`
 column empty, deliberately: a budget derived from measurements already taken is a
 description, not a budget.
+
+The user-encode figures above are **one component** of that budget, not a draft
+of it. They exclude the feature fetch, the ANN search and the network, which are
+where a 90 ms budget is actually spent.
 
 ## Index: recall@k vs. QPS
 

@@ -79,9 +79,7 @@ def _batch() -> KeyedJaggedTensor:
     item embedding is wanted. Identical across ranks is what makes "the ranks
     agree" a statement about the collective rather than about the data.
     """
-    values = torch.cat(
-        [torch.arange(1, BATCH + 1, dtype=torch.long) for _ in FEATURE_NAMES]
-    )
+    values = torch.cat([torch.arange(1, BATCH + 1, dtype=torch.long) for _ in FEATURE_NAMES])
     return KeyedJaggedTensor.from_lengths_sync(
         keys=list(FEATURE_NAMES),
         values=values,

@@ -24,6 +24,8 @@ import torch
 from torch import nn
 from torch.nn import functional as f
 
+from models.retrieval.sasrec import SASRec
+
 
 def _normalise(block: torch.Tensor) -> torch.Tensor:
     """Zero-mean unit-variance across a block's own last dimension, no parameters."""
@@ -92,6 +94,12 @@ class TwoTower(nn.Module):
         use_content: False removes the sentence vectors AND the category and
             subcategory embeddings, leaving the item tower with nothing but the
             learned ID.
+        use_sequence: True replaces the mean-pool over the click history with
+            causal attention. The ITEM side is untouched, so a head-to-head
+            differs only in how the sequence is reduced.
+        sequence_heads: Attention heads, when ``use_sequence``.
+        sequence_blocks: Stacked encoder layers, when ``use_sequence``.
+        sequence_dropout: Inside the pooler, when ``use_sequence``.
     """
 
     item_category: torch.Tensor
@@ -113,6 +121,10 @@ class TwoTower(nn.Module):
         temperature: float = 0.05,
         use_id: bool = True,
         use_content: bool = True,
+        use_sequence: bool = False,
+        sequence_heads: int = 2,
+        sequence_blocks: int = 2,
+        sequence_dropout: float = 0.2,
     ) -> None:
         super().__init__()
         n_rows, content_dim = content.shape
@@ -179,6 +191,15 @@ class TwoTower(nn.Module):
         )
         history_in = id_dim
 
+        self.sequence: SASRec | None = None
+        if use_sequence:
+            self.sequence = SASRec(
+                history_in,
+                n_heads=sequence_heads,
+                n_blocks=sequence_blocks,
+                dropout=sequence_dropout,
+            )
+
         self.user_norm = nn.LayerNorm(n_user_feats)
         self.user_tower = Tower(n_user_feats + history_in, out_dim=out_dim)
         self.item_tower = Tower(item_in, out_dim=out_dim)
@@ -240,11 +261,18 @@ class TwoTower(nn.Module):
             ``[B, out_dim]`` unit-norm embeddings.
         """
         vectors = self.history_vectors(history_ids)
-        mask = history_mask.unsqueeze(-1).to(vectors.dtype)
-        pooled = (vectors * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
         if self.history_proj is not None:
-            projected: torch.Tensor = self.history_proj(pooled)
-            pooled = projected
+            projected: torch.Tensor = self.history_proj(vectors)
+            vectors = projected
+
+        if self.sequence is not None:
+            # SASRec pooling
+            pooled = self.sequence(vectors, history_mask)
+        else:
+            # mean pool
+            mask = history_mask.unsqueeze(-1).to(vectors.dtype)
+            pooled = (vectors * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+
         embedded: torch.Tensor = self.user_tower(
             torch.cat([self.user_norm(user_feats), _normalise(pooled)], dim=-1)
         )

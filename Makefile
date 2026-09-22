@@ -154,7 +154,7 @@ compare:  ## Paired bootstrap between two models (make compare BASELINE=recency 
 	uv run python -m evaluation.offline.compare \
 	    --baseline $(BASELINE) --candidate $(CANDIDATE) --split $(EVAL_SPLIT)
 
-baselines:  ## Re-score every baseline and rebuild docs/results.md from one commit
+baselines:  ## Re-score every baseline and rebuild docs/baselines.md from one commit
 	@for model in $(MODELS); do \
 	    $(MAKE) --no-print-directory eval MODEL=$$model || exit 1; \
 	done
@@ -164,7 +164,7 @@ baselines:  ## Re-score every baseline and rebuild docs/results.md from one comm
 
 # Rebuilt from the cards, never hand-edited: a table that disagrees with the
 # JSON it quotes is worse than no table. Pure stdlib, so no cluster is needed.
-results:  ## Rebuild docs/results.md from evaluation/results/*.json
+results:  ## Rebuild docs/baselines.md from evaluation/results/*.json
 	uv run python -m evaluation.offline.results_table
 
 # Compares what Feast materialised against what the gold series says it should

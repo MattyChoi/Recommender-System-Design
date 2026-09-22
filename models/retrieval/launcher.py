@@ -28,8 +28,8 @@ from models.retrieval.two_tower import TwoTower
 def train_loop_per_worker(config: dict[str, Any]) -> None:
     """One Ray worker: build, train, and on rank 0 record the run.
 
-    Returns nothing, deliberately. The history travels back the way everything else 
-    durable in this project does -- written to the checkpoint by rank 0 -- rather 
+    Returns nothing, deliberately. The history travels back the way everything else
+    durable in this project does -- written to the checkpoint by rank 0 -- rather
     than over a transport whose availability is a flag.
 
     Args:
@@ -65,6 +65,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             n_subcategories=items.n_subcategories,
             use_id=args.use_id,
             use_content=args.use_content,
+            use_sequence=args.encoder == "sasrec",
         )
     )
     counters = Counters(StreamingLogQ(n_items), StreamingLogQ(n_items), corrected=args.logq).to(

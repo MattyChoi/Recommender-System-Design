@@ -51,7 +51,7 @@ clicked item is not one of those three, the model lifts three non-clicks above i
 NDCG@10 lands below random while GAUC sits exactly on it.
 
 **Widening to 24h moves the ranking metrics across random, and GAUC not at all.** The card now
-in `docs/results.md` is the 24h one: NDCG@10 0.2884 against random's 0.2855, MRR 0.2483 against
+in `docs/baselines.md` is the 24h one: NDCG@10 0.2884 against random's 0.2855, MRR 0.2483 against
 0.2449, Recall@10 0.5246 against 0.5223 — marginally ahead on all three, where the 1h card was
 behind on all three. GAUC stayed put at 0.5016.
 
@@ -79,7 +79,7 @@ shape of the data.
 1. **`COVISIT_MAX_GAP` defaults to 86400** (24h), chosen from the reach curve rather than from
    the manual. The point is not that it performs well there; it is that the window can no
    longer be the thing to blame.
-2. **Record co-visitation as a measured null result and keep it in `docs/results.md`.** The row
+2. **Record co-visitation as a measured null result and keep it in `docs/baselines.md`.** The row
    stays with the other baselines, scored by the same harness over the same rows.
 3. **`make coverage` stays in the repo** as the tool that distinguishes "ranked badly" from
    "had nothing to rank with". It found this; a report card did not.

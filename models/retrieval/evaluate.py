@@ -191,11 +191,12 @@ def render(rows: Sequence[BandRow], k: int) -> str:
 def load_tower(path: Path, items: ItemTables, n_user_feats: int, device: torch.device) -> TwoTower:
     """Rebuild the tower a checkpoint was saved from.
 
-    ``use_id`` and ``use_content`` are READ OFF the state dict rather than
-    passed in. They are the ablation axis, so a mismatched flag would score one
-    arm's rows through the other arm's architecture -- and the run name on the
-    output would still look right. Every other dimension is left at its default
-    and guarded by ``strict=True``, which raises on any shape it did not expect.
+    ``use_id``, ``use_content`` and ``use_sequence`` are READ OFF the state dict
+    rather than passed in. They are the ablation axes, so a mismatched flag would
+    score one arm's rows through the other arm's architecture -- and the run name
+    on the output would still look right. Every other dimension is left at its
+    default and guarded by ``strict=True``, which raises on any shape it did not
+    expect.
     """
     state = torch.load(path, map_location=device, weights_only=True)["model"]
     model = TwoTower(
@@ -207,6 +208,7 @@ def load_tower(path: Path, items: ItemTables, n_user_feats: int, device: torch.d
         n_subcategories=items.n_subcategories,
         use_id="item_id_emb.weight" in state,
         use_content="content.weight" in state,
+        use_sequence="sequence.pos_emb.weight" in state,
     ).to(device)
     model.load_state_dict(state)
     model.eval()

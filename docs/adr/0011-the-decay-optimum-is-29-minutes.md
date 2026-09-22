@@ -52,7 +52,7 @@ is why `flat_impressions` is unchanged there — and 0.01d is already over the l
 2. **Settle the comparison with a paired test, not point estimates.** `make compare` scores both
    models in one pass and bootstraps the per-user difference.
 3. **`HALF_LIVES` spans the optimum**: `0.02 0.05 0.1 0.25 1 3`.
-4. **`recency` is a baseline in its own right** and stays in `docs/results.md`. It is a real
+4. **`recency` is a baseline in its own right** and stays in `docs/baselines.md`. It is a real
    news baseline, not scaffolding for this measurement.
 
 ## The result

@@ -64,9 +64,7 @@ class TestTheHash:
         assert buckets.max() < 37
 
     @pytest.mark.parametrize("n_items,n_buckets", [(1000, 1000), (5000, 2500), (5000, 500)])
-    def test_the_measured_rate_matches_the_closed_form(
-        self, n_items: int, n_buckets: int
-    ) -> None:
+    def test_the_measured_rate_matches_the_closed_form(self, n_items: int, n_buckets: int) -> None:
         """The hash-quality check. A measured rate far above ``1 - (1-1/b)^(n-1)``
         means the hash is clumping, and the collision numbers would then be
         about blake2b rather than about the technique."""

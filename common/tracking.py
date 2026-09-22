@@ -125,7 +125,7 @@ def mlflow_name(name: str) -> str:
 
     MLflow allows alphanumerics, ``_-. :/`` and nothing else, so ``recall@100``
     is rejected outright. The ``@`` notation is this project's own vocabulary --
-    every evaluation card and every row of ``docs/results.md`` uses it -- so the
+    every evaluation card and every row of ``docs/baselines.md`` uses it -- so the
     translation happens HERE, at the one backend that objects, rather than by
     renaming the metric everywhere to suit it.
     """

@@ -64,6 +64,26 @@ class BandComparison:
 
     @property
     def difference(self) -> float:
+        """The PER-USER paired mean difference -- what the interval brackets.
+
+        **Not** ``candidate - baseline``. Those two are means over ROWS, where a
+        user with forty requests weighs forty times a user with one; the
+        bootstrap resamples USERS and averages per-user differences.
+        (``ndcg@k`` over impressions, ``bootstrap_ci`` over users).
+
+        ``nan`` without a result, so a delta can never be quoted without its
+        interval. That is a standing rule here, now enforced rather than
+        remembered.
+        """
+        return float("nan") if self.result is None else self.result.difference
+
+    @property
+    def row_difference(self) -> float:
+        """``candidate - baseline`` over rows: the two printed columns, subtracted.
+
+        Kept as a named thing so the gap between it and :attr:`difference` is
+        inspectable rather than surprising.
+        """
         return self.candidate - self.baseline
 
 
@@ -129,7 +149,12 @@ def compare(
     resamples: int = 10_000,
     seed: int = 0,
 ) -> list[BandComparison]:
-    """The gate, one row per band. ``difference`` is candidate minus baseline."""
+    """The gate, one row per band.
+
+    The ``baseline`` and ``candidate`` columns are means over ROWS, matching
+    what ``make bands`` reports for each arm on its own. ``difference`` is the
+    mean PER-USER paired difference, matching the interval beside it.
+    """
     check_aligned(baseline, candidate)
 
     rows: list[BandComparison] = []
@@ -179,7 +204,9 @@ def render(rows: Sequence[BandComparison], k: int, baseline: str, candidate: str
         )
 
     lines.append("")
-    lines.append(f"recall@{k}; delta = candidate - baseline, paired per USER")
+    lines.append(f"recall@{k}. The two arm columns are means over ROWS.")
+    lines.append("delta is the mean PER-USER paired difference, which is what the CI brackets;")
+    lines.append("it differs from (candidate - baseline) because users contribute unequal rows.")
     lines.append("'real' is a 95% paired-bootstrap interval excluding zero")
     return "\n".join(lines)
 
@@ -212,8 +239,8 @@ def plot(
     )
 
     series = (
-        ("two-tower, logQ correction", CANDIDATE_COLOUR, "o", "-", [r.candidate for r in banded]),
-        ("two-tower, no correction", BASELINE_COLOUR, "s", "-", [r.baseline for r in banded]),
+        (candidate, CANDIDATE_COLOUR, "o", "-", [r.candidate for r in banded]),
+        (baseline, BASELINE_COLOUR, "s", "-", [r.baseline for r in banded]),
         ("recent-popularity count", REFERENCE_COLOUR, "^", "--", [r.reference for r in banded]),
     )
     for label, colour, marker, style, values in series:
@@ -221,9 +248,9 @@ def plot(
 
     top.set_ylabel(f"Recall@{k}", color=INK)
     top.set_ylim(-0.03, 1.03)
-    top.legend(frameon=False, loc="upper left", fontsize=9, labelcolor=INK)
+    top.legend(frameon=False, loc="upper left", fontsize=8, labelcolor=INK)
     top.set_title(
-        "The logQ correction rescues the head, not the tail", color=INK, fontsize=12, loc="left"
+        f"Recall@{k} by training-window popularity band", color=INK, fontsize=12, loc="left"
     )
 
     difference = np.array([r.difference for r in banded])
@@ -242,7 +269,7 @@ def plot(
     bottom.axhline(0.0, color=MUTED, lw=1)
     # ASCII hyphen: RUF001 rejects the typographic minus, and an axis label is
     # not worth an ignore.
-    bottom.set_ylabel("logQ - none", color=INK)
+    bottom.set_ylabel(f"paired delta, per user\n(+ favours {candidate[:28]})", color=INK)
     bottom.set_xlabel("clicks on the item during the training window", color=MUTED)
 
     for panel in (top, bottom):

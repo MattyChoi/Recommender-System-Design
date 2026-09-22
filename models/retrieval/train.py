@@ -51,8 +51,10 @@ def _unwrap(model: torch.nn.Module) -> TwoTower:
 def _arm(args: argparse.Namespace) -> str:
     """A short name for what this run is, for the MLflow run and the checkpoint."""
     towers = "both" if args.use_id and args.use_content else "id" if args.use_id else "content"
+    encoder = "" if args.encoder == "pooled" else f"-{args.encoder}"
     return (
-        f"{towers}-{'logq' if args.logq else 'nologq'}-n{args.max_negs}u{args.uniform_negs}"
+        f"{towers}{encoder}-{'logq' if args.logq else 'nologq'}"
+        f"-n{args.max_negs}u{args.uniform_negs}"
         f"-b{args.batch_size}e{args.epochs}lr{args.lr:g}"
     )
 
@@ -320,6 +322,7 @@ def _fit_locally(
         n_subcategories=items.n_subcategories,
         use_id=args.use_id,
         use_content=args.use_content,
+        use_sequence=args.encoder == "sasrec",
     ).to(device)
     counters = Counters(StreamingLogQ(n_items), StreamingLogQ(n_items), corrected=args.logq).to(
         device
@@ -405,6 +408,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--variant", choices=CONTENT_VARIANTS, default=CONTENT_VARIANTS[0])
 
+    parser.add_argument(
+        "--encoder",
+        choices=("pooled", "sasrec"),
+        default="pooled",
+        help="How the click history is reduced.",
+    )
     parser.add_argument("--no-logq", dest="logq", action="store_false")
     parser.add_argument("--no-use-id", dest="use_id", action="store_false")
     parser.add_argument("--no-use-content", dest="use_content", action="store_false")

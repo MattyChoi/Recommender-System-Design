@@ -108,8 +108,8 @@ def _canonical_order(rows: pd.DataFrame) -> pd.DataFrame:
     So the same code over the same data disagreed with itself across machines.
     Measured rather than feared: ``local[*]`` against ``local[1]`` on one
     machine moved ``cold_item.ndcg@10`` by 0.0109 and ``cold_item.mrr`` by
-    0.0120, where the models in ``docs/results.md`` are separated by about half
-    that. GAUC and ``gauc_ceiling`` did not move at all, because
+    0.0120, where the models in ``docs/baselines.md`` are separated by about
+    half that. GAUC and ``gauc_ceiling`` did not move at all, because
     ``impression_auc`` counts ties as half and never sorts.
 
     Note:

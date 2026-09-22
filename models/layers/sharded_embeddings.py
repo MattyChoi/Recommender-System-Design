@@ -229,5 +229,3 @@ def placements(plan: ShardingPlan) -> tuple[PlacedTable, ...]:
                 )
             )
     return tuple(sorted(rows, key=lambda row: row.table))
-
-
