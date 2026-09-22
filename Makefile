@@ -1,6 +1,6 @@
 .PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        bands index serve bench demo lint fmt types test check
+        bands ablation index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -225,10 +225,17 @@ train:  ## gold + item_content -> a trained two-tower, logged to MLflow
 	    --batch-size $(BATCH) --lr $(LR) $(TRAIN_ARGS)
 
 # HOLDOUT must match the run that wrote CHECKPOINT
-# `make bands CHECKPOINT=data/checkpoints/both-logq-n4u0-0f6e03fc2c6e519e.pt`
 CHECKPOINT ?=
 HOLDOUT ?= 12
 BANDS_ARGS ?=
+BASELINE_NPZ ?=
+CANDIDATE_NPZ ?=
+ablation:  ## two scored arms -> the paired per-band table and the plot
+	@test -n "$(BASELINE_NPZ)" -a -n "$(CANDIDATE_NPZ)" || \
+	  { echo "set BASELINE_NPZ= and CANDIDATE_NPZ= to two evaluation/results/retrieval/*.npz"; exit 1; }
+	uv run python -m models.retrieval.ablation $(BASELINE_NPZ) $(CANDIDATE_NPZ)
+
+# `make bands CHECKPOINT=data/checkpoints/both-logq-n4u0-0f6e03fc2c6e519e.pt`
 bands:  ## a checkpoint -> Recall@k by item popularity band (G2's gate)
 	@test -n "$(CHECKPOINT)" || { echo "set CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
 	uv run python -m models.retrieval.evaluate $(CHECKPOINT) \

@@ -3693,6 +3693,7 @@ sharded = [
 [package.dev-dependencies]
 dev = [
     { name = "grpcio-tools" },
+    { name = "matplotlib" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pre-commit" },
@@ -3731,6 +3732,7 @@ provides-extras = ["sharded"]
 [package.metadata.requires-dev]
 dev = [
     { name = "grpcio-tools", specifier = ">=1.83.1" },
+    { name = "matplotlib", specifier = ">=3.10" },
     { name = "mypy", specifier = ">=2.3.1" },
     { name = "pandas-stubs", specifier = ">=3.0.5.260730" },
     { name = "pre-commit", specifier = ">=4.6.2" },

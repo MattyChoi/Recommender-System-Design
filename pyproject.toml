@@ -61,7 +61,14 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "confluent_kafka.*", "s3fs.*", "fsspec.*", "sentence_transformers.*"]
+module = [
+    "pyarrow.*",
+    "confluent_kafka.*",
+    "s3fs.*",
+    "fsspec.*",
+    "sentence_transformers.*",
+    "matplotlib.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -81,6 +88,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
+    "matplotlib>=3.10",
     "grpcio-tools>=1.83.1",
     "mypy>=2.3.1",
     "types-grpcio>=1.83.0",
