@@ -12,9 +12,11 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
+import pyarrow.parquet as pq
 import torch
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
@@ -45,9 +47,7 @@ def _cyclic(values: np.ndarray, period: int) -> tuple[np.ndarray, np.ndarray]:
     return np.sin(radians), np.cos(radians)
 
 
-def load_item_tables(
-    spark: SparkSession, settings: Settings, variant: str = CONTENT_VARIANTS[0]
-) -> ItemTables:
+def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> ItemTables:
     """Read ``gold/item_content`` into item-indexed tensors.
 
     Args:
@@ -70,10 +70,10 @@ def load_item_tables(
     if variant not in CONTENT_VARIANTS:
         raise ValueError(f"variant must be one of {CONTENT_VARIANTS}; got {variant!r}")
 
-    rows = (
-        read_gold(spark, settings, "item_content")
-        .select("item_idx", "category_idx", "subcategory_idx", variant)
-        .toPandas()
+    root = Path(settings.paths.gold) / "item_content"
+    rows = pq.read_table(
+        root / "part-00000.parquet",
+        columns=["item_idx", "category_idx", "subcategory_idx", variant],
     )
 
     idx = torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64"))
@@ -85,16 +85,16 @@ def load_item_tables(
             "leaves a zero row indistinguishable from the reserved OOV row."
         )
 
-    vectors = np.stack(list(rows[variant])).astype("float32")
+    vectors = np.stack(rows[variant].to_numpy(zero_copy_only=False)).astype("float32")
 
     content = torch.zeros(n_rows, vectors.shape[1], dtype=torch.float32)
     content[idx] = torch.from_numpy(vectors)
 
     category = torch.zeros(n_rows, dtype=torch.long)
-    category[idx] = torch.from_numpy(rows["category_idx"].to_numpy(dtype="int64"))
+    category[idx] = torch.from_numpy(rows["category_idx"].to_numpy().astype("int64"))
 
     subcategory = torch.zeros(n_rows, dtype=torch.long)
-    subcategory[idx] = torch.from_numpy(rows["subcategory_idx"].to_numpy(dtype="int64"))
+    subcategory[idx] = torch.from_numpy(rows["subcategory_idx"].to_numpy().astype("int64"))
 
     return ItemTables(
         content=content,

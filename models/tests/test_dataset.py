@@ -90,7 +90,7 @@ class TestAlignment:
         loader that sorted and trusted would pass on the first ordering."""
         _write_cache(Path(settings.paths.gold) / "item_content", order)
 
-        tables = load_item_tables(spark, settings)
+        tables = load_item_tables(settings)
 
         for k in range(1, N_ITEMS + 1):
             assert torch.equal(tables.content[k], torch.full((DIM,), float(k)))
@@ -104,7 +104,7 @@ class TestAlignment:
         """
         _write_cache(Path(settings.paths.gold) / "item_content", [3, 1, 4, 2])
 
-        tables = load_item_tables(spark, settings)
+        tables = load_item_tables(settings)
 
         assert torch.equal(tables.content[0], torch.zeros(DIM))
         assert int(tables.category[0]) == 0 and int(tables.subcategory[0]) == 0
@@ -112,7 +112,7 @@ class TestAlignment:
     def test_the_matrix_is_n_items_plus_one(self, spark: SparkSession, settings: Settings) -> None:
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
-        tables = load_item_tables(spark, settings)
+        tables = load_item_tables(settings)
 
         assert tables.content.shape == (N_ITEMS + 1, DIM)
         assert tables.category.shape == (N_ITEMS + 1,)
@@ -124,13 +124,13 @@ class TestAlignment:
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 4])
 
         with pytest.raises(ValueError, match="not dense"):
-            load_item_tables(spark, settings)
+            load_item_tables(settings)
 
     def test_an_unknown_variant_is_refused(self, spark: SparkSession, settings: Settings) -> None:
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
         with pytest.raises(ValueError, match="variant must be"):
-            load_item_tables(spark, settings, variant="vec_nonsense")
+            load_item_tables(settings, variant="vec_nonsense")
 
     def test_both_variants_are_readable(self, spark: SparkSession, settings: Settings) -> None:
         """vec_title exists so the neural content tower can be compared against
@@ -138,7 +138,7 @@ class TestAlignment:
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
         for variant in ("vec_title", "vec_title_abstract"):
-            assert isinstance(load_item_tables(spark, settings, variant), ItemTables)
+            assert isinstance(load_item_tables(settings, variant), ItemTables)
 
 
 def _write_gold(spark: SparkSession, settings: Settings) -> None:

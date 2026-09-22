@@ -367,7 +367,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     spark = get_spark(settings, app="two-tower")
     try:
-        items = load_item_tables(spark, settings, args.variant)
+        items = load_item_tables(settings, args.variant)
         train_split, val_split = load_train_and_validation(
             spark, settings, args.max_history, args.max_negs, args.holdout_hours
         )
