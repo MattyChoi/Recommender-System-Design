@@ -76,7 +76,7 @@ def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> 
         columns=["item_idx", "category_idx", "subcategory_idx", variant],
     )
 
-    idx = torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64"))
+    idx = torch.from_numpy(rows["item_idx"].to_numpy().astype("int64"))
     n_rows = int(idx.max()) + 1
     if len(idx) != n_rows - 1 or int(idx.min()) != 1:
         raise ValueError(

@@ -21,6 +21,7 @@ from common.torch_env import (
 )
 from common.tracking import provenance, require_reachable, track
 from data_pipeline.features.user_history import MAX_HISTORY
+from evaluation.offline.geometry import spread_of
 from models.classes.batching import Batch
 from models.classes.dataset import ItemTables, SplitTensors
 from models.classes.train import Counters, Hits
@@ -59,16 +60,15 @@ def retrieval_hits(
     loader: DataLoader[Batch],
     device: torch.device,
     k: int = 100,
+    items: torch.Tensor | None = None,
 ) -> Hits:
     """Per-row Recall@k over the FULL catalogue.
 
-    Every rank scores the whole validation set rather than a shard, so all ranks
-    agree without a collective. Validation is cheap next to a training epoch.
-
-    The user's history is deliberately NOT filtered out of the candidates. It is
-    common practice, but C4 measured 5,704 items clicked both before and during
-    the window, so filtering would discard real positives and move the
-    denominator in a way that needs its own argument.
+    Args:
+        items: Precomputed item embeddings with row 0 already dropped. Passing
+            them lets a caller measure the same table two ways -- recall and
+            geometry -- without encoding the catalogue twice, and guarantees the
+            two numbers describe one table rather than two.
     """
     tower = _unwrap(model)
     was_training = tower.training
@@ -76,7 +76,7 @@ def retrieval_hits(
     try:
         # Row 0 is the reserved OOV bucket, not an article, so it cannot be a
         # correct answer and must not occupy a slot in the top k.
-        items = tower.precompute_items()[1:]
+        items = tower.precompute_items()[1:] if items is None else items
         hit: list[torch.Tensor] = []
         item_ids: list[torch.Tensor] = []
         user_ids: list[torch.Tensor] = []
@@ -185,6 +185,30 @@ def validate(
     return float(hit.float().mean()) if len(hit) else 0.0
 
 
+def evaluate_epoch(
+    model: torch.nn.Module,
+    loader: DataLoader[Batch],
+    device: torch.device,
+    k: int = 100,
+) -> dict[str, float]:
+    """Recall and the geometry it came out of, from one pass over the catalogue."""
+    tower = _unwrap(model)
+    was_training = tower.training
+    tower.eval()
+    try:
+        items = tower.precompute_items()[1:]
+        hit = retrieval_hits(model, loader, device, k, items=items).hit
+    finally:
+        tower.train(was_training)
+
+    spread = spread_of(items)
+    return {
+        f"recall@{k}": float(hit.float().mean()) if len(hit) else 0.0,
+        "item_rank": spread.effective_rank,
+        "item_cosine": spread.cosine,
+    }
+
+
 def fit(
     model: torch.nn.Module,
     train_loader: DataLoader[Batch],
@@ -201,8 +225,8 @@ def fit(
     """Train until validation recall stops improving.
 
     Returns:
-        One record per epoch: ``loss`` and ``recall@k``. The caller logs it;
-        this function does not know about MLflow.
+        One record per epoch: ``loss``, ``recall@k`` and the item geometry. The
+        caller logs it; this function does not know about MLflow.
     """
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scaler = grad_scaler_for(device)
@@ -215,8 +239,9 @@ def fit(
 
     for epoch in range(epochs):
         loss = run_epoch(model, train_loader, counters, optimiser, scaler, device, n_items, epoch)
-        recall = validate(model, val_loader, device, k)
-        history.append({"epoch": float(epoch), "loss": loss, f"recall@{k}": recall})
+        measured = evaluate_epoch(model, val_loader, device, k)
+        recall = measured[f"recall@{k}"]
+        history.append({"epoch": float(epoch), "loss": loss, **measured})
 
         if recall > best:
             best, stale = recall, 0
@@ -379,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     history = _fit_locally(args, settings, items, train_split, val_split, device, marks, run_name)
     best = max(row[f"recall@{args.k}"] for row in history)
     print(f"  best recall@{args.k} = {best:.4f} over {len(history)} epochs")
+    print("  item rank: " + " ".join(f"{row['item_rank']:.1f}" for row in history))
     return 0
 
 

@@ -10,6 +10,12 @@ there.
 Index 0 is ``OOV_IDX`` and every table is sized ``n_items + 1`` (B2). It is also
 ``padding_idx`` on the learned tables, so a padded history slot holds a vector
 that is zero and stays zero.
+
+**Every input block is normalised before it is concatenated.** Both towers glue
+together blocks whose natural scales differ by two orders of magnitude and hand
+the result to one ``Linear`` initialised at a single scale, so without this the
+loud blocks decide the output and the quiet ones are not inputs at all. See
+:meth:`TwoTower.item_features` for what that measured.
 """
 
 from __future__ import annotations
@@ -17,6 +23,12 @@ from __future__ import annotations
 import torch
 from torch import nn
 from torch.nn import functional as f
+
+
+def _normalise(block: torch.Tensor) -> torch.Tensor:
+    """Zero-mean unit-variance across a block's own last dimension, no parameters."""
+    normalised: torch.Tensor = f.layer_norm(block, block.shape[-1:])
+    return normalised
 
 
 class Tower(nn.Module):
@@ -84,6 +96,7 @@ class TwoTower(nn.Module):
 
     item_category: torch.Tensor
     item_subcategory: torch.Tensor
+    input_scaling: torch.Tensor
 
     def __init__(
         self,
@@ -127,6 +140,12 @@ class TwoTower(nn.Module):
         self.register_buffer("item_category", item_category.long())
         self.register_buffer("item_subcategory", item_subcategory.long())
 
+        # Nothing reads this. It exists so that a checkpoint written BEFORE the
+        # blocks were normalised fails `load_state_dict(strict=True)` instead of
+        # loading cleanly. Bump it whenever the input layout changes in a way old
+        # weights cannot survive.
+        self.register_buffer("input_scaling", torch.tensor(1))
+
         # self.content = nn.Embedding.from_pretrained(  # type: ignore[no-untyped-call]
         #     content, freeze=True, padding_idx=0
         # )
@@ -149,7 +168,7 @@ class TwoTower(nn.Module):
         self.history_proj: nn.Linear | None = None
         if use_id:
             self.item_id_emb = nn.Embedding(n_rows, id_dim, padding_idx=0)
-            nn.init.normal_(self.item_id_emb.weight, std=0.01)
+            nn.init.normal_(self.item_id_emb.weight, std=id_dim**-0.5)
             with torch.no_grad():
                 self.item_id_emb.weight[0].zero_()
         else:
@@ -171,17 +190,17 @@ class TwoTower(nn.Module):
         return self.log_temp.exp()
 
     def item_features(self, item_ids: torch.Tensor) -> torch.Tensor:
-        """Concatenated item inputs for ``item_ids``, before the tower."""
+        """Concatenated item inputs, each block normalised to a common scale."""
         parts: list[torch.Tensor] = []
         content, category, subcategory = self.content, self.category, self.subcategory
         if content is not None and category is not None and subcategory is not None:
             parts += [
-                content(item_ids),
-                category(self.item_category[item_ids]),
-                subcategory(self.item_subcategory[item_ids]),
+                _normalise(content(item_ids)),
+                _normalise(category(self.item_category[item_ids])),
+                _normalise(subcategory(self.item_subcategory[item_ids])),
             ]
         if self.item_id_emb is not None:
-            parts.append(self.item_id_emb(item_ids))
+            parts.append(_normalise(self.item_id_emb(item_ids)))
         return torch.cat(parts, dim=-1)
 
     def encode_item(self, item_ids: torch.Tensor) -> torch.Tensor:
@@ -227,7 +246,7 @@ class TwoTower(nn.Module):
             projected: torch.Tensor = self.history_proj(pooled)
             pooled = projected
         embedded: torch.Tensor = self.user_tower(
-            torch.cat([self.user_norm(user_feats), pooled], dim=-1)
+            torch.cat([self.user_norm(user_feats), _normalise(pooled)], dim=-1)
         )
         return embedded
 

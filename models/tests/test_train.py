@@ -34,6 +34,7 @@ from models.retrieval.sampling import StreamingLogQ
 from models.retrieval.train import (
     _arm,
     _parser,
+    evaluate_epoch,
     fit,
     run_epoch,
     train_step,
@@ -214,6 +215,43 @@ class TestValidation:
             model = _model()
             model.train()
             validate(model, _loader(split, device, training=False), device, k=5)
+
+        assert model.training
+
+    def test_the_epoch_record_carries_geometry_beside_recall(
+        self, split: SplitTensors, device: torch.device
+    ) -> None:
+        """Recall cannot distinguish a retriever that spans the catalogue from
+        one returning the same hundred articles to everyone. Four models were
+        trained on this project before anyone noticed a 774-item universe, which
+        is the argument for measuring it every epoch rather than in a probe."""
+        with deterministic(0):
+            got = evaluate_epoch(_model(), _loader(split, device, training=False), device, k=5)
+
+        assert set(got) == {"recall@5", "item_rank", "item_cosine"}
+        assert 1.0 <= got["item_rank"] <= 8.0  # out_dim is 8 in this fixture
+        assert -1.0 <= got["item_cosine"] <= 1.0
+
+    def test_the_epoch_record_and_validate_agree(
+        self, split: SplitTensors, device: torch.device
+    ) -> None:
+        """One catalogue encoding feeds the hits and the geometry, so the two
+        numbers cannot end up describing different item tables."""
+        with deterministic(0):
+            loader = _loader(split, device, training=False)
+            model = _model()
+            got = evaluate_epoch(model, loader, device, k=5)
+            expected = validate(model, loader, device, k=5)
+
+        assert got["recall@5"] == pytest.approx(expected)
+
+    def test_the_epoch_record_leaves_the_model_training(
+        self, split: SplitTensors, device: torch.device
+    ) -> None:
+        with deterministic(0):
+            model = _model()
+            model.train()
+            evaluate_epoch(model, _loader(split, device, training=False), device, k=5)
 
         assert model.training
 

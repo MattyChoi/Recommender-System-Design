@@ -26,7 +26,7 @@ import torch
 from torch import nn
 
 from common.torch_env import deterministic, select_device
-from models.retrieval.two_tower import Tower, TwoTower
+from models.retrieval.two_tower import Tower, TwoTower, _normalise
 
 N_ITEMS = 5
 CONTENT_DIM = 4
@@ -100,6 +100,113 @@ class TestTheUnitSphere:
         assert torch.allclose(items.norm(dim=-1), torch.ones(3), atol=1e-5)
         assert torch.allclose(users.norm(dim=-1), torch.ones(2), atol=1e-5)
         assert items.shape == (3, OUT_DIM) and users.shape == (2, OUT_DIM)
+
+
+class TestInputBlockScales:
+    """The blocks must reach the tower comparable, and zero must survive.
+
+    Measured on the first four runs before this existed: the 24 categorical
+    dimensions carried 95.5% of the item tower's input energy against 4.2% for
+    768 content dimensions, and the pooled history carried 0.13-0.28% of the
+    user tower's. The item embeddings came out at an effective rank of 7 of
+    128, the retriever served 774 of 65,238 articles, and Recall@100 on items
+    with no training clicks was exactly zero. None of that errored.
+
+    The second half matters as much as the first. The norms are parameterless
+    so that a zero input stays zero, which is what keeps the reserved row 0 out
+    of the candidate pool and an empty history contributing nothing. An affine
+    LayerNorm would satisfy every scale assertion here and silently break both.
+    """
+
+    def test_every_item_block_reaches_the_tower_at_the_same_scale(
+        self, tables: dict[str, torch.Tensor]
+    ) -> None:
+        model = _model(tables)
+        assert model.content is not None
+        assert model.category is not None
+        assert model.subcategory is not None
+        assert model.item_id_emb is not None
+        widths = [
+            model.content.embedding_dim,
+            model.category.embedding_dim,
+            model.subcategory.embedding_dim,
+            model.item_id_emb.embedding_dim,
+        ]
+
+        features = model.item_features(torch.tensor([1, 2, 3, 4, 5]))
+
+        start = 0
+        for width in widths:
+            block = features[:, start : start + width]
+            # Not exactly 1: LayerNorm divides by sqrt(var + 1e-5), so a block
+            # whose own variance is small loses a little scale to the epsilon.
+            # The ID block inits at std 1/sqrt(64), variance 0.0156, and lands
+            # at 0.99968. That is a property worth knowing rather than a
+            # tolerance to hide -- see the test below.
+            assert float(block.detach().pow(2).mean().sqrt()) == pytest.approx(1.0, abs=2e-3)
+            start += width
+        # If the model grows a block this test does not know about, the widths
+        # stop covering the tensor and every assertion above becomes partial.
+        assert start == features.shape[1]
+
+    def test_a_very_quiet_block_is_not_amplified_to_full_scale(self) -> None:
+        """LayerNorm's epsilon is a floor, and here it works in our favour.
+
+        Normalising the ID block was the risk in this change: an item whose ID
+        embedding is still near its initialisation would have that noise raised
+        to the same volume as a trained one, which is the opposite of what a
+        cold item needs. The epsilon bounds it. A row at std 1e-3 has variance
+        1e-6 against eps 1e-5 and comes out at roughly a third of unit scale,
+        so an untrained row stays quieter than a trained one without anything
+        having to track which is which.
+        """
+        quiet = torch.randn(256, 64) * 1e-3
+        loud = torch.randn(256, 64)
+
+        assert float(_normalise(quiet).pow(2).mean().sqrt()) < 0.5
+        assert float(_normalise(loud).pow(2).mean().sqrt()) == pytest.approx(1.0, abs=1e-3)
+
+    def test_the_reserved_row_is_still_all_zero_after_normalising(
+        self, tables: dict[str, torch.Tensor]
+    ) -> None:
+        """Row 0 is zero in every table, so its whole feature vector must be
+        zero. With an affine norm it would be the learned bias instead -- a
+        nonzero vector, competing in every softmax, for an index that is a
+        bucket rather than an article."""
+        model = _model(tables)
+
+        features = model.item_features(torch.tensor([0]))
+
+        assert torch.equal(features, torch.zeros_like(features))
+
+    def test_a_zero_block_normalises_to_zero(self) -> None:
+        """Both invariants above reduce to this one property of the helper."""
+        assert torch.equal(_normalise(torch.zeros(2, 5)), torch.zeros(2, 5))
+
+    def test_the_id_table_does_not_start_inside_numerical_noise(
+        self, tables: dict[str, torch.Tensor]
+    ) -> None:
+        """At std=0.01 every row starts indistinguishable from every other, and
+        an item appearing in a handful of batches never leaves that state."""
+        model = _model(tables)
+        assert model.item_id_emb is not None
+
+        spread = float(model.item_id_emb.weight[1:].std())
+
+        assert spread == pytest.approx(model.item_id_emb.embedding_dim**-0.5, rel=0.4)
+
+    def test_a_checkpoint_from_before_the_block_norms_is_refused(
+        self, tables: dict[str, torch.Tensor]
+    ) -> None:
+        """Those weights were fitted against inputs two orders of magnitude
+        apart. Nothing about the tensor shapes changed, so without the buffer
+        they would load cleanly and score a number that looks like a result."""
+        model = _model(tables)
+        state = model.state_dict()
+        del state["input_scaling"]
+
+        with pytest.raises(RuntimeError, match="input_scaling"):
+            model.load_state_dict(state)
 
 
 class TestThePool:
