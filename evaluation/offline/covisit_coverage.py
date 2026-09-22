@@ -28,7 +28,7 @@ from pyspark.sql import functions as f
 from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
-from models.retrieval.covisit import build_covisitation, score_covisit
+from models.retrieval.baselines.covisit import build_covisitation, score_covisit
 
 # Needed by score_covisit; kept narrow so the cached frames stay small.
 _NEEDED = ("user_id", "item_id", "impression_id", "clicked", "ts")

@@ -26,15 +26,15 @@ import torch
 from torch.utils.data import DataLoader
 
 from common.torch_env import deterministic, grad_scaler_for, select_device
-from models.retrieval.batching import Batch
-from models.retrieval.dataset import SplitTensors
+from models.classes.batching import Batch
+from models.classes.dataset import SplitTensors
+from models.classes.train import Counters
+from models.retrieval.dataloader.batching import make_loader
 from models.retrieval.sampling import StreamingLogQ
 from models.retrieval.train import (
-    Counters,
     _arm,
     _parser,
     fit,
-    make_loader,
     run_epoch,
     train_step,
     validate,
@@ -71,6 +71,8 @@ def split() -> SplitTensors:
         # The answer is the first history entry, so there is a signal to find.
         item_ids=history[:, 0].clone(),
         impression_ids=torch.arange(ROWS),
+        # Four rows per user, so a per-user mean is not a per-row mean.
+        user_ids=torch.arange(ROWS) // 4,
         neg_ids=torch.randint(1, N_ITEMS + 1, (ROWS, NEGS), generator=generator),
         neg_mask=torch.ones(ROWS, NEGS, dtype=torch.long),
     )

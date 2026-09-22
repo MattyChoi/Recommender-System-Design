@@ -1,6 +1,6 @@
 .PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        index serve bench demo lint fmt types test check
+        bands index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -217,9 +217,20 @@ torch-env:  ## Report the torch device this machine will train on
 #   make train TRAIN_ARGS="--no-use-content"           # ID only
 #   make train TRAIN_ARGS="--no-use-id"                # content only
 #   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 4"   # uniform arm
+# ex: `make train TRAIN_ARGS="--batch-size 2048 --epochs 40 --patience 5"`
 train:  ## gold + item_content -> a trained two-tower, logged to MLflow
 	uv run python -m models.retrieval.train --epochs $(EPOCHS) \
 	    --batch-size $(BATCH) --lr $(LR) $(TRAIN_ARGS)
+
+# HOLDOUT must match the run that wrote CHECKPOINT
+# `make bands CHECKPOINT=data/checkpoints/both-logq-n4u0-0f6e03fc2c6e519e.pt`
+CHECKPOINT ?=
+HOLDOUT ?= 12
+BANDS_ARGS ?=
+bands:  ## a checkpoint -> Recall@k by item popularity band (G2's gate)
+	@test -n "$(CHECKPOINT)" || { echo "set CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
+	uv run python -m models.retrieval.evaluate $(CHECKPOINT) \
+	    --holdout-hours $(HOLDOUT) $(BANDS_ARGS)
 
 index:  ## Build the FAISS index
 	@echo "TODO: index build"; exit 1

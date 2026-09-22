@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -16,7 +14,6 @@ from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.torch_env import (
     autocast_for,
-    dataloader_kwargs,
     describe,
     grad_scaler_for,
     select_device,
@@ -24,156 +21,79 @@ from common.torch_env import (
 )
 from common.tracking import provenance, require_reachable, track
 from data_pipeline.features.user_history import MAX_HISTORY
-from models.retrieval.batching import (
+from models.classes.batching import Batch
+from models.classes.dataset import ItemTables, SplitTensors
+from models.classes.train import Counters, Hits
+from models.retrieval.dataloader.batching import (
     HISTORY_DROPOUT,
-    Batch,
-    RowIndices,
     assemble_pool,
-    make_collate,
+    make_loader,
 )
-from models.retrieval.dataset import (
+from models.retrieval.dataloader.dataset import (
     CONTENT_VARIANTS,
-    ItemTables,
-    SplitTensors,
     load_item_tables,
     load_train_and_validation,
 )
-from models.retrieval.distributed import all_gather_detached, is_distributed
 from models.retrieval.losses import sampled_softmax_loss
-from models.retrieval.sampling import StreamingLogQ, uniform_log_q
+from models.retrieval.sampling import StreamingLogQ
 from models.retrieval.two_tower import TwoTower
 
 
-@dataclass
-class Counters:
-    """One frequency estimator per negative source, and the ablation switch.
+def _unwrap(model: torch.nn.Module) -> TwoTower:
+    """The TwoTower inside, whether or not DDP is wrapping it."""
 
-    The correction assumes every softmax column was drawn from the distribution
-    ``q`` describes, and the pool mixes two observed distributions -- positives
-    drawn by popularity, slate negatives drawn by exposure. Uniform draws need
-    no estimator; their probability is exact.
-
-    Attributes:
-        positives: Frequency of the clicked items.
-        slate: Frequency of the impression negatives.
-        corrected: False makes every ``log_q`` zero, which is G2's gate --
-            "train with and without the correction". A per-row constant is
-            invisible to softmax, so zeros are exactly "no correction". Living
-            here rather than as a flag threaded through ``fit``, ``run_epoch``
-            and ``train_step`` keeps the thing being ablated in one place.
-    """
-
-    positives: StreamingLogQ
-    slate: StreamingLogQ
-    corrected: bool = True
-
-    def to(self, device: torch.device) -> Counters:
-        return Counters(self.positives.to(device), self.slate.to(device), self.corrected)
-
-    def log_q_for(
-        self,
-        item_ids: torch.Tensor,
-        negatives: torch.Tensor,
-        is_slate: torch.Tensor,
-        n_items: int,
-        device: torch.device,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """The correction for the positive and negative columns.
-
-        Call BEFORE :meth:`observe` for a given batch, or it conditions its own
-        correction on its own labels.
-        """
-        if not self.corrected:
-            return (
-                torch.zeros(item_ids.shape, device=device),
-                torch.zeros(negatives.shape, device=device),
-            )
-        return (
-            self.positives.log_q(item_ids),
-            torch.where(
-                is_slate,
-                self.slate.log_q(negatives),
-                uniform_log_q((negatives.numel(),), n_items, device),
-            ),
-        )
-
-    def observe(
-        self, item_ids: torch.Tensor, negatives: torch.Tensor, is_slate: torch.Tensor
-    ) -> None:
-        """Count what appeared as a column, across every rank.
-
-        The GATHERED ids, because the distribution being modelled is the whole
-        pool -- and every rank sees the identical gathered set, so the counters
-        stay in step without a collective of their own.
-
-        Gather the fixed-width tensors and mask afterwards: the masked subset has
-        a different length per rank, and a ragged gather either hangs or
-        misaligns.
-        """
-        if not self.corrected:
-            return
-        self.positives.update(all_gather_detached(item_ids))
-        drawn = all_gather_detached(negatives)
-        self.slate.update(drawn[all_gather_detached(is_slate.long()).bool()])
-
-    def state_dict(self) -> dict[str, dict[str, torch.Tensor]]:
-        return {"positives": self.positives.state_dict(), "slate": self.slate.state_dict()}
-
-    def load_state_dict(self, state: dict[str, dict[str, torch.Tensor]]) -> None:
-        self.positives.load_state_dict(state["positives"])
-        self.slate.load_state_dict(state["slate"])
+    inner = model.module if isinstance(model, DistributedDataParallel) else model
+    assert isinstance(inner, TwoTower)
+    return inner
 
 
-def make_loader(
-    split: SplitTensors,
-    n_items: int,
-    batch_size: int,
+def _arm(args: argparse.Namespace) -> str:
+    """A short name for what this run is, for the MLflow run and the checkpoint."""
+    towers = "both" if args.use_id and args.use_content else "id" if args.use_id else "content"
+    return f"{towers}-{'logq' if args.logq else 'nologq'}-n{args.max_negs}u{args.uniform_negs}"
+
+
+@torch.no_grad()
+def retrieval_hits(
+    model: torch.nn.Module,
+    loader: DataLoader[Batch],
     device: torch.device,
-    *,
-    training: bool,
-    history_dropout: float,
-    uniform_negs: int = 0,
-    generator: torch.Generator | None = None,
-) -> DataLoader[Batch]:
-    """One split's loader.
+    k: int = 100,
+) -> Hits:
+    """Per-row Recall@k over the FULL catalogue.
 
-    ``num_workers`` is 0 deliberately: ``split`` is already resident, so a worker
-    would pickle it across a process boundary to hand back what the main process
-    holds.
+    Every rank scores the whole validation set rather than a shard, so all ranks
+    agree without a collective. Validation is cheap next to a training epoch.
 
-    **``drop_last`` is True for training and False for validation.** Training
-    gathers across ranks, and ``_check_uniform_rows`` refuses a ragged gather --
-    a final short batch would differ between ranks. Validation never gathers, so
-    dropping rows there would just discard held-out requests.
+    The user's history is deliberately NOT filtered out of the candidates. It is
+    common practice, but C4 measured 5,704 items clicked both before and during
+    the window, so filtering would discard real positives and move the
+    denominator in a way that needs its own argument.
     """
-    rows = RowIndices(len(split.item_ids))
-    sampler: DistributedSampler[int] | None = (
-        DistributedSampler(rows, shuffle=training, drop_last=training)
-        if training and is_distributed()
-        else None
-    )
-    # The Dataset yields ints and the collate returns a Batch, so what iteration
-    # produces is not what the Dataset's parameter says. One cast here beats a
-    # passthrough generator at every consumer.
-    return cast(
-        "DataLoader[Batch]",
-        DataLoader(
-            rows,
-            batch_size=batch_size,
-            sampler=sampler,
-            shuffle=training and sampler is None,
-            drop_last=training,
-            num_workers=0,
-            collate_fn=make_collate(
-                split,
-                n_items,
-                history_dropout=history_dropout,
-                uniform_negs=uniform_negs,
-                generator=generator,
-            ),
-            **dataloader_kwargs(device),
-        ),
-    )
+    tower = _unwrap(model)
+    was_training = tower.training
+    tower.eval()
+    try:
+        # Row 0 is the reserved OOV bucket, not an article, so it cannot be a
+        # correct answer and must not occupy a slot in the top k.
+        items = tower.precompute_items()[1:]
+        hit: list[torch.Tensor] = []
+        item_ids: list[torch.Tensor] = []
+        user_ids: list[torch.Tensor] = []
+        for batch in loader:
+            batch = batch.to(device)
+            user_emb = tower.encode_user(batch.user_feats, batch.history_ids, batch.history_mask)
+            top = (user_emb @ items.T).topk(k, dim=1).indices + 1  # back to 1-based
+            hit.append((top == batch.item_ids.unsqueeze(1)).any(dim=1).cpu())
+            item_ids.append(batch.item_ids.cpu())
+            user_ids.append(batch.user_ids.cpu())
+    finally:
+        tower.train(was_training)
+
+    if not hit:
+        empty = torch.zeros(0, dtype=torch.long)
+        return Hits(torch.zeros(0, dtype=torch.bool), empty, empty)
+    return Hits(torch.cat(hit), torch.cat(item_ids), torch.cat(user_ids))
 
 
 def train_step(
@@ -249,41 +169,20 @@ def run_epoch(
     return float(total / max(steps, 1))
 
 
-@torch.no_grad()
 def validate(
     model: torch.nn.Module,
     loader: DataLoader[Batch],
     device: torch.device,
     k: int = 100,
 ) -> float:
-    """Recall@k over the FULL catalogue.
+    """Recall@k over the full catalogue, aggregated -- the early-stop signal.
 
-    Every rank scores the whole validation set rather than a shard, so all ranks
-    agree without a collective. Validation is cheap next to a training epoch.
-
-    The user's history is deliberately NOT filtered out of the candidates. It is
-    common practice, but C4 measured 5,704 items clicked both before and during
-    the window, so filtering would discard real positives and move the
-    denominator in a way that needs its own argument.
+    A thin wrapper over :func:`retrieval_hits` rather than its own loop, so the
+    number that selects the checkpoint and the number the per-band report
+    aggregates cannot come apart.
     """
-    tower = _unwrap(model)
-    was_training = tower.training
-    tower.eval()
-    try:
-        # Row 0 is the reserved OOV bucket, not an article, so it cannot be a
-        # correct answer and must not occupy a slot in the top k.
-        items = tower.precompute_items()[1:]
-        hits = 0
-        seen = 0
-        for batch in loader:
-            batch = batch.to(device)
-            user_emb = tower.encode_user(batch.user_feats, batch.history_ids, batch.history_mask)
-            top = (user_emb @ items.T).topk(k, dim=1).indices + 1  # back to 1-based
-            hits += int((top == batch.item_ids.unsqueeze(1)).any(dim=1).sum())
-            seen += len(batch.item_ids)
-        return hits / max(seen, 1)
-    finally:
-        tower.train(was_training)
+    hit = retrieval_hits(model, loader, device, k).hit
+    return float(hit.float().mean()) if len(hit) else 0.0
 
 
 def fit(
@@ -336,43 +235,6 @@ def fit(
         _unwrap(model).load_state_dict(best_model)
         counters.load_state_dict(best_counters)
     return history
-
-
-def _parser() -> argparse.ArgumentParser:
-    """The command line. Every remaining Part G deliverable is one invocation of it.
-
-    ``--no-logq`` produces G2's gate, the ``--no-use-*`` pair produces G1's three
-    arms, and ``--max-negs``/``--uniform-negs`` produce G3's table rows.
-    """
-    parser = argparse.ArgumentParser(description="Train the two-tower retriever.")
-    parser.add_argument("--workers", type=int, default=1, help="1 runs in-process, no Ray.")
-    parser.add_argument("--batch-size", type=int, default=8192)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--patience", type=int, default=2)
-    parser.add_argument("--k", type=int, default=100, help="Recall@k, the early-stop metric.")
-    parser.add_argument("--seed", type=int, default=0)
-
-    parser.add_argument("--max-history", type=int, default=MAX_HISTORY)
-    parser.add_argument("--max-negs", type=int, default=4, help="Slate negatives per row.")
-    parser.add_argument("--uniform-negs", type=int, default=0, help="G3's mixed-uniform arm.")
-    parser.add_argument("--history-dropout", type=float, default=HISTORY_DROPOUT)
-    parser.add_argument(
-        "--holdout-hours", type=int, default=12, help="Validation window, off the end of TRAIN."
-    )
-    parser.add_argument("--variant", choices=CONTENT_VARIANTS, default=CONTENT_VARIANTS[0])
-
-    parser.add_argument("--no-logq", dest="logq", action="store_false")
-    parser.add_argument("--no-use-id", dest="use_id", action="store_false")
-    parser.add_argument("--no-use-content", dest="use_content", action="store_false")
-    parser.add_argument("--checkpoint", type=Path, default=None)
-    return parser
-
-
-def _arm(args: argparse.Namespace) -> str:
-    """A short name for what this run is, for the MLflow run and the checkpoint."""
-    towers = "both" if args.use_id and args.use_content else "id" if args.use_id else "content"
-    return f"{towers}-{'logq' if args.logq else 'nologq'}-n{args.max_negs}u{args.uniform_negs}"
 
 
 def _fit_locally(
@@ -450,12 +312,35 @@ def _fit_locally(
     return history
 
 
-def _unwrap(model: torch.nn.Module) -> TwoTower:
-    """The TwoTower inside, whether or not DDP is wrapping it."""
+def _parser() -> argparse.ArgumentParser:
+    """The command line. Every remaining Part G deliverable is one invocation of it.
 
-    inner = model.module if isinstance(model, DistributedDataParallel) else model
-    assert isinstance(inner, TwoTower)
-    return inner
+    ``--no-logq`` produces G2's gate, the ``--no-use-*`` pair produces G1's three
+    arms, and ``--max-negs``/``--uniform-negs`` produce G3's table rows.
+    """
+    parser = argparse.ArgumentParser(description="Train the two-tower retriever.")
+    parser.add_argument("--workers", type=int, default=1, help="1 runs in-process, no Ray.")
+    parser.add_argument("--batch-size", type=int, default=8192)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--patience", type=int, default=2)
+    parser.add_argument("--k", type=int, default=100, help="Recall@k, the early-stop metric.")
+    parser.add_argument("--seed", type=int, default=0)
+
+    parser.add_argument("--max-history", type=int, default=MAX_HISTORY)
+    parser.add_argument("--max-negs", type=int, default=4, help="Slate negatives per row.")
+    parser.add_argument("--uniform-negs", type=int, default=0, help="G3's mixed-uniform arm.")
+    parser.add_argument("--history-dropout", type=float, default=HISTORY_DROPOUT)
+    parser.add_argument(
+        "--holdout-hours", type=int, default=12, help="Validation window, off the end of TRAIN."
+    )
+    parser.add_argument("--variant", choices=CONTENT_VARIANTS, default=CONTENT_VARIANTS[0])
+
+    parser.add_argument("--no-logq", dest="logq", action="store_false")
+    parser.add_argument("--no-use-id", dest="use_id", action="store_false")
+    parser.add_argument("--no-use-content", dest="use_content", action="store_false")
+    parser.add_argument("--checkpoint", type=Path, default=None)
+    return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -482,7 +367,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     spark = get_spark(settings, app="two-tower")
     try:
-        items = load_item_tables(settings, args.variant)
+        items = load_item_tables(spark, settings, args.variant)
         train_split, val_split = load_train_and_validation(
             spark, settings, args.max_history, args.max_negs, args.holdout_hours
         )

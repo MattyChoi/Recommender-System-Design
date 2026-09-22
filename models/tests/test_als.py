@@ -19,7 +19,7 @@ import pytest
 from pyspark.ml.recommendation import ALSModel
 from pyspark.sql import DataFrame, SparkSession
 
-from models.retrieval.als import fit_als, score_als, score_als_item
+from models.retrieval.baselines.als import fit_als, score_als, score_als_item
 
 T0 = datetime(2019, 11, 14, 12, 0, 0)
 

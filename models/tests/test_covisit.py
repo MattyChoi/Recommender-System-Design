@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 import pytest
 from pyspark.sql import DataFrame, SparkSession
 
-from models.retrieval.covisit import (
+from models.retrieval.baselines.covisit import (
     BACKWARD_DISCOUNT,
     build_covisitation,
     click_stream,

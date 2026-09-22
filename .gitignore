@@ -30,6 +30,7 @@ artifacts/
 *.faiss
 mlruns/
 mlartifacts/
+evaluation/results/retrieval
 
 # Secrets and local config
 .env
@@ -41,6 +42,7 @@ outline.md
 logs.txt
 notebooks/*
 .ipynb_checkpoints/
+scripts/
 
 # defer tracking for now
 personal_README.md

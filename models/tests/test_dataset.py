@@ -29,11 +29,11 @@ import torch
 from pyspark.sql import SparkSession
 
 from common.config import Settings, load_settings
-from models.retrieval.dataset import (
+from models.classes.dataset import ItemTables
+from models.retrieval.dataloader.dataset import (
     LOG1P_FEATURES,
     USER_FEATURES,
     USER_FLAGS,
-    ItemTables,
     _cyclic,
     _pad_ragged,
     load_item_tables,
@@ -84,61 +84,61 @@ class TestAlignment:
         ids=["sorted", "reversed", "shuffled"],
     )
     def test_row_order_does_not_change_the_matrix(
-        self, settings: Settings, order: list[int]
+        self, spark: SparkSession, settings: Settings, order: list[int]
     ) -> None:
         """The test that matters. Parquet row order is not a contract, and a
         loader that sorted and trusted would pass on the first ordering."""
         _write_cache(Path(settings.paths.gold) / "item_content", order)
 
-        tables = load_item_tables(settings)
+        tables = load_item_tables(spark, settings)
 
         for k in range(1, N_ITEMS + 1):
             assert torch.equal(tables.content[k], torch.full((DIM,), float(k)))
             assert int(tables.category[k]) == k
             assert int(tables.subcategory[k]) == 10 - k
 
-    def test_the_reserved_row_is_zero(self, settings: Settings) -> None:
+    def test_the_reserved_row_is_zero(self, spark: SparkSession, settings: Settings) -> None:
         """TwoTower zeroes row 0 on the way in, so this is not the last line of
         defence -- but a non-zero row 0 HERE means the item indices are
         misaligned, and the model's zeroing would hide that rather than fix it.
         """
         _write_cache(Path(settings.paths.gold) / "item_content", [3, 1, 4, 2])
 
-        tables = load_item_tables(settings)
+        tables = load_item_tables(spark, settings)
 
         assert torch.equal(tables.content[0], torch.zeros(DIM))
         assert int(tables.category[0]) == 0 and int(tables.subcategory[0]) == 0
 
-    def test_the_matrix_is_n_items_plus_one(self, settings: Settings) -> None:
+    def test_the_matrix_is_n_items_plus_one(self, spark: SparkSession, settings: Settings) -> None:
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
-        tables = load_item_tables(settings)
+        tables = load_item_tables(spark, settings)
 
         assert tables.content.shape == (N_ITEMS + 1, DIM)
         assert tables.category.shape == (N_ITEMS + 1,)
 
-    def test_a_gap_in_the_indices_is_refused(self, settings: Settings) -> None:
+    def test_a_gap_in_the_indices_is_refused(self, spark: SparkSession, settings: Settings) -> None:
         """A missing index leaves a zero row that looks exactly like the
         reserved one, so an item with no content would be indistinguishable
         from OOV -- and the model would treat it as padding."""
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 4])
 
         with pytest.raises(ValueError, match="not dense"):
-            load_item_tables(settings)
+            load_item_tables(spark, settings)
 
-    def test_an_unknown_variant_is_refused(self, settings: Settings) -> None:
+    def test_an_unknown_variant_is_refused(self, spark: SparkSession, settings: Settings) -> None:
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
         with pytest.raises(ValueError, match="variant must be"):
-            load_item_tables(settings, variant="vec_nonsense")
+            load_item_tables(spark, settings, variant="vec_nonsense")
 
-    def test_both_variants_are_readable(self, settings: Settings) -> None:
+    def test_both_variants_are_readable(self, spark: SparkSession, settings: Settings) -> None:
         """vec_title exists so the neural content tower can be compared against
         F3's baseline with the input held fixed."""
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
         for variant in ("vec_title", "vec_title_abstract"):
-            assert isinstance(load_item_tables(settings, variant), ItemTables)
+            assert isinstance(load_item_tables(spark, settings, variant), ItemTables)
 
 
 def _write_gold(spark: SparkSession, settings: Settings) -> None:
@@ -147,11 +147,16 @@ def _write_gold(spark: SparkSession, settings: Settings) -> None:
     ``item_idx`` rises with ``ts``, so a temporal cut is checkable from the
     tensors alone -- which matters, because ``ts`` deliberately does not survive
     into :class:`SplitTensors` and the assertion has to use something that does.
+
+    Two impressions per user, so a per-user aggregation cannot be mistaken for a
+    per-row one, and so ``user_idx`` is not a permutation of ``item_idx`` -- if
+    it were, an alignment bug would be undetectable.
     """
     start = datetime(2019, 11, 14, 0, 0, 0)
     rows = [
         {
             "impression_id": 100 + i,
+            "user_idx": i // 2,
             "item_idx": i + 1,
             "ts": start + timedelta(hours=i),
             "clicked": clicked,
@@ -235,6 +240,26 @@ class TestTheValidationCarve:
         assert train.user_feats.shape[1] == validation.user_feats.shape[1]
         assert train.history_ids.shape[1] == validation.history_ids.shape[1] == 4
         assert train.neg_ids.shape[1] == validation.neg_ids.shape[1] == 2
+
+    def test_the_user_id_rides_along_with_its_own_row(
+        self, spark: SparkSession, settings: Settings
+    ) -> None:
+        """Two left joins sit between the label table and the tensors, and a
+        join does not promise to preserve row order. Checking that ``user_idx``
+        is PRESENT would pass on a column that had been shuffled against the
+        items it describes; the paired comparison it exists for would then be
+        pairing arbitrary rows and reporting a clean interval around noise.
+        """
+        _write_gold(spark, settings)
+
+        train, validation = load_train_and_validation(
+            spark, settings, max_len=4, max_negs=2, holdout_hours=2
+        )
+
+        # user_idx = (item_idx - 1) // 2 by construction in _write_gold.
+        for split in (train, validation):
+            for item, user in zip(split.item_ids.tolist(), split.user_ids.tolist(), strict=True):
+                assert user == (item - 1) // 2
 
 
 class TestRaggedPadding:

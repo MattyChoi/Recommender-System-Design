@@ -19,14 +19,9 @@ import pytest
 import torch
 
 from common.torch_env import select_device
-from models.retrieval.batching import (
-    Batch,
-    RowIndices,
-    assemble_pool,
-    make_collate,
-    truncate_history,
-)
-from models.retrieval.dataset import SplitTensors
+from models.classes.batching import Batch, RowIndices
+from models.classes.dataset import SplitTensors
+from models.retrieval.dataloader.batching import assemble_pool, make_collate, truncate_history
 
 ROWS = 6
 FEATS = 3
@@ -55,6 +50,9 @@ def split() -> SplitTensors:
         history_mask=history_mask,
         item_ids=torch.arange(1, ROWS + 1),
         impression_ids=torch.arange(100, 100 + ROWS),
+        # Deliberately fewer users than rows: a per-user aggregation that is
+        # secretly per-row would still look right on a 1:1 fixture.
+        user_ids=torch.tensor([7, 7, 8, 8, 9, 9]),
         neg_ids=neg_ids,
         neg_mask=neg_mask,
     )

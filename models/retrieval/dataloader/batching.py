@@ -13,73 +13,23 @@ in RAM. ``num_workers=0`` and one fancy-index per batch is strictly faster.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, fields, replace
+from typing import cast
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, DistributedSampler
 
-from models.retrieval.dataset import SplitTensors
+from common.torch_env import dataloader_kwargs
+from models.classes.batching import Batch, RowIndices
+from models.classes.dataset import SplitTensors
 from models.retrieval.distributed import (
     all_gather_detached,
     all_gather_with_grad,
+    is_distributed,
     positive_index,
 )
 from models.retrieval.sampling import uniform_negatives
 
 HISTORY_DROPOUT = 0.5
-
-
-@dataclass(frozen=True)
-class Batch:
-    """One training batch.
-
-    Attributes:
-        user_feats: ``[B, F]``.
-        history_ids: ``[B, L]``, 0 where padded or dropped.
-        history_mask: ``[B, L]``.
-        item_ids: ``[B]`` the clicked item -- the positives.
-        neg_ids: ``[B, N]`` candidate negatives. Never 0: a slate short of N
-            entries is topped up with uniform draws rather than padded, so the
-            reserved OOV row never becomes a column.
-        neg_is_slate: ``[B, N]`` True where the negative came from the
-            impression, False where it was drawn uniformly. This is the switch
-            deciding which ``log_q`` each column gets.
-        impression_ids: ``[B]``, kept so slates can be regrouped at evaluation.
-    """
-
-    user_feats: torch.Tensor
-    history_ids: torch.Tensor
-    history_mask: torch.Tensor
-    item_ids: torch.Tensor
-    neg_ids: torch.Tensor
-    neg_is_slate: torch.Tensor
-    impression_ids: torch.Tensor
-
-    def to(self, device: torch.device) -> Batch:
-        """Move every field, keeping the dataclass."""
-        moved = {
-            field.name: getattr(self, field.name).to(device, non_blocking=True)
-            for field in fields(self)
-        }
-        return replace(self, **moved)
-
-
-class RowIndices(Dataset[int]):
-    """Yields row numbers, not rows.
-
-    The collate does one fancy-index into the resident tensors instead of B
-    separate lookups and a stack, which is an order of magnitude cheaper at
-    B=8192. The Dataset exists so ``DistributedSampler`` can shard the rows.
-    """
-
-    def __init__(self, rows: int) -> None:
-        self.rows = rows
-
-    def __len__(self) -> int:
-        return self.rows
-
-    def __getitem__(self, index: int) -> int:
-        return index
 
 
 def truncate_history(
@@ -178,6 +128,7 @@ def make_collate(
             neg_ids=negatives,
             neg_is_slate=is_slate,
             impression_ids=split.impression_ids[rows],
+            user_ids=split.user_ids[rows],
         )
 
     return collate
@@ -226,3 +177,55 @@ def assemble_pool(
         [all_gather_detached(positive_log_q), all_gather_detached(negative_log_q)], dim=0
     )
     return item_emb, log_q, item_ids, positive_index(len(positive_emb), positive_emb.device)
+
+
+def make_loader(
+    split: SplitTensors,
+    n_items: int,
+    batch_size: int,
+    device: torch.device,
+    *,
+    training: bool,
+    history_dropout: float,
+    uniform_negs: int = 0,
+    generator: torch.Generator | None = None,
+) -> DataLoader[Batch]:
+    """One split's loader.
+
+    ``num_workers`` is 0 deliberately: ``split`` is already resident, so a worker
+    would pickle it across a process boundary to hand back what the main process
+    holds.
+
+    **``drop_last`` is True for training and False for validation.** Training
+    gathers across ranks, and ``_check_uniform_rows`` refuses a ragged gather --
+    a final short batch would differ between ranks. Validation never gathers, so
+    dropping rows there would just discard held-out requests.
+    """
+    rows = RowIndices(len(split.item_ids))
+    sampler: DistributedSampler[int] | None = (
+        DistributedSampler(rows, shuffle=training, drop_last=training)
+        if training and is_distributed()
+        else None
+    )
+    # The Dataset yields ints and the collate returns a Batch, so what iteration
+    # produces is not what the Dataset's parameter says. One cast here beats a
+    # passthrough generator at every consumer.
+    return cast(
+        "DataLoader[Batch]",
+        DataLoader(
+            rows,
+            batch_size=batch_size,
+            sampler=sampler,
+            shuffle=training and sampler is None,
+            drop_last=training,
+            num_workers=0,
+            collate_fn=make_collate(
+                split,
+                n_items,
+                history_dropout=history_dropout,
+                uniform_negs=uniform_negs,
+                generator=generator,
+            ),
+            **dataloader_kwargs(device),
+        ),
+    )

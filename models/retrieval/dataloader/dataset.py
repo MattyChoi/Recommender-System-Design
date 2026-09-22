@@ -11,19 +11,17 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from dataclasses import dataclass
-from datetime import timedelta
-from pathlib import Path
+from datetime import datetime, timedelta
 
 import numpy as np
 import numpy.typing as npt
-import pyarrow.parquet as pq
 import torch
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
 from common.config import Settings
 from common.utils import read_gold
+from models.classes.dataset import ItemTables, SplitTensors
 
 # Static user features, in a fixed order. NOT a set: the order is the column
 # order of the tensor the model sees..
@@ -41,62 +39,19 @@ USER_FLAGS = ("has_user_features",)
 CONTENT_VARIANTS = ("vec_title_abstract", "vec_title")
 
 
-@dataclass(frozen=True)
-class ItemTables:
-    """Item-indexed inputs, sized ``n_items + 1`` with row 0 reserved.
-
-    Attributes:
-        content: ``[n_items + 1, dim]``, row 0 all-zero. ``TwoTower`` copies it
-            into a frozen embedding and zeroes row 0 on the way in.
-        category: ``[n_items + 1]`` category index per item.
-        subcategory: ``[n_items + 1]`` subcategory index per item.
-        n_categories: Distinct categories, excluding the reserved 0.
-        n_subcategories: Distinct subcategories, excluding the reserved 0.
-    """
-
-    content: torch.Tensor
-    category: torch.Tensor
-    subcategory: torch.Tensor
-    n_categories: int
-    n_subcategories: int
-
-
-@dataclass(frozen=True)
-class SplitTensors:
-    """One split, ready for a DataLoader.
-
-    Attributes:
-        user_feats: ``[R, F]`` static + context features.
-        history_ids: ``[R, L]`` item indices, 0 where padded.
-        history_mask: ``[R, L]`` 1 for a real entry.
-        item_ids: ``[R]`` the clicked item.
-        impression_ids: ``[R]`` kept so slates can be regrouped at evaluation.
-        neg_ids: ``[R, K]`` items shown in the same slate and not clicked, 0
-            where padded. Hard negatives.
-        neg_mask: ``[R, K]`` 1 for a real negative. All-zero for a request whose
-            every item was clicked, and for one whose slate held fewer than K
-            others.
-    """
-
-    user_feats: torch.Tensor
-    history_ids: torch.Tensor
-    history_mask: torch.Tensor
-    item_ids: torch.Tensor
-    impression_ids: torch.Tensor
-    neg_ids: torch.Tensor
-    neg_mask: torch.Tensor
-
-
 def _cyclic(values: np.ndarray, period: int) -> tuple[np.ndarray, np.ndarray]:
     """Sin/cos encoding of a cyclic integer feature."""
     radians = 2.0 * math.pi * values / period
     return np.sin(radians), np.cos(radians)
 
 
-def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> ItemTables:
+def load_item_tables(
+    spark: SparkSession, settings: Settings, variant: str = CONTENT_VARIANTS[0]
+) -> ItemTables:
     """Read ``gold/item_content`` into item-indexed tensors.
 
     Args:
+        spark: Active session.
         settings: The root configuration object.
         variant: Which cached vectors to use. ``vec_title_abstract`` is the
             better representation; ``vec_title`` is what F3's content baseline
@@ -115,13 +70,13 @@ def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> 
     if variant not in CONTENT_VARIANTS:
         raise ValueError(f"variant must be one of {CONTENT_VARIANTS}; got {variant!r}")
 
-    root = Path(settings.paths.gold) / "item_content"
-    table = pq.read_table(
-        root / "part-00000.parquet",
-        columns=["item_idx", "category_idx", "subcategory_idx", variant],
+    rows = (
+        read_gold(spark, settings, "item_content")
+        .select("item_idx", "category_idx", "subcategory_idx", variant)
+        .toPandas()
     )
 
-    idx = torch.from_numpy(table["item_idx"].to_numpy().astype("int64"))
+    idx = torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64"))
     n_rows = int(idx.max()) + 1
     if len(idx) != n_rows - 1 or int(idx.min()) != 1:
         raise ValueError(
@@ -130,16 +85,16 @@ def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> 
             "leaves a zero row indistinguishable from the reserved OOV row."
         )
 
-    vectors = np.stack(table[variant].to_numpy(zero_copy_only=False)).astype("float32")
+    vectors = np.stack(list(rows[variant])).astype("float32")
 
     content = torch.zeros(n_rows, vectors.shape[1], dtype=torch.float32)
     content[idx] = torch.from_numpy(vectors)
 
     category = torch.zeros(n_rows, dtype=torch.long)
-    category[idx] = torch.from_numpy(table["category_idx"].to_numpy().astype("int64"))
+    category[idx] = torch.from_numpy(rows["category_idx"].to_numpy(dtype="int64"))
 
     subcategory = torch.zeros(n_rows, dtype=torch.long)
-    subcategory[idx] = torch.from_numpy(table["subcategory_idx"].to_numpy().astype("int64"))
+    subcategory[idx] = torch.from_numpy(rows["subcategory_idx"].to_numpy(dtype="int64"))
 
     return ItemTables(
         content=content,
@@ -153,7 +108,9 @@ def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> 
 def _clicked_rows(examples: DataFrame) -> DataFrame:
     """The positives, with ``ts`` kept so a window can still be cut."""
     columns = [*USER_FEATURES, *USER_FLAGS, "hour_of_day", "day_of_week"]
-    return examples.where(f.col("clicked")).select("impression_id", "item_idx", "ts", *columns)
+    return examples.where(f.col("clicked")).select(
+        "impression_id", "user_idx", "item_idx", "ts", *columns
+    )
 
 
 def _tensors_from(
@@ -199,9 +156,97 @@ def _tensors_from(
         history_mask=mask,
         item_ids=torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64")),
         impression_ids=torch.from_numpy(rows["impression_id"].to_numpy(dtype="int64")),
+        user_ids=torch.from_numpy(rows["user_idx"].to_numpy(dtype="int64")),
         neg_ids=neg_ids,
         neg_mask=neg_mask,
     )
+
+
+def _boundary(examples: DataFrame, holdout_hours: int) -> datetime:
+    """Where training stops and the validation window opens.
+
+    One definition, because :func:`prior_window_counts` has to land on the same
+    instant as the carve or its "recent" counts would be measured against a
+    different window than the one being predicted.
+    """
+    end: datetime = examples.agg(f.max("ts").alias("end")).collect()[0]["end"]
+    return end - timedelta(hours=holdout_hours)
+
+
+def prior_window_counts(
+    spark: SparkSession, settings: Settings, holdout_hours: int, n_rows: int
+) -> torch.Tensor:
+    """Clicks per item in the window immediately BEFORE validation.
+
+    What a point-in-time popularity retriever standing at the boundary would
+    have counted. The window is the same width as the validation window and
+    adjacent to it, so "the top 100 by recent clicks" means the same thing on
+    both sides of the cut.
+
+    Distinct from the training-window counts used to BAND items: that axis is
+    how often the model saw an item, this is what a counting baseline would
+    have ranked. On news the two diverge sharply and conflating them is how a
+    reference line turns into a strawman.
+
+    Returns:
+        ``[n_rows]`` counts, index 0 reserved and always zero.
+    """
+    examples = _clicked_rows(read_gold(spark, settings, "training_examples/train"))
+    boundary = _boundary(examples, holdout_hours)
+    window = examples.where(
+        (f.col("ts") >= f.lit(boundary - timedelta(hours=holdout_hours)))
+        & (f.col("ts") < f.lit(boundary))
+    )
+
+    counts = torch.zeros(n_rows, dtype=torch.long)
+    for row in window.groupBy("item_idx").count().collect():
+        counts[row["item_idx"]] = row["count"]
+    return counts
+
+
+def _pad_ragged(
+    column: Iterable[npt.NDArray[np.int64] | None], max_len: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Ragged item-index arrays to ``[R, max_len]`` ids and mask.
+
+    Serves both per-request sequences the loader assembles: the click history
+    and the slate negatives. Both are variable-length item indices keyed on
+    ``impression_id`` and both need the same two guarantees, so they share one
+    implementation rather than two that drift.
+
+    Padding is index 0 AND mask 0, both. Either alone would be enough -- the
+    mask zeroes the term, and row 0 of the content table is zero -- but a caller
+    that relied on only one would break silently the moment the other changed.
+
+    Truncation keeps a PREFIX, and what that means is the caller's business:
+    the history table is most-recent-first, so a prefix keeps the freshest
+    clicks; the negatives table is hash-ordered, so a prefix is a stable
+    pseudo-random sample. Both are deliberate, and neither is a property of
+    this function.
+
+    Args:
+        column: Ragged int arrays, one per request, possibly containing nulls
+            where the left join found no row at all. Typed as an iterable
+            rather than a Series so the tests can pass a plain list -- the
+            padding rules are the part worth exercising, and they do not need
+            pandas to do it.
+        max_len: Output width.
+
+    Returns:
+        ``(ids, mask)``, both ``[R, max_len]``.
+    """
+    entries = list(column)
+    ids = torch.zeros(len(entries), max_len, dtype=torch.long)
+    mask = torch.zeros(len(entries), max_len, dtype=torch.long)
+
+    for row, value in enumerate(entries):
+        if value is None or len(value) == 0:
+            continue
+        keep = np.asarray(value[:max_len], dtype="int64")
+        ids[row, : len(keep)] = torch.from_numpy(keep)
+        mask[row, : len(keep)] = 1
+
+    return ids, mask
 
 
 def load_split(
@@ -270,66 +315,16 @@ def load_train_and_validation(
         ValueError: If the window would leave no training rows.
     """
     examples = _clicked_rows(read_gold(spark, settings, "training_examples/train"))
-    end = examples.agg(f.max("ts").alias("end")).collect()[0]["end"]
-    boundary = end - timedelta(hours=holdout_hours)
+    boundary = _boundary(examples, holdout_hours)
 
     before = examples.where(f.col("ts") < f.lit(boundary))
+    after = examples.where(f.col("ts") >= f.lit(boundary))
     if before.limit(1).count() == 0:
-        raise ValueError(f"holdout_hours={holdout_hours} leaves no training rows; train ends {end}")
+        raise ValueError(
+            f"holdout_hours={holdout_hours} leaves no training rows; the window opens at {boundary}"
+        )
 
     return (
         _tensors_from(before, spark, settings, "train", max_len, max_negs),
-        _tensors_from(
-            examples.where(f.col("ts") >= f.lit(boundary)),
-            spark,
-            settings,
-            "train",
-            max_len,
-            max_negs,
-        ),
+        _tensors_from(after, spark, settings, "train", max_len, max_negs),
     )
-
-
-def _pad_ragged(
-    column: Iterable[npt.NDArray[np.int64] | None], max_len: int
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Ragged item-index arrays to ``[R, max_len]`` ids and mask.
-
-    Serves both per-request sequences the loader assembles: the click history
-    and the slate negatives. Both are variable-length item indices keyed on
-    ``impression_id`` and both need the same two guarantees, so they share one
-    implementation rather than two that drift.
-
-    Padding is index 0 AND mask 0, both. Either alone would be enough -- the
-    mask zeroes the term, and row 0 of the content table is zero -- but a caller
-    that relied on only one would break silently the moment the other changed.
-
-    Truncation keeps a PREFIX, and what that means is the caller's business:
-    the history table is most-recent-first, so a prefix keeps the freshest
-    clicks; the negatives table is hash-ordered, so a prefix is a stable
-    pseudo-random sample. Both are deliberate, and neither is a property of
-    this function.
-
-    Args:
-        column: Ragged int arrays, one per request, possibly containing nulls
-            where the left join found no row at all. Typed as an iterable
-            rather than a Series so the tests can pass a plain list -- the
-            padding rules are the part worth exercising, and they do not need
-            pandas to do it.
-        max_len: Output width.
-
-    Returns:
-        ``(ids, mask)``, both ``[R, max_len]``.
-    """
-    entries = list(column)
-    ids = torch.zeros(len(entries), max_len, dtype=torch.long)
-    mask = torch.zeros(len(entries), max_len, dtype=torch.long)
-
-    for row, value in enumerate(entries):
-        if value is None or len(value) == 0:
-            continue
-        keep = np.asarray(value[:max_len], dtype="int64")
-        ids[row, : len(keep)] = torch.from_numpy(keep)
-        mask[row, : len(keep)] = 1
-
-    return ids, mask

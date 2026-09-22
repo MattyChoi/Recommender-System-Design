@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import pytest
 from pyspark.sql import DataFrame, SparkSession
 
-from models.retrieval.popularity import (
+from models.retrieval.baselines.popularity import (
     click_counts,
     score_decayed_popular,
     score_most_popular,

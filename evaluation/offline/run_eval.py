@@ -20,10 +20,10 @@ from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
 from evaluation.offline.report import default_cohorts, report_card
-from models.retrieval.als import score_als, score_als_item
-from models.retrieval.content import score_content
-from models.retrieval.covisit import score_covisit
-from models.retrieval.popularity import (
+from models.retrieval.baselines.als import score_als, score_als_item
+from models.retrieval.baselines.content import score_content
+from models.retrieval.baselines.covisit import score_covisit
+from models.retrieval.baselines.popularity import (
     score_decayed_popular,
     score_most_popular,
     score_most_recent,
