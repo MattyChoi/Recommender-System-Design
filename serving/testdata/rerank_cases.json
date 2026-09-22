@@ -1,0 +1,328 @@
+[
+  {
+    "expected_items": [
+      10,
+      11,
+      12
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 3,
+    "lambda": 1.0,
+    "name": "lambda 1.0 is exactly the ranker",
+    "scores": [
+      1.0,
+      0.9,
+      0.8,
+      0.7
+    ],
+    "vectors": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.6000000238418579,
+        0.800000011920929
+      ]
+    ]
+  },
+  {
+    "expected_items": [
+      10,
+      12
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 2,
+    "lambda": 0.5,
+    "name": "a near-duplicate is demoted at lambda 0.5",
+    "scores": [
+      1.0,
+      0.9,
+      0.8,
+      0.7
+    ],
+    "vectors": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.6000000238418579,
+        0.800000011920929
+      ]
+    ]
+  },
+  {
+    "expected_items": [
+      10,
+      11,
+      12
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 3,
+    "lambda": 1.0,
+    "name": "no vectors means no MMR",
+    "scores": [
+      1.0,
+      0.9,
+      0.8,
+      0.7
+    ],
+    "vectors": null
+  },
+  {
+    "cap": 1,
+    "categories": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "expected_items": [
+      10,
+      12
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 2,
+    "lambda": 1.0,
+    "name": "a cap forces a lower-scoring category",
+    "scores": [
+      3.0,
+      2.0,
+      1.0,
+      0.5
+    ],
+    "vectors": null
+  },
+  {
+    "cap": 1,
+    "categories": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "expected_items": [
+      10,
+      11,
+      12
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 3,
+    "lambda": 1.0,
+    "name": "an unsatisfiable cap yields rather than shortening the slate",
+    "scores": [
+      3.0,
+      2.0,
+      1.0,
+      0.5
+    ],
+    "vectors": null
+  },
+  {
+    "blocked": [
+      true,
+      false,
+      false,
+      false
+    ],
+    "expected_items": [
+      11,
+      12
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 2,
+    "lambda": 1.0,
+    "name": "blocked candidates are skipped, slate stays full",
+    "scores": [
+      3.0,
+      2.0,
+      1.0,
+      0.5
+    ],
+    "vectors": null
+  },
+  {
+    "blocked": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "expected_items": [
+      10,
+      11
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 2,
+    "lambda": 1.0,
+    "name": "a block mask that hides everything is ignored",
+    "scores": [
+      3.0,
+      2.0,
+      1.0,
+      0.5
+    ],
+    "vectors": null
+  },
+  {
+    "cap": 1,
+    "categories": [
+      0,
+      0,
+      1,
+      2
+    ],
+    "expected_items": [
+      10,
+      12,
+      13
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11,
+      12,
+      13
+    ],
+    "k": 3,
+    "lambda": 0.5,
+    "name": "MMR with caps, both binding in one pass",
+    "scores": [
+      3.0,
+      2.9,
+      2.8,
+      2.7
+    ],
+    "vectors": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0
+      ]
+    ]
+  },
+  {
+    "expected_items": [
+      10,
+      11
+    ],
+    "expected_propensity": [
+      1.0,
+      1.0
+    ],
+    "items": [
+      10,
+      11
+    ],
+    "k": 5,
+    "lambda": 1.0,
+    "name": "k larger than the candidate list",
+    "scores": [
+      1.0,
+      0.5
+    ],
+    "vectors": null
+  }
+]

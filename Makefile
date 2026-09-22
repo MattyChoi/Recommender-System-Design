@@ -1,7 +1,8 @@
 .PHONY: proto help up down clean raw bronze silver gold content retrieval feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
         bands ablation shard-plan hash-bench retrieval-dist sources blend rank rank-neural rank-dist \
-        headroom rerank seen-bench index serve bench demo lint fmt types test check
+        headroom rerank seen-bench index serve bench demo \
+        go-build go-test go-lint go-fmt fixtures lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -352,6 +353,39 @@ demo: export RECSYS_STORAGE__BACKEND = local
 demo:  ## End-to-end demo; must work from a clean clone, with nothing running
 	@echo "TODO: demo"; exit 1
 
+# --- Go, for the serving path ------------------------------------------------
+# `serving/go` went un-compiled for most of this project's life because nothing
+# in this file built it. These targets exist so that stops being possible: the
+# Go half of the serving contract is as testable as the Python half, and `make
+# check` fails when it is not.
+GO ?= go
+GO_DIR = serving/go
+
+go-build:  ## Compile the serving orchestrator
+	cd $(GO_DIR) && $(GO) build ./...
+
+go-test:  ## Go unit tests, including the Python parity fixtures
+	cd $(GO_DIR) && $(GO) test ./...
+
+# `go fmt` is NOT a check -- it runs `gofmt -w` and rewrites the files, so a
+# lint target built on it mutates the working tree and then fails, which in CI
+# means linting a checkout that no longer matches the commit. `gofmt -l` only
+# lists. It is not always on PATH but always ships in GOROOT/bin, so it is
+# addressed there rather than assumed.
+go-lint:  ## gofmt check (read-only) + go vet
+	@cd $(GO_DIR) && out=$$("$$($(GO) env GOROOT)/bin/gofmt" -l .) && \
+	  { [ -z "$$out" ] || { echo "not gofmt-clean:"; echo "$$out"; \
+	    echo "fix with: make go-fmt"; exit 1; }; }
+	cd $(GO_DIR) && $(GO) vet ./...
+
+go-fmt:  ## Apply gofmt in place
+	cd $(GO_DIR) && "$$($(GO) env GOROOT)/bin/gofmt" -w .
+
+# The fixtures the Go parity tests read. Regenerate DELIBERATELY: a fixture that
+# moves silently is a parity test re-pointed at new behaviour.
+fixtures:  ## Regenerate serving/testdata/*.json from the Python implementations
+	uv run python -m scripts.dump_parity_fixtures
+
 lint:  ## ruff check + format check
 	uv run ruff check .
 	uv run ruff format --check .
@@ -366,7 +400,9 @@ types:  ## mypy
 test:  ## pytest
 	uv run pytest
 
-check:  ## lint + types + test (what CI runs)
+check:  ## lint + types + test, both languages (what CI runs)
 	$(MAKE) lint
 	$(MAKE) types
 	$(MAKE) test
+	$(MAKE) go-lint
+	$(MAKE) go-test

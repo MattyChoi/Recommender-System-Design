@@ -1,0 +1,144 @@
+// The serving contract: one request in, one ordered slate out.
+//
+// Regenerate stubs after any edit:  make proto
+//
+// Several fields here exist because of something this project measured rather
+// than because a template had them. Each is marked at its definition; the
+// short version:
+//
+//   - `propensity` cannot be reconstructed after the fact. By the time a
+//     request is over, the candidate set and the random draw are both gone,
+//     so an unlogged propensity is gone forever and every off-policy estimate
+//     built later is biased. Part L's exploration arm is the only policy that
+//     produces a usable one.
+//   - `degraded_sources` and `used_fallback` exist because a recommender that
+//     silently degrades looks healthy. Part I's blend drops slow sources
+//     rather than waiting; without these two fields, "we returned 20 items"
+//     and "we returned 20 items from one of five retrievers" are the same
+//     response.
+//   - `index_version` and `model_version` exist because Part J measured an
+//     ANN parameter that was indistinguishable from exact on one checkpoint
+//     and significantly worse on the next. A response that cannot say which
+//     artifacts produced it cannot be debugged after a rebuild.
+
+syntax = "proto3";
+package recsys.v1;
+option go_package = "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb";
+
+service Recommender {
+  rpc GetRecommendations(RecommendRequest) returns (RecommendResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message RecommendRequest {
+  string user_id = 1;
+
+  // home_rail | search | detail_page. Different surfaces have different slate
+  // sizes and different diversity policies, so it is part of the request
+  // rather than a deployment-wide constant.
+  string surface = 2;
+
+  int32 num_results = 3;
+
+  // Client-side exclusions, ON TOP of the server's seen-list. The two are not
+  // the same thing: the seen-list is what WE showed, this is what the caller
+  // knows it has already rendered.
+  repeated string exclude_item_ids = 4;
+
+  // device, locale, and anything else the ranker takes as context.
+  map<string, string> context = 5;
+}
+
+message ScoredItem {
+  string item_id = 1;
+
+  // The score this item was ORDERED by -- after re-ranking, not the ranker's
+  // raw output. Those differ whenever a policy fires, and reporting the
+  // ranker's score beside a re-ranked order is how a debugging session starts
+  // from a false premise.
+  float score = 2;
+
+  // Per-stage numbers behind the decision: per-source retrieval scores,
+  // p_click, the MMR penalty, the freshness multiplier. How "why did this
+  // item show up?" gets answered without a rerun.
+  map<string, float> debug_scores = 3;
+
+  // Which retrievers proposed it. Part I measured that a source can contribute
+  // FEATURES without contributing candidates, so this is the set that actually
+  // proposed the item, not the set that scored it.
+  repeated string sources = 4;
+
+  // P(this item in this slot | policy, history). **Log it or lose it.**
+  // 1.0 means the slot was deterministic and carries no information for an
+  // off-policy estimator; anything below 1.0 came from an exploration slot.
+  float propensity = 5;
+
+  // 0-based slot. Recorded because the position-bias correction needs the slot
+  // the SERVER chose -- Part K's position tower is built and deliberately
+  // unwired precisely because MIND's logged order is shuffled and carries no
+  // display signal. This field is what makes that ablation possible later, on
+  // a log this project generated itself.
+  int32 position = 6;
+}
+
+message RecommendResponse {
+  repeated ScoredItem items = 1;
+
+  // Which artifacts produced this response. Not decoration: an index rebuilt
+  // on a schedule against a retrained model can silently change quality, and a
+  // response that cannot name its versions cannot be attributed afterwards.
+  string model_version = 2;
+  string index_version = 3;
+
+  string experiment_variant = 4;
+
+  // Server-measured, end to end. The client's own timing includes the network
+  // and is the number that matters to the client; this one is the number that
+  // matters to whoever is optimising the service.
+  int32 latency_ms = 5;
+
+  // Per-stage milliseconds -- retrieval, filter, rank, rerank. A single
+  // end-to-end number says a request was slow; this says which stage was.
+  map<string, int32> stage_latency_ms = 8;
+
+  // True when the pipeline could not produce a real slate and served the
+  // popularity fallback instead. **A fallback that is not reported is an
+  // outage that looks like a success.**
+  bool used_fallback = 6;
+
+  // Retrievers that timed out or errored and were dropped. Empty is the
+  // healthy case; a persistently non-empty list is a degraded service still
+  // returning 200s.
+  repeated string degraded_sources = 7;
+
+  // Candidates surviving each stage: retrieved, after filtering, after
+  // ranking. Part L measured a seen-filter that, once saturated, blocks every
+  // candidate -- which returns an empty slate while every component reports
+  // success. These counts are how that is caught in production rather than in
+  // a postmortem.
+  map<string, int32> stage_counts = 9;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+
+  // Why not, when not ready. A boolean alone sends someone to the logs.
+  string detail = 2;
+
+  string model_version = 3;
+  string index_version = 4;
+
+  // "hnsw" or "flat". ADR 0002 ships HNSW and keeps exact search as the
+  // load-failure fallback -- which means a server that quietly failed over is
+  // serving correct results 6x slower, and every latency alert fires at once
+  // with no explanation. The mode is reported so the cause is one call away.
+  string index_kind = 5;
+
+  // The `efSearch` actually loaded. ADR 0002 picks 512 over the
+  // throughput-optimal 128 because that is where the recall cost stops
+  // reproducing across checkpoints; a config drift back to 128 is invisible in
+  // every system metric and visible here.
+  int32 index_ef_search = 6;
+}

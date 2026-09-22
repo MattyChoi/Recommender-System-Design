@@ -195,6 +195,67 @@ def shard_by_request(rows: RankingRows, rank: int, world: int) -> RankingRows:
     return rows.select(mask)
 
 
+def blend_one(
+    tops: dict[str, Sequence[int]], max_candidates: int, quotas: Sequence[int]
+) -> tuple[list[int], dict[str, list[int]]]:
+    """Blend ONE request's per-source lists into a candidate set with rank tags.
+
+    Extracted from :func:`candidate_lists` so that the serving path has
+    something to be equal TO. The Go orchestrator reimplements exactly this
+    function, and `serving/go/internal/retrieval/blend_test.go` asserts the two
+    agree on fixtures generated from this one -- which is only expressible if
+    the behaviour lives in a function rather than inside a loop over requests.
+
+    Three things here are behaviour, not detail, and each is a way the Go port
+    could differ while looking right:
+
+    1. **Insertion order is the output order.** ``seen`` is a dict and Python
+       dicts keep insertion order, so the candidate list is ordered by the
+       quota pass, then by the top-up pass. Go maps do NOT, so the port must
+       carry an explicit slice.
+    2. **Item 0 is the reserved OOV row and is never a candidate.** A source
+       that returns a short list pads with 0, and serving a padded slot would
+       put the reserved row in front of a user.
+    3. **The top-up runs in source order after every quota**, so an
+       under-filled quota is spent rather than lost.
+
+    Args:
+        tops: Source name to that source's ranked item ids, best first.
+        max_candidates: Total slots.
+        quotas: Slots per source, in ``tops`` order.
+
+    Returns:
+        ``(chosen, ranks)``. ``ranks[name][i]`` is that source's position for
+        ``chosen[i]``, or :data:`ABSENT`.
+    """
+    names = list(tops)
+    seen: dict[int, int] = {}
+    for name, slots in zip(names, quotas, strict=True):
+        taken = 0
+        for item in tops[name]:
+            if taken >= slots or len(seen) >= max_candidates:
+                break
+            if item > 0 and int(item) not in seen:
+                seen[int(item)] = len(seen)
+                taken += 1
+
+    # Top up from whatever is left, in source order, so an under-filled quota
+    # is spent rather than lost.
+    for name in names:
+        for item in tops[name]:
+            if len(seen) >= max_candidates:
+                break
+            if item > 0:
+                seen.setdefault(int(item), len(seen))
+
+    chosen = list(seen)[:max_candidates]
+    ranks: dict[str, list[int]] = {}
+    for name in names:
+        place = {int(item): position for position, item in enumerate(tops[name]) if item > 0}
+        ranks[name] = [place.get(int(item), ABSENT) for item in chosen]
+    return chosen, ranks
+
+
 def candidate_lists(
     sources: dict[str, Retrieved], max_candidates: int, quotas: Sequence[int] | None = None
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], dict[str, npt.NDArray[np.int64]]]:
@@ -240,40 +301,15 @@ def candidate_lists(
     ranks: dict[str, list[npt.NDArray[np.int64]]] = {name: [] for name in names}
 
     for request in range(rows):
-        tops = {name: sources[name].top[request].numpy() for name in names}
+        tops = {name: sources[name].top[request].numpy().tolist() for name in names}
 
-        seen: dict[int, int] = {}
-        for name, slots in zip(names, quotas, strict=True):
-            taken = 0
-            for item in tops[name]:
-                if taken >= slots or len(seen) >= max_candidates:
-                    break
-                if item > 0 and int(item) not in seen:
-                    seen[int(item)] = len(seen)
-                    taken += 1
+        picked, per_source = blend_one(tops, max_candidates, quotas)
 
-        # Top up from whatever is left, in source order, so an under-filled
-        # quota is spent rather than lost.
-        for name in names:
-            for item in tops[name]:
-                if len(seen) >= max_candidates:
-                    break
-                if item > 0:
-                    seen.setdefault(int(item), len(seen))
-
-        chosen = np.fromiter(seen, dtype=np.int64, count=len(seen))[:max_candidates]
+        chosen = np.asarray(picked, dtype=np.int64)
         items.append(chosen)
         owners.append(np.full(len(chosen), request, dtype=np.int64))
         for name in names:
-            top = sources[name].top[request].numpy()
-            place = {int(item): position for position, item in enumerate(top) if item > 0}
-            ranks[name].append(
-                np.fromiter(
-                    (place.get(int(item), ABSENT) for item in chosen),
-                    dtype=np.int64,
-                    count=len(chosen),
-                )
-            )
+            ranks[name].append(np.asarray(per_source[name], dtype=np.int64))
 
     return (
         np.concatenate(items),
