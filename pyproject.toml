@@ -68,6 +68,8 @@ module = [
     "fsspec.*",
     "sentence_transformers.*",
     "matplotlib.*",
+    "torchrec.*",
+    "fbgemm_gpu.*",
 ]
 ignore_missing_imports = true
 

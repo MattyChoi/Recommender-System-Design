@@ -1,6 +1,6 @@
 .PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        bands ablation index serve bench demo lint fmt types test check
+        bands ablation shard-plan hash-bench index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -244,6 +244,22 @@ bands:  ## a checkpoint -> Recall@k by item popularity band (G2's gate)
 	@test -n "$(CHECKPOINT)" || { echo "set CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
 	uv run python -m models.retrieval.evaluate $(CHECKPOINT) \
 	    --holdout-hours $(HOLDOUT) $(BANDS_ARGS)
+
+SHARD_DEVICE ?= cuda
+SHARD_ARGS ?=
+shard-plan:  ## Where an embedding table stops fitting on one device
+	uv run python -m models.layers.sharding_report \
+	    --compute-device $(SHARD_DEVICE) $(SHARD_ARGS)
+
+# Needs NO torchrec: `hashing` imports `sizing`, not `sharded_embeddings`.
+# COUNTS_NPZ may be ANY scored arm -- `train_counts` is a property of the split,
+# not of the model
+COUNTS_NPZ ?= evaluation/results/retrieval/both-logq-n4u0-b8192e10lr0.001-ab7e1d500b9bf792.npz
+HASH_ARGS ?=
+hash-bench:  ## Hashing-trick collisions, by three denominators (G4d)
+	@test -f "$(COUNTS_NPZ)" || \
+	  { echo "set COUNTS_NPZ= to an evaluation/results/retrieval/*.npz"; exit 1; }
+	uv run python -m models.layers.hashing --counts-npz $(COUNTS_NPZ) $(HASH_ARGS)
 
 index:  ## Build the FAISS index
 	@echo "TODO: index build"; exit 1
