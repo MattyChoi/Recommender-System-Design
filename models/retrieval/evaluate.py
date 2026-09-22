@@ -37,6 +37,11 @@ from models.retrieval.two_tower import TwoTower
 # which no counting retriever can reach and which are a quarter of the traffic.
 BAND_EDGES = (0, 2, 5, 10, 25, 50, 100, 500)
 
+# An item with fewer than 26 training clicks never enters top 100 and `pop@100`
+# is exactly 0.0000 for every band below this edge. "Long tail" means "the rows
+# no counting retriever can reach" -- 10,215 of 19,006, or 53.7%.
+LONG_TAIL_BELOW = 26
+
 
 @dataclass(frozen=True)
 class BandRow:
@@ -50,6 +55,9 @@ class BandRow:
             which decides whether it is worth splitting further.
         recall: The model's Recall@k on those rows.
         popularity: The counting baseline's Recall@k on the same rows.
+        summary: True for the pooled rows at the foot of the table. A flag
+            rather than a label comparison, so a consumer separating bands from
+            totals cannot double-count by matching the wrong string.
     """
 
     label: str
@@ -57,6 +65,7 @@ class BandRow:
     items: int
     recall: float
     popularity: float
+    summary: bool = False
 
     @property
     def rows_per_item(self) -> float:
@@ -86,6 +95,20 @@ def band_of(
     return indices
 
 
+def long_tail_mask(
+    band: npt.NDArray[np.int64], edges: Sequence[int] = BAND_EDGES
+) -> npt.NDArray[np.bool_]:
+    """The rows no counting retriever can reach -- G3's second column.
+
+    One definition, used by the per-arm table AND by the paired comparison. A
+    column reported in two places from two expressions is a column that will
+    eventually mean two things.
+    """
+    cut = int(np.searchsorted(np.asarray(edges), LONG_TAIL_BELOW, side="left"))
+    mask: npt.NDArray[np.bool_] = band < cut
+    return mask
+
+
 def popularity_hits(
     prior: torch.Tensor, item_ids: npt.NDArray[np.int64], k: int
 ) -> npt.NDArray[np.bool_]:
@@ -106,15 +129,29 @@ def summarise(
     popularity: npt.NDArray[np.bool_],
     edges: Sequence[int] = BAND_EDGES,
 ) -> list[BandRow]:
-    """One :class:`BandRow` per band, plus an ``overall`` row last.
+    """One :class:`BandRow` per band, then ``long tail`` and ``overall``.
 
     The overall row is not decoration: it must reproduce the aggregate the
     training loop reported, and if it does not, the bands are being computed
     over a different row set than the model was scored on.
+
+    The long-tail row is G3's second column. It is pooled over rows, not
+    averaged over bands, so a 5,409-row band cannot weigh the same as a 525-row
+    one.
     """
     hit = hits.hit.numpy()
     items = hits.item_ids.numpy()
     labels = band_labels(edges)
+
+    def pooled(label: str, mask: npt.NDArray[np.bool_]) -> BandRow:
+        return BandRow(
+            label=label,
+            rows=int(mask.sum()),
+            items=len(np.unique(items[mask])),
+            recall=float(hit[mask].mean()) if mask.any() else float("nan"),
+            popularity=float(popularity[mask].mean()) if mask.any() else float("nan"),
+            summary=True,
+        )
 
     rows: list[BandRow] = []
     for index, label in enumerate(labels):
@@ -128,15 +165,9 @@ def summarise(
                 popularity=float(popularity[mask].mean()) if mask.any() else float("nan"),
             )
         )
-    rows.append(
-        BandRow(
-            label="overall",
-            rows=len(hit),
-            items=len(np.unique(items)),
-            recall=float(hit.mean()) if len(hit) else float("nan"),
-            popularity=float(popularity.mean()) if len(hit) else float("nan"),
-        )
-    )
+
+    rows.append(pooled(f"<{LONG_TAIL_BELOW}", long_tail_mask(band, edges)))
+    rows.append(pooled("overall", np.ones(len(hit), dtype=bool)))
     return rows
 
 
@@ -145,9 +176,11 @@ def render(rows: Sequence[BandRow], k: int) -> str:
     head = f"{'band':>9}  {'rows':>7}  {'items':>6}  {'rows/item':>9}  "
     head += f"{f'recall@{k}':>10}  {f'pop@{k}':>8}"
     lines = [head, "-" * len(head)]
+    ruled = False
     for row in rows:
-        if row.label == "overall":
+        if row.summary and not ruled:
             lines.append("-" * len(head))
+            ruled = True
         lines.append(
             f"{row.label:>9}  {row.rows:>7,}  {row.items:>6,}  {row.rows_per_item:>9.1f}  "
             f"{row.recall:>10.4f}  {row.popularity:>8.4f}"

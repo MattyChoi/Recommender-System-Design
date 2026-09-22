@@ -376,11 +376,6 @@ def _fit_locally(
 
 
 def _parser() -> argparse.ArgumentParser:
-    """The command line. Every remaining Part G deliverable is one invocation of it.
-
-    ``--no-logq`` produces G2's gate, the ``--no-use-*`` pair produces G1's three
-    arms, and ``--max-negs``/``--uniform-negs`` produce G3's table rows.
-    """
     parser = argparse.ArgumentParser(description="Train the two-tower retriever.")
     parser.add_argument("--workers", type=int, default=1, help="1 runs in-process, no Ray.")
     parser.add_argument("--batch-size", type=int, default=8192)
@@ -392,7 +387,7 @@ def _parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--max-history", type=int, default=MAX_HISTORY)
     parser.add_argument("--max-negs", type=int, default=4, help="Slate negatives per row.")
-    parser.add_argument("--uniform-negs", type=int, default=0, help="G3's mixed-uniform arm.")
+    parser.add_argument("--uniform-negs", type=int, default=0, help="Mixed-uniform arm.")
     parser.add_argument("--history-dropout", type=float, default=HISTORY_DROPOUT)
     parser.add_argument(
         "--holdout-hours", type=int, default=12, help="Validation window, off the end of TRAIN."

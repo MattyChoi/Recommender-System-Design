@@ -56,12 +56,15 @@ def device() -> torch.device:
     return select_device("cpu")
 
 
-@pytest.fixture
-def split() -> SplitTensors:
+def _split(negs: int = NEGS) -> SplitTensors:
     """A corpus where the clicked item is a function of the history.
 
     Learnable on purpose: a loss that fails to fall on random noise says nothing
     about whether the loop works.
+
+    ``negs=0`` is G3's first three table rows -- in-batch negatives only, no
+    slate. It is a real configuration, not a degenerate one, and the tensors are
+    ``[R, 0]`` rather than absent.
     """
     generator = torch.Generator().manual_seed(7)
     history = torch.randint(1, N_ITEMS + 1, (ROWS, HISTORY), generator=generator)
@@ -74,9 +77,14 @@ def split() -> SplitTensors:
         impression_ids=torch.arange(ROWS),
         # Four rows per user, so a per-user mean is not a per-row mean.
         user_ids=torch.arange(ROWS) // 4,
-        neg_ids=torch.randint(1, N_ITEMS + 1, (ROWS, NEGS), generator=generator),
-        neg_mask=torch.ones(ROWS, NEGS, dtype=torch.long),
+        neg_ids=torch.randint(1, N_ITEMS + 1, (ROWS, negs), generator=generator),
+        neg_mask=torch.ones(ROWS, negs, dtype=torch.long),
     )
+
+
+@pytest.fixture
+def split() -> SplitTensors:
+    return _split()
 
 
 def _model() -> TwoTower:
@@ -188,6 +196,87 @@ class TestTheStep:
                 )
 
         assert results[0] == pytest.approx(results[1])
+
+
+class TestInBatchNegativesOnly:
+    """`--max-negs 0`, which three of G3's five table rows need.
+
+    Reading the path it looks safe -- `_pad_ragged` returns `[R, 0]`,
+    `assemble_pool` concatenates a `[0, D]` block, and the candidate pool
+    degrades to the gathered positives, which IS in-batch-only. But "reads as
+    safe" is not green, and discovering otherwise partway through a training run
+    is the expensive way to find out.
+    """
+
+    def test_a_batch_carries_a_zero_width_negative_block(self, device: torch.device) -> None:
+        """Zero-width, not absent. Every consumer indexes these tensors."""
+        batch = next(iter(_loader(_split(negs=0), device, training=True)))
+
+        assert batch.neg_ids.shape == (BATCH, 0)
+        assert batch.neg_is_slate.shape == (BATCH, 0)
+
+    def test_steps_run_and_stay_finite(self, device: torch.device) -> None:
+        """The pool is B columns rather than B(1+K), so every guard that assumes
+        negatives exist -- the duplicate mask, the log_q assembly, the gather --
+        is being exercised at width zero."""
+        with deterministic(0):
+            model, counters = _model(), _counters()
+            optimiser = torch.optim.Adam(model.parameters(), lr=0.05)
+            scaler = grad_scaler_for(device)
+
+            for batch in _loader(_split(negs=0), device, training=True):
+                loss = train_step(model, batch, counters, optimiser, scaler, device, N_ITEMS)
+                assert torch.isfinite(loss)
+
+            assert all(torch.isfinite(p).all() for p in model.parameters())
+
+    def test_the_loss_still_falls(self, device: torch.device) -> None:
+        """In-batch negatives alone are a real objective, not a no-op. If the
+        loss were flat here the row would be measuring a broken run rather than
+        a weaker negative strategy."""
+        with deterministic(0):
+            model, counters = _model(), _counters()
+            optimiser = torch.optim.Adam(model.parameters(), lr=0.05)
+            scaler = grad_scaler_for(device)
+            loader = _loader(_split(negs=0), device, training=True)
+
+            losses = [
+                float(train_step(model, batch, counters, optimiser, scaler, device, N_ITEMS))
+                for _ in range(25)
+                for batch in loader
+            ]
+
+        assert sum(losses[:10]) / 10 > sum(losses[-10:]) / 10
+
+    def test_uniform_draws_still_top_the_pool_up(self, device: torch.device) -> None:
+        """G3's third row: no slate, four uniform draws. The matched-count
+        comparison against row five, and the only pair in that table varying
+        one thing."""
+        loader = make_loader(
+            _split(negs=0),
+            N_ITEMS,
+            BATCH,
+            device,
+            training=True,
+            history_dropout=0.0,
+            uniform_negs=4,
+            generator=torch.Generator().manual_seed(0),
+        )
+        batch = next(iter(loader))
+
+        assert batch.neg_ids.shape == (BATCH, 4)
+        assert not batch.neg_is_slate.any()
+        assert int(batch.neg_ids.min()) >= 1
+
+    def test_validation_is_unaffected(self, device: torch.device) -> None:
+        """Scoring never touches negatives, so `make bands` reads the same rows
+        whatever an arm was trained with. Worth pinning before someone 'fixes'
+        the scorer to match the trainer's --max-negs."""
+        with deterministic(0):
+            without = validate(_model(), _loader(_split(negs=0), device, training=False), device, 5)
+            with_slate = validate(_model(), _loader(_split(), device, training=False), device, 5)
+
+        assert without["recall@5"] == pytest.approx(with_slate["recall@5"])
 
 
 class TestValidation:

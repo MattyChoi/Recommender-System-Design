@@ -17,7 +17,7 @@ import numpy as np
 import numpy.typing as npt
 
 from evaluation.offline.stats import PairedResult, paired_bootstrap
-from models.retrieval.evaluate import BAND_EDGES, band_labels
+from models.retrieval.evaluate import BAND_EDGES, LONG_TAIL_BELOW, band_labels, long_tail_mask
 
 # Categorical slots 1, 2 and 3 of the validated palette. Validated as a set for
 # adjacent pairs in light mode: worst CVD dE 9.2, worst normal-vision dE 27.6.
@@ -60,6 +60,7 @@ class BandComparison:
     candidate: float
     reference: float
     result: PairedResult | None
+    summary: bool = False
 
     @property
     def difference(self) -> float:
@@ -111,10 +112,14 @@ def per_user(arm: Arm, mask: npt.NDArray[np.bool_]) -> dict[str, float]:
 
 def _masks(
     band: npt.NDArray[np.int64], edges: Sequence[int]
-) -> list[tuple[str, npt.NDArray[np.bool_]]]:
-    """One mask per band, plus `overall` last."""
-    per_band = [(label, band == index) for index, label in enumerate(band_labels(edges))]
-    return [*per_band, ("overall", np.ones(len(band), dtype=bool))]
+) -> list[tuple[str, npt.NDArray[np.bool_], bool]]:
+    """One mask per band, then the two pooled rows: `<26` and `overall`."""
+    per_band = [(label, band == index, False) for index, label in enumerate(band_labels(edges))]
+    return [
+        *per_band,
+        (f"<{LONG_TAIL_BELOW}", long_tail_mask(band, edges), True),
+        ("overall", np.ones(len(band), dtype=bool), True),
+    ]
 
 
 def compare(
@@ -128,13 +133,14 @@ def compare(
     check_aligned(baseline, candidate)
 
     rows: list[BandComparison] = []
-    for label, mask in _masks(baseline.band, edges):
+    for label, mask, summary in _masks(baseline.band, edges):
         before = per_user(baseline, mask)
         after = per_user(candidate, mask)
         shared = set(before) & set(after)
         rows.append(
             BandComparison(
                 label=label,
+                summary=summary,
                 rows=int(mask.sum()),
                 users=len(shared),
                 baseline=float(baseline.hit[mask].mean()) if mask.any() else float("nan"),
@@ -156,9 +162,11 @@ def render(rows: Sequence[BandComparison], k: int, baseline: str, candidate: str
     head += f"{'pop':>7}  {'delta':>8}  {'95% CI':>18}  real"
     lines = [f"baseline = {baseline}", f"candidate = {candidate}", "", head, "-" * len(head)]
 
+    ruled = False
     for row in rows:
-        if row.label == "overall":
+        if row.summary and not ruled:
             lines.append("-" * len(head))
+            ruled = True
         if row.result is None:
             verdict, interval = "  --", f"{'too few users':>18}"
         else:
@@ -195,7 +203,7 @@ def plot(
     matplotlib.use("Agg")  # headless: this runs over SSH and in CI
     import matplotlib.pyplot as plt
 
-    banded = [row for row in rows if row.label != "overall" and row.rows]
+    banded = [row for row in rows if not row.summary and row.rows]
     x = np.arange(len(banded))
     labels = [row.label for row in banded]
 

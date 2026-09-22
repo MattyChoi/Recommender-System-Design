@@ -218,7 +218,11 @@ torch-env:  ## Report the torch device this machine will train on
 #   make train TRAIN_ARGS="--no-logq"                  # G2's gate
 #   make train TRAIN_ARGS="--no-use-content"           # ID only
 #   make train TRAIN_ARGS="--no-use-id"                # content only
-#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 4"   # uniform arm
+# G3's five-row table, rows 1-3 and 5 (row 4 is deferred -- see the notes):
+#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 0 --no-logq"   # in-batch only
+#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 0"             # + logQ
+#   make train TRAIN_ARGS="--max-negs 0 --uniform-negs 4"             # + uniform
+#   make train                                                        # slate negatives
 # ex: `make train TRAIN_ARGS="--batch-size 2048 --epochs 40 --patience 5"`
 train:  ## gold + item_content -> a trained two-tower, logged to MLflow
 	uv run python -m models.retrieval.train --epochs $(EPOCHS) \

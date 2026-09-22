@@ -30,6 +30,7 @@ from models.classes.train import Hits
 from models.retrieval.dataloader.batching import make_loader
 from models.retrieval.evaluate import (
     BAND_EDGES,
+    LONG_TAIL_BELOW,
     BandRow,
     band_labels,
     band_of,
@@ -145,12 +146,17 @@ class TestTheReport:
     def test_the_bands_partition_the_rows(self, hits: Hits) -> None:
         """Every row in exactly one band, and the overall row counting all of
         them -- which is what makes the aggregate cross-checkable against what
-        training reported."""
+        training reported.
+
+        Filtered on ``summary``, not on the label: there are now two pooled
+        rows, and a string comparison that caught only one of them would
+        double-count the long tail into this sum without failing.
+        """
         band = np.array([0, 0, 1, 1, 2, 8])
         popularity = np.zeros(6, dtype=bool)
 
         rows = summarise(hits, band, popularity)
-        banded = [row for row in rows if row.label != "overall"]
+        banded = [row for row in rows if not row.summary]
         overall = next(row for row in rows if row.label == "overall")
 
         assert sum(row.rows for row in banded) == overall.rows == 6
@@ -186,10 +192,38 @@ class TestTheReport:
         assert any(row.rows == 0 for row in rows)
         assert "nan" in render(rows, 100)
 
-    def test_the_table_has_a_line_per_band_plus_overall(self, hits: Hits) -> None:
-        rows = [BandRow("0", 1, 1, 0.5, 0.0), BandRow("overall", 1, 1, 0.5, 0.0)]
+    def test_the_table_rules_once_before_the_summary_rows(self, hits: Hits) -> None:
+        """One rule, not one per pooled row."""
+        rows = [
+            BandRow("0", 1, 1, 0.5, 0.0),
+            BandRow("<26", 1, 1, 0.5, 0.0, summary=True),
+            BandRow("overall", 1, 1, 0.5, 0.0, summary=True),
+        ]
 
-        assert len(render(rows, 100).splitlines()) == 5  # header, rule, band, rule, overall
+        # header, rule, band, rule, long tail, overall
+        assert len(render(rows, 100).splitlines()) == 6
+
+    def test_the_long_tail_row_is_the_rows_a_counting_retriever_cannot_reach(
+        self, hits: Hits
+    ) -> None:
+        """G3's second column. The edge is not arbitrary: pop@k is exactly zero
+        below it, so this is 'unreachable by counting' rather than a percentile
+        someone chose."""
+        # Bands 0-4 are <26 clicks; band 8 is 501+. Rows 0-4 are in the tail.
+        band = np.array([0, 0, 1, 1, 4, 8])
+        popularity = np.zeros(6, dtype=bool)
+
+        tail = next(row for row in summarise(hits, band, popularity) if row.label == "<26")
+
+        assert tail.summary
+        assert tail.rows == 5
+        # hits are [T, F, T, T, F] over those five rows.
+        assert tail.recall == pytest.approx(3 / 5)
+
+    def test_the_long_tail_edge_matches_the_band_boundaries(self) -> None:
+        """LONG_TAIL_BELOW has to fall ON an edge, or the pooled row would cut
+        through the middle of a band and no longer be a union of them."""
+        assert LONG_TAIL_BELOW - 1 in BAND_EDGES
 
 
 def _items() -> ItemTables:

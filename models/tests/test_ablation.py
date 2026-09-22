@@ -32,7 +32,7 @@ from models.retrieval.ablation import (
     per_user,
     render,
 )
-from models.retrieval.evaluate import band_labels, save
+from models.retrieval.evaluate import LONG_TAIL_BELOW, band_labels, save, summarise
 
 ROWS = 12
 
@@ -121,10 +121,29 @@ class TestPerUser:
 
 
 class TestTheComparison:
-    def test_every_band_gets_a_row_plus_overall(self) -> None:
+    def test_every_band_gets_a_row_plus_two_pooled_ones(self) -> None:
         rows = compare(_arm("a", [0] * ROWS), _arm("b", [1] * ROWS), resamples=50)
 
-        assert [row.label for row in rows] == [*band_labels(), "overall"]
+        assert [row.label for row in rows] == [*band_labels(), f"<{LONG_TAIL_BELOW}", "overall"]
+        assert [row.summary for row in rows[-2:]] == [True, True]
+
+    def test_the_long_tail_row_matches_the_per_arm_table(self) -> None:
+        """`evaluate.summarise` and `ablation.compare` both report a `<26`
+        column. They take it from one `long_tail_mask`, so the G3 table's second
+        column cannot mean one thing per arm and another in the comparison."""
+        arm = _arm("a", [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+        hits = Hits(
+            hit=torch.from_numpy(arm.hit),
+            item_ids=torch.from_numpy(arm.item_ids),
+            user_ids=torch.from_numpy(arm.user_ids),
+        )
+        label = f"<{LONG_TAIL_BELOW}"
+
+        paired = next(r for r in compare(arm, arm, resamples=50) if r.label == label)
+        banded = next(r for r in summarise(hits, arm.band, arm.popularity) if r.label == label)
+
+        assert paired.rows == banded.rows
+        assert paired.baseline == pytest.approx(banded.recall)
 
     def test_the_difference_is_candidate_minus_baseline(self) -> None:
         """Sign errors here invert the entire finding and nothing looks wrong."""
