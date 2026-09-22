@@ -71,6 +71,12 @@ class RankingRows:
         groups: ``[R]`` candidates per request, in order. LightGBM's ranking
             objective needs candidates-per-query, **not** a per-row query id,
             and passing rows is the standard way to get a silently wrong model.
+        items: ``[N]`` catalogue index of the candidate on each row. Carried
+            because the ranker's own metrics never need it and every
+            beyond-accuracy metric does: coverage, intra-list diversity and
+            long-tail share are properties of WHICH items were served, not of
+            how well they were ordered. A re-ranking stage cannot be evaluated
+            without it.
         request: ``[N]`` index of the request each row belongs to.
         user_ids: ``[R]`` who made each request, so a comparison pairs on users.
         observed: ``[N]`` True where the candidate was in the user's real slate,
@@ -82,6 +88,7 @@ class RankingRows:
     features: npt.NDArray[np.float32]
     labels: npt.NDArray[np.int64]
     groups: npt.NDArray[np.int64]
+    items: npt.NDArray[np.int64]
     request: npt.NDArray[np.int64]
     user_ids: npt.NDArray[np.int64]
     observed: npt.NDArray[np.bool_]
@@ -111,6 +118,7 @@ class RankingRows:
             features=self.features[keep],
             labels=self.labels[keep],
             groups=self.groups[requests],
+            items=self.items[keep],
             request=self.request[keep],
             user_ids=self.user_ids[requests],
             observed=self.observed[keep],
@@ -367,6 +375,7 @@ def build(
         features=np.stack([columns[name] for name in chosen_features], axis=1).astype(np.float32),
         labels=labels,
         groups=np.bincount(request, minlength=len(clicked)).astype(np.int64),
+        items=candidates,
         request=request,
         user_ids=split.user_ids.numpy(),
         observed=slate_membership(split, candidates, request),

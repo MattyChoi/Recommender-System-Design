@@ -204,6 +204,32 @@ def prior_window_counts(
     return counts
 
 
+def first_seen_hours(
+    spark: SparkSession, settings: Settings, holdout_hours: int, n_rows: int
+) -> torch.Tensor:
+    """Hours between an item's FIRST IMPRESSION and the validation boundary.
+
+    **First IMPRESSION, not first click.** An article is shown before anyone
+    clicks it, and popular articles are clicked sooner, so dating items by their
+    first click would make popularity look like youth -- and a freshness policy
+    scored on it would be a popularity policy wearing a different name. This
+    reads every row, not :func:`_clicked_rows`.
+
+    Returns:
+        ``[n_rows]`` ages in hours, index 0 reserved. An item absent from
+        training is 0.0: brand new at the boundary, which is the same case as
+        one first shown at the boundary and is not distinguished from it.
+    """
+    examples = read_gold(spark, settings, "training_examples/train")
+    boundary = _boundary(_clicked_rows(examples), holdout_hours)
+
+    ages = torch.zeros(n_rows, dtype=torch.float32)
+    first = examples.groupBy("item_idx").agg(f.min("ts").alias("first_ts"))
+    for row in first.where(f.col("first_ts") < f.lit(boundary)).collect():
+        ages[row["item_idx"]] = (boundary - row["first_ts"]).total_seconds() / 3600.0
+    return ages
+
+
 def _pad_ragged(
     column: Iterable[npt.NDArray[np.int64] | None], max_len: int
 ) -> tuple[torch.Tensor, torch.Tensor]:

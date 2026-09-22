@@ -63,6 +63,14 @@ make baselines  # re-score every baseline on one commit, then the above
   [ADR 0003](adr/0003-lightgbm-baseline-before-dcnv2.md). Position debiasing is
   built and deliberately unwired -- MIND shuffles impression order, so the
   correction's own verification would pass by construction.
+- **Re-ranking, the policy layer** -- complete. Exploration buys 84% more
+  catalogue coverage for -0.0005 NDCG; MMR is a null because the ranker's top 10
+  is already diverse. See `ranking.md` and
+  [ADR 0012](adr/0012-exploration-over-designed-diversity.md).
+- **The ANN index** -- measured in Part J, decided in
+  [ADR 0002](adr/0002-hnsw-over-ivfpq.md): HNSW at `efSearch=512` serves,
+  exact search remains the offline reference every quality number is measured
+  against.
 - **Cost** -- sharding, hashing, distributed training and per-request user-encode
   latency are measured; end-to-end latency, index and diversity are still TODO in
   `benchmarks.md`.

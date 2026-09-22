@@ -48,6 +48,9 @@ def make_rows(
         features=features,
         labels=labels,
         groups=np.full(n_requests, per_request, dtype=np.int64),
+        # Distinct per row, so a shard that mixed two requests' items together
+        # would be visible rather than plausible.
+        items=np.arange(1, rows + 1, dtype=np.int64),
         request=request,
         user_ids=np.arange(n_requests, dtype=np.int64),
         observed=np.ones(rows, dtype=bool),

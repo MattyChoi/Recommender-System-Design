@@ -595,12 +595,25 @@ re-tune per rebuild or use an index with nothing to tune.
 
 ### The decision
 
-**Ship exact search.** 33.4 MB, 0.6 ms p99, no build step, no training step, no
-parameters to re-tune per rebuild, and exact by construction. Revisit at roughly
-**1.8 million articles**, where a 10 ms retrieval budget stops covering a linear
-scan.
+**On this corpus, exact search wins outright.** 33.4 MB, 0.6 ms p99, no build
+step, no training step, no parameters to re-tune per rebuild, and exact by
+construction. A linear scan costs 5.6 ns per item per query, so it stays inside
+a 10 ms budget to roughly **1.8 million articles** -- 27x this corpus.
 
-The machinery is built and measured anyway, which is what makes the
+**The serving path nevertheless ships HNSW at `efSearch=512`, and that is a
+deliberate override.** See
+[ADR 0002](adr/0002-hnsw-over-ivfpq.md): the choice is made against the 2M-item
+design target rather than against MIND-small, at a setting that agrees with
+exact search on 99.97% of candidates and still runs 2.3x its throughput.
+`efSearch=128` -- where the 10x QPS headline lives -- is rejected because that
+is where the recall cost stops reproducing across checkpoints.
+
+**Every quality number on this page is an exact-search number, and that stays
+true.** Measuring the model through an approximate index folds the index's
+error into every comparison, which is how an ANN parameter ends up looking like
+a modelling result.
+
+The machinery is built and measured either way, which is what makes the
 recommendation a result rather than an omission -- and it is the same shape of
 answer the sharding work reached: the crossover is stated, and this corpus is a
 long way below it.

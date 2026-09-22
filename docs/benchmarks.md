@@ -416,4 +416,121 @@ Measured above.
 
 ## Diversity/relevance tradeoff
 
-`TODO` -- Part L.
+The table itself is quality, so it lives in
+[ranking.md](ranking.md#the-trade-off-table). Short version: MMR is a null on
+this corpus, exploration buys 84% more catalogue coverage for -0.0005 NDCG, and
+the seen filter buys the most coverage at 45x exploration's price.
+
+---
+
+# The seen-list (Part L)
+
+**Redis 7.4.11-alpine, `redis://localhost:6379/1` · `make seen-bench` for the
+arithmetic, `make rerank RERANK_ARGS="... --seen"` for the live figures.**
+
+Feast owns db 0 on the same instance. Sharing a keyspace with a feature store
+means one `FLUSHDB` during a materialisation takes every seen-list with it.
+
+## Sizing, and the saving that is not what it looks like
+
+Target rates against measured, at three capacities. The measured rate is
+consistently a little above target because the double-hashing scheme is not the
+independent-hash assumption the closed form uses; bit load lands at ~50%, which
+is the optimum, so the sizing itself is right.
+
+| held | target | measured | bits | payload B | load |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 50 | 0.010 | 0.0135 | 480 | 60 | 52.3% |
+| 200 | 0.010 | 0.0090 | 1,918 | 240 | 50.6% |
+| 1,000 | 0.010 | 0.0110 | 9,586 | 1,198 | 52.1% |
+
+Bits per item is `-log2(p) / ln 2`, **a function of the error rate alone** --
+1% costs 9.6 bits per item however many items a user holds. On paper that makes
+the saving over exact 8-byte ids a constant 85% at every capacity: you buy an
+error rate, not a capacity.
+
+**That property is arithmetic and does not survive deployment.** Measured with
+`MEMORY USAGE` against a live key: a 1,918-bit filter is 240 B of payload and
+**504 B in Redis** -- 2.1x. The extra ~264 B is key name, object header, SDS
+header and dict entry, and it is per KEY, so it does not scale with capacity:
+
+| held | payload B | + overhead | exact B | real saving |
+| ---: | ---: | ---: | ---: | ---: |
+| 50 | 60 | 324 | 400 | **19.0%** |
+| 200 | 240 | 504 | 1,600 | 68.5% |
+| 1,000 | 1,198 | 1,462 | 8,000 | 81.7% |
+
+**The saving stops being constant and starts growing with capacity.** At a
+50-item seen-list the filter barely pays for itself against a plain set. The
+structure earns its place at hundreds of items per user, not tens -- and a
+bits-only estimate claims 85% at every row, wrong at exactly the sizes where
+someone might reasonably reach for the simpler thing.
+
+## Overfilling is a cliff, not a slope
+
+Sized for 100 items at a 1% target, then given more:
+
+| held | measured rate | bit load |
+| ---: | ---: | ---: |
+| 100 | 1.1% | 51% |
+| 200 | 13.7% | 75% |
+| 400 | 65.0% | 94% |
+| 1,000 | **100.0%** | **100%** |
+
+At ten times capacity every bit is set and the filter answers "seen" to every
+candidate. **A seen-filter that hides everything does not return a slightly
+worse slate; it returns an empty one** -- and the one-sided guarantee still
+holds while being worth nothing.
+
+So capacity is a number to monitor rather than to set once, and **bit load is
+the alarm, not the error rate**: it is observable per user and it moves long
+before the rate does. The selector carries the matching guard -- a block mask
+that removes every candidate is ignored, because a blank page is a product
+decision nobody made.
+
+## Serving shape
+
+**One `GET`, not `k x n` `GETBIT`s.** A request tests ~100 candidates against a
+4-hash filter: 400 round trips would consume the whole re-rank budget. The
+bitmap is 60-1,200 B, so fetching it whole and testing locally is one round
+trip. **At serving time the cost is round trips, not bit arithmetic**, and that
+inverts the obvious implementation.
+
+**Writes are one transaction.** The `k` SETBITs per shown item plus the EXPIRE
+go in a `MULTI`/`EXEC` pipeline. Two concurrent requests for one user could
+otherwise interleave and leave an item's bits partially written -- which is the
+one way this structure *can* produce a false negative and re-show something.
+
+⚠️ **The TTL contradicts the one-sided guarantee, and both are load-bearing.**
+"Recently shown" needs a window, or the filter grows until it saturates and
+hides everything. The window is an `EXPIRE`. But an `EXPIRE` is a scheduled
+reset, and the never-a-false-negative promise holds only while the filter is
+never cleared. **The mechanism that bounds memory is the mechanism that
+reintroduces the failure users notice.** The trade is unavoidable; what a design
+chooses is where to put it -- a long TTL re-shows rarely and costs memory, a
+short one is cheap and re-shows sooner. It is a product decision about how long
+"recently" means, and it should be written down as one rather than inherited
+from a default.
+
+## What it cost in the funnel
+
+Replayed sequentially over the 5,722 held-out requests, capacity 200 at a 1%
+target: **blocked 62,730 candidates, 10.96% of all rows**, at a 35.5% bit load
+on a sampled user.
+
+| | value |
+| --- | ---: |
+| NDCG@10 | 0.0883 (from 0.1283) |
+| paired vs ranker only | **-0.0227** [-0.0259, -0.0195] \* |
+| coverage of the pool | 15.0% -> **42.2%** |
+| distinct items served | 190 -> **536** |
+| long-tail share | 2.9% -> **5.7%** |
+
+Sequential, not batched, because a seen-list is a function of what the user was
+served *earlier* -- every other arm in the trade-off table is order-independent
+and this one is not.
+
+**It buys the most coverage in the table and is the wrong instrument for buying
+coverage**: ~0.00083 NDCG per point, against exploration's ~0.00004. It is a
+correctness requirement whose coverage gain is a side effect, and it belongs in
+the table for its cost rather than as a rival to MMR.

@@ -286,6 +286,156 @@ Nothing on this page licenses a choice of α, β, γ.
 
 ---
 
+## The policy layer (Part L)
+
+Ranking optimises an item. Re-ranking optimises the **slate**, over the top 100
+the ranker scored. Four policies, one fixed booster shared by every arm — a
+refitted ranker per row would let model variation into a table that claims to
+measure policy, and Part K measured that leak at up to 0.0010 NDCG.
+
+### First, whether there is anything to recover
+
+A policy that reorders candidates cannot serve what retrieval never proposed,
+so the coverage ceiling is the **pool**, not the catalogue. Measured before any
+policy was built:
+
+| denominator | distinct items |
+|---|---:|
+| the catalogue | 65,238 |
+| **the pool** — what retrieval proposed across 5,722 requests | **1,270** |
+| items the ranker actually serves in its top 10 | 190 |
+| distinct clicked items inside the pool | 174 |
+
+**572,200 candidate slots draw on 1,270 distinct articles — 1.9% of the
+catalogue.** And 887 of those 1,270 are long tail, while the ranker fills 2.9%
+of its slots from them. **The pool is diverse; the ranker concentrates it.**
+That is the rich-get-richer dynamic stated as two numbers, and it is the target
+the rest of this section is aiming at.
+
+### The trade-off table
+
+k = 10, over 5,722 held-out requests, paired per user against the first row.
+
+| config | NDCG@10 | vs ranker only | ILD | coverage | items | tail | E[p] |
+|---|---:|---|---:|---:|---:|---:|---:|
+| ranker only | 0.1283 | — | 0.590 | 15.0% | 190 | 2.9% | 1.00 |
+| + MMR λ=0.9 | 0.1283 | +0.0002 [−0.0002, +0.0006] | 0.590 | 15.0% | 190 | 2.9% | 1.00 |
+| + MMR λ=0.7 | 0.1277 | −0.0002 [−0.0009, +0.0005] | 0.592 | 14.8% | 188 | 2.9% | 1.00 |
+| + MMR λ=0.5 | 0.1271 | −0.0008 [−0.0021, +0.0004] | 0.595 | **14.2%** | 180 | 2.8% | 1.00 |
+| + MMR + caps (≤3/cat) | 0.1281 | +0.0003 [−0.0002, +0.0008] | 0.591 | 15.1% | 192 | 2.9% | 1.00 |
+| + freshness (hl 24h) | 0.1047 | **−0.0257** [−0.0318, −0.0201] \* | 0.584 | 15.4% | 195 | **4.9%** | 1.00 |
+| + exploration (ε=0.1) | 0.1277 | **−0.0005** [−0.0009, −0.0001] \* | 0.590 | 27.6% | 350 | 3.2% | 0.96 |
+| + seen filter | 0.0883 | **−0.0227** [−0.0259, −0.0195] \* | 0.592 | **42.2%** | **536** | **5.7%** | 1.00 |
+
+Coverage is against the pool's 1,270. `E[p]` is the mean logged propensity.
+The decision this table supports is
+[ADR 0012](adr/0012-exploration-over-designed-diversity.md).
+
+**Coverage bought per point of NDCG given up**, which is the comparison the
+table exists to support:
+
+| policy | coverage gained | NDCG per point of coverage |
+| --- | ---: | ---: |
+| exploration ε=0.1 | +12.6 pp | **0.00004** |
+| seen filter | +27.2 pp | 0.00083 |
+| freshness | +0.4 pp | 0.064 |
+
+Three orders of magnitude separate the cheapest from the dearest.
+
+### MMR is a null here, and the reason is the premise
+
+**MMR exists because a relevance-ranked list is full of near-duplicates. This
+one is not.** The ranker's top 10 already scores an intra-list diversity of
+0.590 before any policy runs, so there is nothing to deduplicate: λ=0.9 moves
+nothing at all, and λ=0.5 buys 0.005 of ILD for 0.0008 of NDCG. The prediction
+going in was a visible relevance-for-diversity trade. There isn't one to make.
+
+**And it costs coverage to buy diversity, which is the finding worth keeping.**
+λ=0.5 raises within-slate ILD and *lowers* distinct items served, 190 → 180.
+MMR rewards distance from what is already chosen, and across users the far
+items are the same globally-atypical articles. **Per-slate diversity and
+catalogue coverage are different objectives that a single λ moves in opposite
+directions** — "diversity" is not one quantity, and a table reporting only ILD
+would have shown this policy working.
+
+Category caps change nothing measurable: with ≤3 of any subcategory in ten
+slots, the constraint rarely binds on a pool this broad.
+
+### Exploration dominates every designed policy
+
+**ε=0.1 on the last two of ten slots buys 84% more catalogue coverage —
+190 → 350 distinct items — for −0.0005 NDCG.** MMR costs more and returns
+less; freshness costs fifty times more for a fortieth of the coverage.
+
+It is also the only arm whose `E[p]` is below 1, which makes it the only one
+that produces data an off-policy estimator can use at all. That is the argument
+for exploration stated properly: **not charity for new items, but the mechanism
+that generates the evidence preventing the model from collapsing onto its own
+past outputs.** The propensity is logged per slot at selection time because it
+cannot be reconstructed afterwards — the candidate set and the random draw are
+both gone by then.
+
+### Freshness is the worst rate in the table
+
+−0.0257 NDCG, significant, for +0.4pp of coverage. It does move the long tail
+further than anything else (2.9% → 4.9% of served impressions), so if tail
+exposure were the objective it would be the instrument — but at fifty times
+exploration's price per point of coverage.
+
+⚠️ **On a week of news, age and popularity are nearly the same axis.** A new
+article has few clicks because it is new, so this policy and an
+inverse-popularity boost move the same items. Nothing here is evidence that
+*recency specifically* was the useful signal.
+
+### What no offline number can settle
+
+Every row below the first is a **cost**, by construction: each request here has
+exactly one relevant item, so no reordering can surface a second. The table is
+an exchange rate — NDCG given up per point of coverage bought — and **whether
+that rate is worth paying is a product decision.** It is settled by an A/B test
+on a north-star metric, or by a bandit over the weights; it is not settled by
+anything on this page.
+
+**And every row assumes the user's click is unchanged by the reordering.** MIND
+labels what MIND showed. When a policy blocks 11% of candidates and serves
+different items, what the user would have done facing *that* slate is unknown —
+they might have clicked the substitute. So these numbers are "what the metric
+would be if behaviour were fixed", which is the standard limitation of
+evaluating a policy offline. It binds loosely on the MMR rows, which barely
+change the slate, and hard on the seen filter, which changes a tenth of it.
+
+That is the whole argument for the propensity column. **The exploration arm is
+the only row that produces data an unbiased estimator could later consume**, and
+it is why the propensity is logged at selection time rather than reconstructed:
+by the time the request is over, the candidate set and the random draw are both
+gone.
+
+### The seen-list, and why its errors are acceptable
+
+Filtering already-shown items needs a membership test per (user, candidate).
+Exact sets do not survive scale. A Bloom filter answers in a fixed number of
+bits per user and is wrong at a known rate — and **the error direction is the
+entire argument, not the data structure**:
+
+- a **false positive** hides a fresh item; the slot goes to the next-best
+  candidate and nobody notices.
+- a **false negative** would re-show an item the user just saw — the failure
+  users actually complain about — and a Bloom filter **cannot produce one**.
+
+The guarantee is one-sided only while the filter is never cleared and never
+shared: a scheduled reset can re-show an item after it, and a filter keyed
+coarser than the user hides items for people who never saw them.
+
+Measured against live Redis, it blocks **10.96% of candidate rows** and costs
+**−0.0227** NDCG while taking coverage to 42.2%. It is the table's best
+coverage-buyer and the wrong instrument for buying coverage — **a correctness
+requirement whose diversity gain is a side effect.** Sizing, the real memory
+cost (2.1× the payload bits, once Redis key overhead is counted), the
+saturation cliff and the TTL-versus-guarantee trade are in
+[benchmarks.md](benchmarks.md#the-seen-list-part-l).
+
+---
+
 ## Infrastructure measured alongside
 
 Three pieces were built here and are reported with their own denominators,
@@ -342,6 +492,10 @@ global RNG in different places, so every layer built after the block differs.
 ## Reproducing
 
 ```
+make headroom     # the ceiling a policy could reach, before believing any gain
+make rerank       RANKER=data/checkpoints/ranking/<booster>.txt
+make seen-bench   # Bloom-filter sizing and measured false-positive rates
+
 make rank         RANK_ARGS="--names two_tower trending covisit content --max-candidates 100 --label lgbm"
 make rank-neural  RANK_ARGS="--model dcn  --names two_tower trending covisit content --max-candidates 100 --label dcn"
 make rank-neural  RANK_ARGS="--model mmoe --names two_tower trending covisit content --max-candidates 100 --label mmoe"
