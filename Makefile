@@ -1,6 +1,6 @@
 .PHONY: proto help up down clean raw bronze silver gold content train feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
-        bands ablation shard-plan hash-bench train-dist index serve bench demo lint fmt types test check
+        bands ablation shard-plan hash-bench train-dist sources blend index serve bench demo lint fmt types test check
 
 .DEFAULT_GOAL := help
 
@@ -271,6 +271,17 @@ hash-bench:  ## Hashing-trick collisions, by three denominators (G4d)
 	@test -f "$(COUNTS_NPZ)" || \
 	  { echo "set COUNTS_NPZ= to an evaluation/results/retrieval/*.npz"; exit 1; }
 	uv run python -m models.layers.hashing --counts-npz $(COUNTS_NPZ) $(HASH_ARGS)
+
+SOURCE_CHECKPOINT ?= data/checkpoints/both-logq-n4u0-b8192e10lr0.001-ab7e1d500b9bf792.pt
+SOURCE_ARGS ?=
+sources:  ## Five retrieval sources -> their top-100 per request
+	@test -f "$(SOURCE_CHECKPOINT)" || \
+	  { echo "set SOURCE_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
+	uv run python -m models.retrieval.sources $(SOURCE_CHECKPOINT) $(SOURCE_ARGS)
+
+BLEND_ARGS ?=
+blend:  ## Union the sources, then leave-one-source-out
+	uv run python -m models.retrieval.blend $(BLEND_ARGS)
 
 index:  ## Build the FAISS index
 	@echo "TODO: index build"; exit 1

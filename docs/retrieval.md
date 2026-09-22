@@ -397,6 +397,130 @@ having on hand -- the same argument that kept the no-logQ arm.
 
 ---
 
+## Multi-source blending (Part I)
+
+Five sources, each meant to cover a failure mode the others miss. Every one of
+them already existed as a **ranker** -- something that reorders the ~37 items MSN
+chose -- and none had ever been asked to find candidates in the catalogue. That
+conversion is `models/retrieval/sources.py`; the union and the ablation are
+`models/retrieval/blend.py`.
+
+### The five, alone
+
+| source | reach | mean pool | Recall@100 | long tail (<26) |
+| --- | ---: | ---: | ---: | ---: |
+| `two_tower` | 1.0000 | 100.0 | **0.3776** | **0.0401** |
+| `trending` | 1.0000 | 100.0 | 0.3523 | 0.0000 |
+| `covisit` | 0.9340 | 85.9 | 0.0821 | 0.0007 |
+| `content` | 0.9959 | 99.6 | 0.0129 | 0.0104 |
+| `recent` | 0.9959 | 29.1 | 0.0105 | 0.0050 |
+
+**`two_tower` wins every column, including the long tail.** So nothing below is
+a story about a source that is better somewhere; whatever blending is worth has
+to come from candidates the others find *and it does not*.
+
+Three of these are controls that came back exactly where they were predicted,
+which is how we know the plumbing is right: `trending` reproduces Part G's
+`pop@100` to four decimals, `two_tower` reproduces its own checkpoint, and
+`recent` recovered **199.6 of the 200 re-clicks** the Part G leak check counted
+-- its theoretical maximum, and still worthless.
+
+**`reach` and `mean pool` are reported because four of the five run short.** A
+source with no edge for this user considered the whole catalogue and had nothing
+to say, which is not the same defect as a sampled-negative evaluation, and
+`evaluate_retrieval` now separates the two rather than refusing both. Nothing is
+padded up to 100: topping a short list up with popular items would quietly make
+every source a hybrid with `trending`, and the ablation would then be measuring
+the padding.
+
+### Two findings from the solo column
+
+**Co-visitation is a weak retriever, not a null one -- and ADR 0010 measured the
+opposite because it asked a different question.** 0.0821 is 55x random. ADR 0010
+found GAUC 0.5016, indistinguishable from chance, because within a 37-item slate
+only ~3 candidates carried any co-visitation score and three scores cannot order
+a slate. Reach is 11.96% there and **93.4%** here. Same model, same corpus, two
+protocols, two denominators, opposite verdicts. *A denominator is part of a
+metric*, arriving from a new direction.
+
+**Raw content similarity is 29x worse than learned content.** The `content`
+source takes the same frozen 768-dim vectors the content-only two-tower arm
+uses, mean-pools the user's history, and returns nearest neighbours: **0.0129**.
+The trained arm on identical inputs and identical rows: **0.3727**. So what
+training buys is not the features, it is the mapping -- the nearest article by
+content is not the article you read next. This is the cleanest measurement in
+the project of what the towers actually learn.
+
+### The contribution table -- Part I's gate
+
+Over all five sources, full top-100 each:
+
+| source | % of pool | % unique | alone | **only here** | loss if dropped |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `two_tower` | 0.296 | 0.130 | 0.3776 | **0.0629** | +0.0933 * |
+| `trending` | 0.296 | 0.129 | 0.3523 | **0.0360** | +0.0078 * |
+| `content` | 0.295 | **0.287** | 0.0129 | 0.0054 | -0.0186 * |
+| `covisit` | 0.254 | 0.196 | 0.0821 | 0.0031 | -0.0187 * |
+| `recent` | 0.085 | 0.067 | 0.0105 | 0.0024 | -0.0184 * |
+
+**`content` supplies 28.7% of the pool's unique candidates and 0.54% of the
+unique answers.** It is the most *distinctive* source and nearly the least
+*useful* one. Candidate diversity is not value, and that pair of numbers is the
+whole argument.
+
+**The three negative losses agree to three decimal places, and that is the
+tell.** -0.0186, -0.0187, -0.0184 are not three coincidences: dropping any one of
+five sources takes the survivors from 20 slots to 25, and the gain is almost
+entirely `two_tower` and `trending` getting five more each. **The leave-one-out
+is measuring slot reallocation, not source quality.** It is reported anyway,
+because the redistribution is what made the confound visible -- a leave-one-out
+that froze the survivors at their old quota would have reported all three
+sources as load-bearing, which is the reading this table exists to prevent.
+
+### The allocations, and the decision
+
+An allocation is a condition, so every row carries its pool size.
+
+| blend | pool | Recall@100 |
+| --- | ---: | ---: |
+| `two_tower` alone | 100 | **0.3776** |
+| `trending` alone | 100 | 0.3523 |
+| all five, 20 slots each | <=100 | **0.2589** |
+| `two_tower` + `trending`, 50/50 | 76 | 0.3569 |
+| `two_tower` + `trending`, 80/20 | 85 | 0.3624 |
+| `two_tower` + `trending`, full lists | 147 | **0.4182** |
+| all five, full lists | 338 | 0.4301 |
+
+**At a fixed budget of 100 slots, no blend beats the two-tower alone.** Not the
+even five-way split (0.2589), not two sources at 50/50 (0.3569), not 80/20
+(0.3624). The 50/50 blend barely clears `trending` alone, which is why dropping
+`two_tower` from it costs an insignificant +0.0039.
+
+**If the pool may grow, the marginal value is entirely in `trending`:**
+
+| step | extra candidates | extra recall | per 10 candidates |
+| --- | ---: | ---: | ---: |
+| `two_tower` -> `+ trending` | +47 | **+0.0406** | **+0.0086** |
+| `+ trending` -> `+ the other three` | +191 | +0.0119 | +0.0006 |
+
+**Fourteen times the return.** So the engineering statement is:
+
+> Serve the two-tower and a point-in-time popularity list. `trending` adds 0.041
+> recall for 47 extra candidates because it is the only source that can answer a
+> request about a user with no history. `covisit`, `content` and `recent` were
+> dropped: together they add 0.012 recall for 191 extra candidates, and at any
+> fixed slot budget they are net negative.
+
+Which removes three of the manual's five sources, with a measurement for each.
+
+**What this is not.** The manual's I3 measures the end-to-end **NDCG@10** loss
+per removed source. That needs the ranker, so this is Recall@100 throughout --
+the retrieval-side substitute. A source that contributes poor candidates cheaply
+could still earn its place once a ranker can discard them, and nothing here
+rules that out. Revisit after Part K.
+
+---
+
 ## Seed variance, and what it costs this page
 
 Measured in Part H, and it should have been measured in Part G.

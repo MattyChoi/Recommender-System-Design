@@ -26,6 +26,7 @@ dependencies = [
     "sentence-transformers>=3.3.0",
     "mlflow>=2.19.0",
     "ray[train]>=2.40.0",
+    "faiss-cpu>=1.9.0",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +71,8 @@ module = [
     "matplotlib.*",
     "torchrec.*",
     "fbgemm_gpu.*",
+    "faiss.*",
+    "airflow.*",
 ]
 ignore_missing_imports = true
 
