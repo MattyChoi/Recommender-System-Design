@@ -35,6 +35,11 @@ sharded = ["torchrec==1.8.0", "fbgemm-gpu==1.8.0"]
 # Airflow drags in ~100 packages and a web stack. It is needed to PARSE and test
 # the index DAG, not to train or to serve, so it stays out of the base install.
 orchestration = ["apache-airflow>=3.0"]
+serving = [
+    "onnx>=1.23.0",
+    "onnxruntime>=1.30.0",
+    "onnxscript>=0.7.2",
+]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]
@@ -64,6 +69,8 @@ ignore = ["ANN401"]
 python_version = "3.13"
 strict = true
 warn_unreachable = true
+# grpc's generated servicers are untyped by design
+exclude = ["^common/pb/"]
 
 [[tool.mypy.overrides]]
 module = [
@@ -77,10 +84,22 @@ module = [
     "fbgemm_gpu.*",
     "faiss.*",
     "airflow.*",
+    "pendulum.*",
     "lightgbm.*",
     "sklearn.*",
+    "onnx.*",
+    "onnxruntime.*",
+    "onnxscript.*",
 ]
 ignore_missing_imports = true
+
+# DAGs type-check against real Airflow locally but against `Any` in CI, which
+# skips the orchestration group: the decorators are untyped there and the
+# XComArg ignores go unused. Relax exactly those two checks, nothing else.
+[[tool.mypy.overrides]]
+module = ["hourly_index"]
+disallow_untyped_decorators = false
+warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "data_pipeline/tests", "evaluation/tests", "models/tests", "indexing/tests"]

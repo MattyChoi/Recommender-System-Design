@@ -1,14 +1,16 @@
-.PHONY: proto help up down clean raw bronze silver gold content retrieval feast parity eval sweep results gap coverage compare baselines torch-env data \
+.PHONY: proto triton-proto triton-stubs help up down clean raw bronze silver gold content retrieval feast parity eval sweep results gap coverage compare baselines torch-env data \
         topic delete_topic replay consume offsets \
         bands ablation shard-plan hash-bench retrieval-dist sources blend rank rank-neural rank-dist \
-        headroom rerank seen-bench index serve bench demo \
-        go-build go-test go-lint go-fmt fixtures lint fmt types test check
+        headroom rerank seen-bench onnx index item-map catalogue popular index-vectors \
+        retrieval-serve features-serve serve bench demo \
+        go-build go-test go-race go-lint go-fmt fixtures lint fmt types test check
 
 .DEFAULT_GOAL := help
 
 
 -include .env
 export UV_ENV_FILE=.env
+export PATH := $(PATH):$(shell go env GOPATH 2>/dev/null)/bin
 
 # `uv run` for everything EXCEPT the Ray drivers -- see retrieval-dist.
 PYTHON ?= uv run python
@@ -85,6 +87,23 @@ down:  ## Stop and remove containers, keeping data
 clean:  ## Stop everything and DESTROY all volumes
 	docker compose down -v
 
+# Triton's own protobufs, vendored. See serving/proto/triton/README.md.
+#
+# The ref must match the Triton server container being run
+#	`make triton-proto TRITON_PROTO_REF=r25.02`
+TRITON_PROTO_REF ?= main
+TRITON_PROTO_BASE = https://raw.githubusercontent.com/triton-inference-server/common/$(TRITON_PROTO_REF)/protobuf
+
+triton-proto:  ## Fetch Triton's protobufs (set TRITON_PROTO_REF to a release tag)
+	mkdir -p serving/proto/triton
+	curl -fsSL $(TRITON_PROTO_BASE)/grpc_service.proto \
+	    -o serving/proto/triton/grpc_service.proto
+	curl -fsSL $(TRITON_PROTO_BASE)/model_config.proto \
+	    -o serving/proto/triton/model_config.proto
+	@echo "  fetched at ref '$(TRITON_PROTO_REF)'"
+	@test "$(TRITON_PROTO_REF)" != "main" || \
+	  echo "  WARNING: 'main' is a moving target. Pin it: make triton-proto TRITON_PROTO_REF=rXX.YY"
+
 proto:  ## Regenerate protobuf stubs from serving/proto/*.proto
 	mkdir -p common/pb serving/go/internal/pb && touch common/pb/__init__.py
 	uv run python -m grpc_tools.protoc -I serving/proto \
@@ -95,6 +114,30 @@ proto:  ## Regenerate protobuf stubs from serving/proto/*.proto
 	    --go_out=serving/go/internal/pb --go_opt=paths=source_relative \
 	    --go-grpc_out=serving/go/internal/pb --go-grpc_opt=paths=source_relative \
 	    serving/proto/*.proto
+	@$(MAKE) --no-print-directory triton-stubs
+
+# Triton's protos declare NO `option go_package` -- checked, not assumed -- so
+# protoc-gen-go has no import path to emit and refuses without an explicit
+# mapping per file. That is what the M flags are: "this .proto belongs to this
+# Go package". Vendored third-party schemas commonly omit go_package because
+# they are generated for many languages and cannot know one language's layout.
+#
+# Go only. Nothing in Python talks to Triton: the offline path scores with
+# torch directly, and the serving path is the Go orchestrator.
+TRITON_GO_PKG = github.com/MattyChoi/Recommender-System-Design/serving/go/internal/tritonpb
+
+triton-stubs:
+	@test -f serving/proto/triton/grpc_service.proto || \
+	  { echo "run 'make triton-proto' first"; exit 1; }
+	mkdir -p serving/go/internal/tritonpb
+	protoc -I serving/proto/triton \
+	    --go_out=serving/go/internal/tritonpb --go_opt=paths=source_relative \
+	    --go_opt=Mgrpc_service.proto=$(TRITON_GO_PKG) \
+	    --go_opt=Mmodel_config.proto=$(TRITON_GO_PKG) \
+	    --go-grpc_out=serving/go/internal/tritonpb --go-grpc_opt=paths=source_relative \
+	    --go-grpc_opt=Mgrpc_service.proto=$(TRITON_GO_PKG) \
+	    --go-grpc_opt=Mmodel_config.proto=$(TRITON_GO_PKG) \
+	    serving/proto/triton/*.proto
 
 raw:  ## Fetch MIND into paths.raw (override: make download MIND_SIZE=large)
 	uv run python -m data_pipeline.ingest.download_mind --size $(MIND_SIZE) --splits $(SPLITS) $(if $(FORCE),--force)
@@ -326,12 +369,26 @@ headroom:
 seen-bench:  ## Bloom-filter seen-list: memory against exact storage, and the error rate
 	uv run python -m models.reranking.seen_bench $(SEEN_ARGS)
 
+# Must be a rank-neural checkpoint
+RANKER_CHECKPOINT ?= data/checkpoints/ranking/mmoe-two_tower+trending+covisit+content-c100-4c80d49d59df4f4a-7fb9c9cfebba.pt
+# Triton's layout is <repo>/<model>/<version>/model.onnx -- the numbered
+# directory is the model VERSION and is not optional.
+ONNX_OUT ?= serving/triton/ranker/1/model.onnx
+
+# `--extra serving`: onnx, onnxscript and onnxruntime live there. Listing the
+# other extras too, because `uv run --extra X` resolves only X
+onnx:  ## Export the serving ranker to ONNX, preprocessing baked into the graph
+	@test -f "$(RANKER_CHECKPOINT)" || \
+	  { echo "set RANKER_CHECKPOINT=data/checkpoints/ranking/<mmoe run>.pt"; exit 1; }
+	uv run --extra serving --extra sharded --extra orchestration \
+	    python -m models.export.onnx $(RANKER_CHECKPOINT) --out $(ONNX_OUT)
+
 # The seen-filter arm needs Redis, so it is opt-in rather than part of `rerank`:
 #   make rerank RERANK_ARGS="... --seen"
 rerank:  ## MMR / caps / freshness / exploration -> the relevance-diversity table
 	@test -f "$(SOURCE_CHECKPOINT)" || \
 	  { echo "set SOURCE_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
-	@test -f "$(RANKER)" || { echo "set RANKER= to a booster from `make rank`"; exit 1; }
+	@test -f "$(RANKER)" || { echo "set RANKER= to a booster from 'make rank'"; exit 1; }
 	uv run python -m models.reranking.evaluate $(SOURCE_CHECKPOINT) \
 	    --ranker $(RANKER) $(RERANK_ARGS)
 
@@ -342,11 +399,72 @@ index:  ## Recall/QPS curve: HNSW and IVF-PQ against exact search
 	  { echo "set INDEX_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
 	uv run python -m indexing.benchmark_index $(INDEX_CHECKPOINT) $(INDEX_ARGS)
 
-serve:  ## Run the gRPC orchestrator
-	@echo "TODO: serving"; exit 1
+# The id map the Go server loads at startup. Dumped rather than read live: the
+# serving process has no JVM, and the mapping changes only when bronze is
+# rebuilt -- at which point the checkpoints are invalid anyway and everything
+# downstream is being redone.
+ITEM_MAP ?= serving/artifacts/item_map.json
+item-map:  ## Dump bronze item_map to JSON for the Go server
+	uv run python -m scripts.dump_item_map --out $(ITEM_MAP)
 
-bench:  ## Latency + recall/QPS benchmarks
-	@echo "TODO: benchmarks"; exit 1
+# Category/subcategory indices.
+CATALOGUE ?= serving/artifacts/catalogue.json
+catalogue:  ## Dump per-item category indices for the Go server
+	uv run python -m scripts.dump_catalogue --out $(CATALOGUE)
+
+# The fallback slate. No Redis by design: a fallback with a runtime dependency
+# can fail, on the one path whose job is to always return something. Reads gold
+# from wherever storage.backend puts it.
+POPULAR ?= serving/artifacts/popular.json
+popular:  ## Dump the popularity fallback slate
+	@test -f "$(ITEM_MAP)" || { echo 'run: make item-map'; exit 1; }
+	uv run python -m scripts.dump_popular --item-map $(ITEM_MAP) --out $(POPULAR)
+
+# Item vectors for ADR 0013's rung 2: exact search in the orchestrator when the
+# sidecar is unreachable. MUST come from the same checkpoint the promoted index
+# was built from, or it searches a space the cached queries are not in.
+INDEX_STEM ?= serving/artifacts/items
+index-vectors:  ## Dump item embeddings for in-process exact search
+	@test -f "$(INDEX_CHECKPOINT)" || \
+	  { echo 'set INDEX_CHECKPOINT=data/checkpoints/<run>.pt'; exit 1; }
+	uv run python -m scripts.dump_index_vectors $(INDEX_CHECKPOINT) --stem $(INDEX_STEM)
+
+# Holds the FAISS index and the two-tower user encoder, neither of which the Go
+# orchestrator can load.
+RETRIEVAL_CHECKPOINT ?= $(INDEX_CHECKPOINT)
+RETRIEVAL_ARGS ?=
+retrieval-serve:  ## Run the retrieval sidecar (FAISS + user tower) on :50052
+	@test -f "$(RETRIEVAL_CHECKPOINT)" || \
+	  { echo 'set RETRIEVAL_CHECKPOINT=data/checkpoints/<run>.pt'; exit 1; }
+	uv run python -m serving.retrieval --checkpoint $(RETRIEVAL_CHECKPOINT) $(RETRIEVAL_ARGS)
+
+# The feature gateway. Go cannot read Feast's online store -- it is written
+# through Feast's SDK in a Feast-internal protobuf layout -- so Feast is used
+# from Python behind one hop.
+FEATURES_ARGS ?=
+features-serve:  ## Run the feature gateway (Feast behind gRPC) on :50053
+	@test -f "$(ITEM_MAP)" || { echo 'run: make item-map'; exit 1; }
+	uv run python -m serving.features --item-map $(ITEM_MAP) $(FEATURES_ARGS)
+
+# The orchestrator. Needs the retrieval sidecar and the feature gateway up, and
+# Triton serving the exported ranker. First: `make item-map catalogue onnx`.
+SERVE_ARGS ?=
+serve:  ## Run the gRPC orchestrator on :50051
+	@test -f "$(ITEM_MAP)" || { echo 'run: make item-map'; exit 1; }
+	@test -f "$(CATALOGUE)" || { echo 'run: make catalogue'; exit 1; }
+	@test -f "$(POPULAR)" || { echo 'run: make popular'; exit 1; }
+	@test -f "$(INDEX_STEM).json" || \
+	  echo '  note: no $(INDEX_STEM).json -- rung 2 disabled (run: make index-vectors)'
+	cd $(GO_DIR) && $(GO) run ./cmd/server \
+	    -item-map ../../$(ITEM_MAP) -catalogue ../../$(CATALOGUE) \
+	    -popular ../../$(POPULAR) -index-stem ../../$(INDEX_STEM) $(SERVE_ARGS)
+
+# §14.4's latency table. Needs the whole stack up: the orchestrator, both
+# sidecars, and Triton serving the exported ranker.
+BENCH_TARGET ?= localhost:50051
+BENCH_ARGS ?=
+bench:  ## Sweep the orchestrator to saturation with ghz
+	uv run python -m scripts.bench_serving --target $(BENCH_TARGET) $(BENCH_ARGS)
 
 # Runs against the LOCAL gold layer on purpose.
 demo: export RECSYS_STORAGE__BACKEND = local
@@ -366,6 +484,22 @@ go-build:  ## Compile the serving orchestrator
 
 go-test:  ## Go unit tests, including the Python parity fixtures
 	cd $(GO_DIR) && $(GO) test ./...
+
+# The race detector is instrumentation in the C runtime, so it needs cgo --
+# and CGO_ENABLED defaults to 0 in a lot of environments, where `go test -race`
+# fails with "requires cgo" rather than running unraced. Set here so it cannot
+# be forgotten.
+go-race:  ## Go tests under the race detector (needs a C toolchain)
+	@cc=$$(command -v gcc || command -v clang) || true; \
+	  if [ -z "$$cc" ]; then \
+	    echo "go-race needs a C compiler: the detector is cgo instrumentation."; \
+	    echo "  Debian/Ubuntu:  sudo apt install build-essential"; \
+	    echo "  Fedora/RHEL:    sudo dnf install gcc"; \
+	    echo "  Arch:           sudo pacman -S gcc"; \
+	    echo "  Skip this gate: make check SKIP_RACE=1"; \
+	    exit 1; \
+	  fi; \
+	  cd $(GO_DIR) && CGO_ENABLED=1 CC="$$cc" $(GO) test -race ./...
 
 # `go fmt` is NOT a check -- it runs `gofmt -w` and rewrites the files, so a
 # lint target built on it mutates the working tree and then fails, which in CI
@@ -406,3 +540,6 @@ check:  ## lint + types + test, both languages (what CI runs)
 	$(MAKE) test
 	$(MAKE) go-lint
 	$(MAKE) go-test
+	@[ -n "$(SKIP_RACE)" ] \
+	  && echo "SKIPPING go-race (SKIP_RACE set) -- races are NOT covered by this run" \
+	  || $(MAKE) go-race

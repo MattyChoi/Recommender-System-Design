@@ -1,0 +1,136 @@
+// The retrieval sidecar's contract: a user in, ranked candidates out.
+//
+// Regenerate stubs after any edit:  make proto
+//
+// ADR 0013 records why this service exists. The short version: a FAISS index is
+// a C++ artifact the Go orchestrator cannot read, and `encode_user` is a
+// PyTorch forward pass it cannot run. Those are two halves of one operation --
+// embed the user, then look up neighbours -- so they live together behind one
+// call rather than becoming two hops.
+//
+// This is a SEPARATE file from recsys.proto on purpose. That one is the
+// product API, spoken to whatever renders the rail; this one is internal
+// plumbing between two processes of the same system. Merging them would put
+// `efSearch` in the same file as the thing a client app calls.
+
+syntax = "proto3";
+package recsys.v1;
+// The SAME Go package as recsys.proto, not a sibling. `make proto` emits every
+// file under serving/proto/ into one directory with paths=source_relative, so a
+// second go_package here would put two package names in one directory and stop
+// compiling. The separation that matters is the file, which is preserved.
+option go_package = "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb";
+
+service Retrieval {
+  rpc Retrieve(RetrieveRequest) returns (RetrieveResponse);
+  rpc Health(RetrievalHealthRequest) returns (RetrievalHealthResponse);
+}
+
+message RetrieveRequest {
+  // The EXTERNAL user id, the same string Feast keys its entities on.
+  //
+  // Not the internal index, and the asymmetry with items is deliberate. The
+  // item side needs an index because the embedding table is indexed by
+  // position. **The user side has no such table**: `encode_user` is
+  // `cat([user_norm(user_feats), normalise(pooled_history)])` and never
+  // embeds a user id at all. So the only thing an index could do here is key
+  // the embedding cache, and requiring one would drag a ~1M-entry user_map
+  // into the serving path to do a job a string already does.
+  //
+  // It is therefore also the cache key, which matters beyond this service:
+  // ADR 0013's rung 2 has the Go orchestrator read the same key when this
+  // service is unreachable.
+  string user_id = 1;
+
+  int32 k = 2;
+
+  // The user's recent history as internal item indices, most recent first.
+  //
+  // Sent rather than fetched here, because the orchestrator has already paid
+  // for it: §14.2 fetches user features and history before the fan-out, and a
+  // sidecar that re-read them would double the feature-store load and could
+  // read a DIFFERENT snapshot than the one the ranker's features came from.
+  // Empty is legal and means a cold user.
+  //
+  // The mask `encode_user` also wants is derived here rather than sent: a
+  // variable-length list already carries which entries are real, and sending a
+  // parallel mask would create a way for the two to disagree.
+  repeated int32 history = 3;
+
+  // The static user feature vector, in the column order the tower was trained
+  // with -- `user_impressions_24h`, `user_clicks_24h`, `user_ctr_smoothed`,
+  // `user_tenure_hours` per docs/design.md §4b.
+  //
+  // `encode_user` takes (user_feats, history_ids, history_mask); history alone
+  // does not encode a user. Sent rather than fetched for the same reason as
+  // history: the orchestrator's §14.2 feature fetch has already paid for it,
+  // and a second read could see a different snapshot than the ranker's own
+  // features came from.
+  //
+  // **Width is checked against the loaded tower, not trusted.** A short or
+  // permuted vector is a correctly-typed request that produces a plausible
+  // embedding for a user who does not exist, and the neighbours it retrieves
+  // look entirely reasonable.
+  repeated float user_feats = 5;
+
+  // efSearch for this request, 0 for the server's configured default.
+  //
+  // Per-request because it is the one index knob worth sweeping against live
+  // traffic: ADR 0002 picked 512 over the throughput-optimal 128 on a recall
+  // cost that did not reproduce across checkpoints, and an experiment arm that
+  // can move it is how that gets settled on this corpus rather than on that
+  // one.
+  int32 ef_search = 4;
+}
+
+message RetrieveResponse {
+  // Item indices, best first. Never contains 0: that is the reserved
+  // out-of-vocabulary row, which is not an article and must not occupy a slot.
+  repeated int32 items = 1;
+
+  // Inner-product scores, aligned with items. Cosine, because both towers
+  // L2-normalise -- an un-normalised table would rank by magnitude and say
+  // nothing about it.
+  //
+  // This is `retrieval_score`, the ranker's first column. Returned rather than
+  // recomputed downstream: the orchestrator has no item embeddings, and a
+  // second process computing the same dot product from a second copy of the
+  // table is a skew surface for no gain.
+  repeated float scores = 2;
+
+  // `content_similarity`, the ranker's seventh column: the dot product of the
+  // user's L2-normalised pooled history content vector with each candidate's
+  // content vector.
+  //
+  // Computed here for the same reason as scores, and cheaply: this process
+  // already holds the content table and already has the history. It mirrors
+  // models/ranking/dataset.py:build exactly -- pooled is normalised, the
+  // candidate vector is NOT -- because the ranker was fitted on that
+  // asymmetry and normalising both here would quietly change the feature.
+  repeated float content_similarity = 6;
+
+  // Whether the user embedding came from cache rather than a tower forward
+  // pass. §14.4's Redis cache is a latency optimisation, and a cache that has
+  // quietly stopped being hit is a latency regression with no error attached.
+  bool embedding_cached = 3;
+
+  // Which index answered: "hnsw" or "flat". The sidecar degrades to exact
+  // search if the HNSW artifact fails to load, which is CORRECT and much
+  // slower, and is otherwise invisible.
+  string index_kind = 4;
+
+  string index_version = 5;
+}
+
+message RetrievalHealthRequest {}
+
+message RetrievalHealthResponse {
+  bool ready = 1;
+  string detail = 2;
+  string index_kind = 3;
+  string index_version = 4;
+  int32 index_ef_search = 5;
+  // Items actually in the loaded index. A rebuild that silently shipped a
+  // fraction of the catalogue passes every other check here.
+  int32 item_count = 6;
+}

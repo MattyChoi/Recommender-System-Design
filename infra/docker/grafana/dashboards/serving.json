@@ -1,0 +1,384 @@
+{
+  "uid": "recsys-serving",
+  "title": "Recsys — serving",
+  "description": "The orchestrator. Every panel below the KPI row answers a question about requests that SUCCEEDED: this pipeline degrades rather than fails, so its interesting failures return 200 with a full slate.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["recsys", "serving"],
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "p99 latency",
+      "description": "docs/design.md budgets 90ms end to end; §16.1 pages at 100ms. Amber is the budget, red is the page.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(recsys_request_duration_seconds_bucket[5m])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#E0A030", "value": 0.09 },
+              { "color": "#C4314B", "value": 0.1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "fallback rate",
+      "description": "Share of slates that are the popularity list, i.e. retrieval produced nothing. §16.1 alerts past 5%. ADR 0011 puts the decay optimum on this corpus at a ~29 minute half-life, which a build-time artifact cannot track — so a high rate here is both worse recommendations and staler ones.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(recsys_fallback_total[5m])) / clamp_min(sum(rate(recsys_requests_total{code=\"OK\"}[5m])), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#E0A030", "value": 0.02 },
+              { "color": "#C4314B", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "server error rate",
+      "description": "InvalidArgument is EXCLUDED: it means a caller sent a bad request, and paging the service owner for someone else's bug is how a page gets ignored.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(recsys_requests_total{code!~\"OK|InvalidArgument\"}[5m])) / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#C4314B", "value": 0.01 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "throughput",
+      "description": "docs/design.md assumes a 500 rps peak. The saturation point is measured by `make bench`, not read off this tile.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(recsys_requests_total[5m]))" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "area",
+        "colorMode": "none",
+        "textMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Latency against the budget",
+      "description": "Three quantiles on ONE axis, in seconds. The dashed rules are the 90ms budget and the 100ms page threshold — the histogram has explicit bucket boundaries at both, so these quantiles are measured there rather than interpolated between neighbours.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(recsys_request_duration_seconds_bucket[5m])))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(recsys_request_duration_seconds_bucket[5m])))"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "p99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(recsys_request_duration_seconds_bucket[5m])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "#E0A030", "value": 0.09 },
+              { "color": "#C4314B", "value": 0.1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "p99 by stage",
+      "description": "A single end-to-end number says a request was slow; this says which stage was. Its own panel rather than a second axis on the chart beside it — two y-scales on one plot invent a correlation that is not in the data. Stage budgets: features 8ms, retrieval 25ms, rank 35ms, rerank 5ms.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{stage}}",
+          "expr": "histogram_quantile(0.99, sum by (le, stage) (rate(recsys_stage_duration_seconds_bucket[5m])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+
+    {
+      "type": "timeseries",
+      "title": "The funnel — median candidates surviving each stage",
+      "description": "⚠️ after_filter collapsing toward zero is a SATURATED SEEN-LIST. Part L measured the cliff: a filter sized for 100 items and given 1,000 reaches 100% bit load and answers \"seen\" to every candidate. It has still never produced a false negative, and it now hides the whole slate. The selector ignores an all-blocking mask, so this panel is the only place that shows it.\n\nColoured with a single-hue ordinal ramp rather than categorical hues, because funnel stages are ORDERED — light at the wide end, dark at the narrow one.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{stage}}",
+          "expr": "histogram_quantile(0.50, sum by (le, stage) (rate(recsys_stage_candidates_bucket{stage=~\"retrieved|after_filter|scored|served\"}[5m])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "retrieved" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9ECAE1" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "after_filter" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#6BAED6" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "scored" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3182BD" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "served" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#08519C" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Degradation — share of SUCCESSFUL requests",
+      "description": "Every series here is requests that returned 200 with a full slate.\n\nranker: the model missed its deadline and the blended retrieval order shipped — Part K measured that order at 0.0716 NDCG@10 against the ranker's 0.1283, so this is ~56% of the quality with no error anywhere.\nfeatures: the gateway was unreachable and the pipeline ran against a cold user.\nfeature_columns: retrieval fell to ADR 0013 rung 2, so model columns were zero-filled — and zero is not \"unknown\" to this model, it asserts the candidate is orthogonal to the user.\nseen: the seen-list failed and the filter failed OPEN.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{source}}",
+          "expr": "sum by (source) (rate(recsys_degraded_total[5m])) / clamp_min(sum(rate(recsys_requests_total{code=\"OK\"}[5m])), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "#C4314B", "value": 0.02 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+
+    {
+      "type": "timeseries",
+      "title": "Experiment arms — share of assignments",
+      "description": "Balanced arms are flat, overlapping lines. §17.2: check the ratio FIRST — an SRM invalidates the experiment regardless of what the primary metric did, so investigate assignment, logging and filtering before looking at any result.\n\nThis is a COARSE guard. The real test is chi-square with a p-value, in evaluation/experiments/srm.py, against the full assignment log.\n\n\"none\" is the holdback: an allocation summing under 100% leaves users in no arm, and an uncounted holdback makes the ratio check compare against a denominator it cannot see.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{variant}}",
+          "expr": "sum by (variant) (rate(recsys_experiment_assignments_total[5m])) / clamp_min(sum(rate(recsys_experiment_assignments_total[5m])), 0.001)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "heatmap",
+      "title": "Served-score distribution",
+      "description": "The input to the PSI drift check (§16.1 alerts past 0.25). A histogram rather than a summary precisely so this is computable: PSI compares two distributions over the SAME bucket edges, and quantiles cannot be re-bucketed after the fact.\n\n⚠️ PSI itself is NOT computed anywhere yet. It needs a reference distribution from a known-good window and a sum over bucket pairs, which is a scheduled job rather than a PromQL rule. This panel is the raw material; the alert is owed.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
+          "expr": "sum by (le) (rate(recsys_served_score_bucket[5m]))"
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "cellGap": 2,
+        "color": {
+          "mode": "scheme",
+          "scheme": "Blues",
+          "steps": 32,
+          "reverse": false
+        },
+        "yAxis": { "unit": "short", "decimals": 1 },
+        "legend": { "show": true },
+        "tooltip": { "mode": "single", "yHistogram": true }
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

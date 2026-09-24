@@ -43,6 +43,16 @@ type Slate struct {
 	// time or lost**: once the request is over, the candidate set and the draw
 	// are both gone, and every off-policy estimate built later is biased.
 	Propensity []float64
+	// Objective is the value each slot was actually CHOSEN by -- the
+	// MMR-adjusted score when MMR is on, the raw score when it is off.
+	//
+	// It is not scores[Rows[i]] whenever a policy fires, and the difference is
+	// the point: reporting the ranker's raw score beside a re-ranked order is
+	// how a debugging session starts from a false premise ("the top item scored
+	// 0.9, so why is it in slot 4?"). For an exploration slot this is the
+	// objective of the item the DRAW landed on, not the greedy maximum that was
+	// passed over -- the slot was filled by that item, at that value.
+	Objective []float64
 }
 
 // Options switches the individual policies on. A nil slice or pointer disables
@@ -125,6 +135,7 @@ func Select(scores []float64, items []int32, k int, opts Options) (Slate, error)
 		Items:      make([]int32, 0, budget),
 		Rows:       make([]int, 0, budget),
 		Propensity: make([]float64, 0, budget),
+		Objective:  make([]float64, 0, budget),
 	}
 	used := make(map[int32]int)
 	// peak is the running MAXIMUM similarity to the chosen set, so MMR stays
@@ -194,9 +205,15 @@ func Select(scores []float64, items []int32, k int, opts Options) (Slate, error)
 			}
 		}
 
+		// Read BEFORE the appends: objectiveAt takes the size of the chosen set,
+		// and MMR's penalty switches on at the first pick. Computing it after
+		// would evaluate slot 0 under the rule for slot 1.
+		atPick := objectiveAt(scores, peak, opts, pick, len(slate.Items))
+
 		slate.Items = append(slate.Items, items[pick])
 		slate.Rows = append(slate.Rows, pick)
 		slate.Propensity = append(slate.Propensity, propensity)
+		slate.Objective = append(slate.Objective, atPick)
 		available[pick] = false
 		if opts.Categories != nil {
 			used[opts.Categories[pick]]++

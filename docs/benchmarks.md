@@ -316,6 +316,32 @@ The user-encode figures above are **one component** of that budget, not a draft
 of it. They exclude the feature fetch, the ANN search and the network, which are
 where a 90 ms budget is actually spent.
 
+**The harness exists; the numbers do not.** `make bench` sweeps the orchestrator
+with `ghz` and writes the table below. Two properties of it are worth stating
+before any number lands here, because both are ways this table is commonly
+wrong rather than merely absent:
+
+**Every request uses a different user.** ghz's default is one payload repeated,
+which on this system measures the warm path and nothing else -- the same
+`user_id` hits the same cached embedding in the retrieval sidecar, the same
+seen-list key in Redis, and the same Feast row in the gateway. That produces a
+beautiful table describing a system nobody runs. The harness templates the
+request number into the id across a pool of 10,000 users.
+
+**The sweep runs to saturation rather than to a chosen rate.** A single QPS
+figure says nothing without knowing how close to the limit it was. Saturation
+is flagged on two independent symptoms -- p99 past the 100 ms budget, or
+throughput that stopped tracking the offered rate -- because they come apart: a
+service can hold its latency and refuse work, or accept everything and get
+slower. A sweep watching only one reports the knee in the wrong place.
+
+§14.4 wants the before/after ladder (naive → batched → cached → Go → INT8), and
+this project cannot produce most of those rows honestly: there is no Python
+serving implementation to be the "before", and no INT8 arm. What it can produce
+is the current stack's curve and a per-stage breakdown from
+`recsys_stage_duration_seconds`. A ladder with invented rows would be worse
+than a single measured column.
+
 ---
 
 # The ANN index (Part J)
@@ -534,3 +560,64 @@ and this one is not.
 coverage**: ~0.00083 NDCG per point, against exploration's ~0.00004. It is a
 correctness requirement whose coverage gain is a side effect, and it belongs in
 the table for its cost rather than as a rival to MMR.
+
+---
+
+# Serving (Part M)
+
+## The retrieval fallback, and an 11x that is not about the algorithm
+
+ADR 0013 puts the FAISS index behind a Python sidecar and keeps exact search in
+the Go process as rung 2 of the degradation ladder. `go test ./internal/index
+-bench BenchmarkSearch` measures that rung. AMD Ryzen 9 7900X, `k=100`, one
+query at a time:
+
+| shape | table | ns/op | per item per query | scanned |
+| --- | ---: | ---: | ---: | ---: |
+| 65,000 x 128 (MIND-small) | 33.3 MB | **3,923,312** | 60.4 ns | 8,483 MB/s |
+| 160,000 x 128 (design target) | 81.9 MB | 9,508,814 | 59.4 ns | 8,615 MB/s |
+
+Two allocations and 832 B per query, which is the k-sized result pair and is
+not worth optimising.
+
+**Set against the same algorithm in FAISS on the same corpus and the same box,
+this is 11x slower.** The Part J sweep measured `IndexFlatIP` at **0.354 ms
+p50** — and that row is directly comparable, because `benchmark_index.py`
+measures latency at batch size 1 on purpose ("a batched sweep divided by the
+batch size is throughput wearing a latency label"). 5.4 ns per item per query
+there, 60.4 ns here.
+
+**The gap is SIMD, not algorithm.** Both do one pass over the table computing
+one inner product per row. 8.32M multiply-adds in 3.92 ms is 2.1 G FMA/s, which
+is about half of what one core retires with a *scalar* FMA per cycle — and Go's
+compiler does not auto-vectorise, so the inner loop is scalar. FAISS compiles to
+AVX2/AVX-512 and does 8-16 lanes per instruction. The ratio lands where the lane
+count says it should.
+
+⚠️ **An earlier reading of this called the scan memory-bandwidth-bound, on the
+evidence that MB/s is flat across a 2.5x change in table size. That inference
+was wrong.** Every byte of the table feeds exactly one multiply-add, so bytes
+per second and FLOP per second are proportional by construction — flat MB/s
+shows only that cost is linear in table size, which a compute-bound scan does
+too. At 8.5 GB/s against ~2.1 G FMA/s on a scalar loop, the arithmetic is the
+binding constraint, not the memory bus.
+
+### What it means for the ladder
+
+**Latency: rung 2 holds.** `docs/design.md` budgets 25 ms for the whole
+five-source fan-out. 3.9 ms fits, with the caveat that at the 160K design target
+it is 9.5 ms — 38% of the retrieval budget consumed by one degraded source.
+
+**Capacity: rung 2 is not free.** At the design doc's 500 peak QPS, 3.92 ms of
+CPU per request is **~2.0 cores of scan alone**, and the guide's own Kubernetes
+manifest (§15) sets `limits: {cpu: "2"}`. A sidecar outage at peak would spend
+the entire pod budget on the fallback, leaving nothing for the blend, the
+re-ranker, serialisation or the Triton call. So rung 2 is a fallback for a
+degraded *service*, not a capacity-neutral one, and the honest operational
+statement is that a sidecar outage at peak needs load-shedding rather than
+transparent failover.
+
+**What is NOT measured:** the sidecar hop itself. Everything above is the
+fallback path. The primary path — gRPC to Python, `encode_user`, HNSW search —
+has no number yet, and until `ghz` produces one, the claim that the sidecar fits
+the 25 ms budget is a design intention rather than a result.

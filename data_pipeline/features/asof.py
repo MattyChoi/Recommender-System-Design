@@ -16,6 +16,11 @@ from pyspark.sql import functions as f
 _ITEM_FEATURES = (
     "item_impressions_24h",
     "item_clicks_24h",
+    # Cumulative, not a window. The ranker's prior_clicks/train_clicks and the
+    # is_cold_item flag derived from them are totals over an article's whole
+    # life; a rolling count in their place is skew that looks like data.
+    "item_impressions_cum",
+    "item_clicks_cum",
     "item_ctr_smoothed",
     "item_age_hours",
 )
@@ -43,6 +48,11 @@ _CATEGORY_FEATURES = ("cat_expanding_ctr",)
 ZERO_FILLED = (
     "item_impressions_24h",
     "item_clicks_24h",
+    # Zero is the honest answer here too, and it is the one the ranker was
+    # taught to read: is_cold_item is exactly train_clicks == 0, so an item
+    # with no closed bucket before the label must arrive as 0 rather than null.
+    "item_impressions_cum",
+    "item_clicks_cum",
     "item_age_hours",
     "user_impressions_24h",
     "user_clicks_24h",

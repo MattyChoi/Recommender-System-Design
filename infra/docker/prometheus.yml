@@ -1,10 +1,29 @@
 global:
   scrape_interval: 15s
+  # Every rule in serving/monitoring/alerts.yml uses a 5m rate window, which
+  # needs at least four samples to be meaningful. 15s gives twenty.
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
 
 scrape_configs:
-  - job_name: recsys-api
+  # The Go orchestrator. It runs on the HOST (`make serve`), not in this
+  # compose file, because it loads artifacts from the working tree and talks to
+  # sidecars started the same way.
+  #
+  # Port 9102, not 9090: Prometheus publishes itself on 9090 and the two would
+  # collide on the host. See the -metrics flag in cmd/server.
+  - job_name: recsys-orchestrator
     static_configs:
-      - targets: ["host.docker.internal:8080"]
+      - targets: ["host.docker.internal:9102"]
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # The OTLP collector's own health, so a tracing pipeline that has stopped
+  # accepting spans is visible here rather than only as an absence in Tempo.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]

@@ -9,7 +9,16 @@ from data_pipeline.features.ctr import _MIN_PRIOR_IMPRESSIONS, category_prior, s
 
 
 def item_hourly_features(events: DataFrame) -> DataFrame:
-    """One row per (item, hour) with cumulative counts up to that hour."""
+    """One row per (item, hour): rolling 24h counts, cumulative counts, and age.
+
+    **The 24h and cumulative columns are different features and both are
+    needed.** The rolling pair describes what is happening to an article now;
+    the cumulative pair is its whole history, which is what
+    ``models/ranking/dataset.py`` fits ``prior_clicks`` and ``train_clicks``
+    from and what ``is_cold_item`` is derived from. Serving a window where
+    training used a total is training/serving skew that nothing downstream can
+    detect -- both columns are non-negative integers of a plausible size.
+    """
 
     # For each item and hour, aggregate the number of impressions and clicks in that hour.
     hourly = (
@@ -27,11 +36,24 @@ def item_hourly_features(events: DataFrame) -> DataFrame:
         .orderBy(f.col("feature_ts").cast("long"))
         .rangeBetween(-24 * 3600, 0)
     )
+    # Everything up to and including this hour. rangeBetween on the SAME cast
+    # key as w24, and inclusive of the current bucket for the same reason: both
+    # columns must mean "as of the end of this hour", because feature_ts is
+    # stamped at hour-END above and the as-of join trusts that. An exclusive
+    # cumulative sitting beside an inclusive 24h window would put the two
+    # columns an hour out of step with each other, which reads as noise.
+    cumulative = (
+        Window.partitionBy("item_id")
+        .orderBy(f.col("feature_ts").cast("long"))
+        .rangeBetween(Window.unboundedPreceding, 0)
+    )
     first_seen = Window.partitionBy("item_id")
 
     return (
         hourly.withColumn("item_impressions_24h", f.sum("item_impressions_1h").over(w24))
         .withColumn("item_clicks_24h", f.sum("item_clicks_1h").over(w24))
+        .withColumn("item_impressions_cum", f.sum("item_impressions_1h").over(cumulative))
+        .withColumn("item_clicks_cum", f.sum("item_clicks_1h").over(cumulative))
         .withColumn("item_first_seen", f.min("feature_ts").over(first_seen))
         .withColumn(
             "item_age_hours",

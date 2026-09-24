@@ -1,6 +1,13 @@
 # ADR 0003 — LightGBM baseline before DCNv2
 
-**Status:** accepted · **Date:** 2026-09-22
+**Status:** accepted, **amended for serving** · **Date:** 2026-09-22
+
+> ⚠️ **The offline decision below stands and the serving decision differs.**
+> LightGBM wins this comparison on measurement. The serving path nevertheless
+> ships **MMoE**, deliberately and at a measured cost. See
+> [the serving amendment](#amendment-the-serving-ranker-is-mmoe) at the foot of
+> this document; the analysis above it is unchanged and is what the amendment
+> is overriding.
 
 ## Context
 
@@ -121,3 +128,67 @@ with one gate — the machinery without the reason. Fabricating a dwell signal t
 populate a second head would make the multi-task story an artifact of the
 fabrication. The gates are measured for collapse instead, and the architecture
 waits for a corpus with a second label.
+
+*Rejected above on this corpus; adopted below for the serving path, for a
+reason that is about migration cost rather than quality.*
+
+---
+
+## Amendment: the serving ranker is MMoE
+
+**Date:** 2026-09-22
+
+**The serving path ships MMoE, not the booster, and it is a measured
+regression.** 0.1403 against 0.1443 — paired **−0.0040** [−0.0079, −0.0005] \*,
+about **2.8% relative**. The noise floor on that arm was measured directly, by
+running one configuration twice and pairing the scorings: **+0.0002**
+[−0.0006, +0.0010]. So this gap is roughly **four times the floor**, and is not
+a tie being resolved on taste.
+
+**What buys it is migration cost, not quality.** A serving stack built around a
+tree ensemble and one built around a neural ranker differ in nearly every
+component: the model-server backend, the export artefact, the input contract
+(one flat matrix against separate dense and sparse tensors), the need to ship
+fitted preprocessing beside the weights, and the feature-construction code that
+must then agree across two languages. Choosing the booster now and the neural
+ranker later means building that stack twice. This corpus has one label today,
+and the architecture that matters the moment it has two is the gated one — so
+the serving path is built for the second label rather than retrofitted to it.
+
+**This is the same shape of decision as [ADR 0002](0002-hnsw-over-ivfpq.md)**:
+the measurement describes MIND-small, the architecture is chosen against the
+target the system exists to demonstrate, and the cost of the override is stated
+rather than absorbed.
+
+### What it obliges
+
+**An export and a parity test, before anything else.** `models/export/` is
+empty. MMoE serves as ONNX behind Triton's `onnxruntime` backend, which means an
+export step plus a test asserting the exported graph scores identically to eager
+PyTorch on the same rows. Without it, "the model we measured" and "the model we
+serve" are two artefacts that were never compared.
+
+**The standardiser ships with the weights, or the model is wrong.** The Part K
+checkpoint carries `mean`, `scale` and `features` beside the state dict for
+exactly this reason: a neural ranker restored without the statistics it was
+fitted under scores confidently and wrongly, and no tensor shape says anything
+is missing. The booster needed none of this — a tree splits on order.
+
+**A third cross-language parity debt.** Blend and re-rank are paid. Feature
+construction is not: eleven columns, standardised, in a fixed order, built
+identically in Python and Go. A permuted column is a model scoring a different
+world, with no error raised anywhere.
+
+**Triton's FIL backend is no longer the host**, which voids the hosting choice
+made while the booster was the target.
+
+### What would reverse this
+
+A second label arriving and the gates failing to separate the tasks; or the
+measured gap widening beyond the ~3% that the multi-task option is worth. The
+baseline to compare against is already on file: entropy of the mean gate 2.060
+of 2.079, mean per-row entropy 1.762 — 15.2% specialised per request, stable to
+under 0.005 across two runs.
+
+**The booster stays built, measured and reproducible.** It remains the offline
+reference and the honest answer to "which ranker is better on this corpus".

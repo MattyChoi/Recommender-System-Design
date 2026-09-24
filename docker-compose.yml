@@ -122,7 +122,39 @@ services:
     ports: ["9090:9090"]         # query UI and API
     # Mounts your scrape config over the path the image reads at startup.
     # ":ro" = read-only, so the container cannot modify your repo file.
-    volumes: ["./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    volumes:
+      - "./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      # The alert rules, mounted at the path prometheus.yml's `rule_files`
+      # names. Prometheus REFUSES TO START on a rule file it cannot read, so
+      # this mount is not optional once that key exists -- which is exactly why
+      # the rules live beside the service that emits the metrics and are
+      # mounted in, rather than being pasted into the scrape config.
+      - "./serving/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"
+    # The orchestrator runs on the HOST, not in this file: it loads artifacts
+    # from the working tree and talks to sidecars started with `make`. Docker
+    # Desktop resolves host.docker.internal for free; native Linux does not,
+    # and BigBox is Linux, so it is mapped explicitly.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # OpenTelemetry collector: the tail-sampling decision point.
+  #
+  # ⚠️ This is the component that makes tracing useful here rather than
+  # decorative. Head sampling in the orchestrator decides at the root, before
+  # anything has degraded, so below ratio 1.0 it drops the interesting traces
+  # at the same rate as the boring ones. The collector sees the FINISHED trace
+  # and can keep it on what actually happened.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.142.0
+    container_name: recsys-otel
+    # -contrib, not the core image: tail_sampling ships only in contrib, and
+    # the core image accepts the config file and ignores the processor.
+    command: ["--config=/etc/otel/config.yaml"]
+    ports:
+      - "4317:4317"              # OTLP/gRPC -- the -otlp flag on the orchestrator
+      - "8888:8888"              # its own metrics, scraped by prometheus above
+    volumes:
+      - "./infra/docker/otel-collector.yaml:/etc/otel/config.yaml:ro"
 
   grafana:
     image: grafana/grafana:13.2.0        # Grafana 13.2.0, released 2026-08-18

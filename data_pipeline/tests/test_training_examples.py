@@ -32,6 +32,7 @@ _SERIES = (
     "item_id string, category string, feature_ts timestamp, "
     "item_impressions_1h long, item_clicks_1h long, "
     "item_impressions_24h long, item_clicks_24h long, "
+    "item_impressions_cum long, item_clicks_cum long, "
     "item_ctr_smoothed double, cat_expanding_ctr double, item_age_hours double"
 )
 
@@ -41,12 +42,13 @@ def series(spark: SparkSession) -> DataFrame:
     """One warm item with history, plus a category prior available all along."""
     return spark.createDataFrame(
         [
-            # WARM: a closed bucket an hour before the label.
-            ("N1", "sports", T0 - timedelta(hours=1), 40, 2, 400, 20, 0.05, 0.03, 6.0),
+            # WARM: a closed bucket an hour before the label. Cumulative counts
+            # exceed the 24h window so a swap between the two is visible.
+            ("N1", "sports", T0 - timedelta(hours=1), 40, 2, 400, 20, 900, 45, 0.05, 0.03, 6.0),
             # A later bucket the label must NOT see.
-            ("N1", "sports", T0 + timedelta(hours=1), 40, 30, 400, 300, 0.75, 0.03, 8.0),
+            ("N1", "sports", T0 + timedelta(hours=1), 40, 30, 400, 300, 980, 77, 0.75, 0.03, 8.0),
             # The category series carries the prior for items with no history.
-            ("N9", "sports", T0 - timedelta(hours=2), 10, 0, 100, 3, 0.03, 0.03, 1.0),
+            ("N9", "sports", T0 - timedelta(hours=2), 10, 0, 100, 3, 100, 3, 0.03, 0.03, 1.0),
         ],
         _SERIES,
     )
@@ -90,6 +92,8 @@ def test_a_warm_item_reads_only_its_past(
 
     assert got["item_ctr_smoothed"] == pytest.approx(0.05), "read a feature from the future"
     assert got["item_impressions_24h"] == 400
+    assert got["item_impressions_cum"] == 900, "served the window where the total belongs"
+    assert got["item_clicks_cum"] == 45
     assert got["has_item_features"] is True
 
 
@@ -124,6 +128,8 @@ def test_cold_item_counts_are_zero_not_null(
 
     assert got["item_impressions_24h"] == 0
     assert got["item_clicks_24h"] == 0
+    assert got["item_impressions_cum"] == 0
+    assert got["item_clicks_cum"] == 0, "is_cold_item reads clicks_cum == 0; null breaks it"
     assert got["item_age_hours"] == pytest.approx(0.0)
 
 
@@ -175,7 +181,7 @@ def test_a_label_with_nothing_knowable_is_dropped(spark: SparkSession) -> None:
     check.
     """
     series = spark.createDataFrame(
-        [("N1", "sports", T0 + timedelta(hours=1), 10, 1, 100, 5, 0.05, 0.04, 3.0)], _SERIES
+        [("N1", "sports", T0 + timedelta(hours=1), 10, 1, 100, 5, 100, 5, 0.05, 0.04, 3.0)], _SERIES
     )
     labels = spark.createDataFrame(
         [

@@ -1,0 +1,212 @@
+# Alert rules for the orchestrator.
+#
+# Every rule here exists because this pipeline DEGRADES RATHER THAN FAILS, and
+# that design has one consequence: the failures worth paging on return 200.
+# A request served from the retrieval order, to a cold user, from a saturated
+# filter, on rung 2 of the retrieval ladder, is a well-formed response with a
+# full slate. Nothing in an HTTP status or an error rate sees any of it.
+#
+# Thresholds come from docs/design.md's budgets and §16.1, not from defaults.
+# Two of §16.1's five are NOT here and are named at the bottom rather than
+# approximated, because an alert firing on a metric that does not mean what its
+# name says is worse than no alert.
+
+groups:
+  - name: recsys-latency
+    interval: 30s
+    rules:
+      - alert: RecsysP99OverBudget
+        # docs/design.md budgets 90ms end to end; §16.1 pages at 100ms.
+        # The histogram has an explicit bucket boundary at 0.1, so this is a
+        # measurement rather than an interpolation between neighbours.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(recsys_request_duration_seconds_bucket[5m]))
+          ) > 0.1
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "p99 is {{ $value | humanizeDuration }}, past the 100ms budget"
+          runbook: "Check recsys_stage_duration_seconds to see WHICH stage; a single end-to-end number says a request was slow, the per-stage one says why."
+
+      - alert: RecsysStageOverBudget
+        # Per-stage budgets: features 8ms, retrieval 25ms, rank 35ms, rerank
+        # 5ms. Fires before the end-to-end alert does, which is the point --
+        # one stage doubling is visible here long before it consumes the whole
+        # budget.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, stage) (rate(recsys_stage_duration_seconds_bucket[5m]))
+          )
+          > on (stage) group_left
+          (
+            label_replace(vector(0.008), "stage", "features", "", "")
+            or label_replace(vector(0.025), "stage", "retrieval", "", "")
+            or label_replace(vector(0.035), "stage", "rank", "", "")
+            or label_replace(vector(0.005), "stage", "rerank", "", "")
+          )
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "stage {{ $labels.stage }} p99 is past its budget"
+
+  - name: recsys-errors
+    interval: 30s
+    rules:
+      - alert: RecsysErrorRate
+        # InvalidArgument is EXCLUDED on purpose. It means a caller sent a bad
+        # request -- no user_id, a negative num_results, num_results past the
+        # ceiling. Counting it here pages the service owner for somebody
+        # else's bug, and a page that is usually not yours is a page that gets
+        # ignored. Client errors get their own rule below.
+        expr: |
+          sum(rate(recsys_requests_total{code!~"OK|InvalidArgument"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)
+          > 0.01
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "server error rate is {{ $value | humanizePercentage }}"
+
+      - alert: RecsysClientErrorSpike
+        # Not a page. A jump here is usually a caller deploying something, and
+        # it is worth knowing about because the alternative reading -- our
+        # validation got stricter -- is also worth knowing about.
+        expr: |
+          sum(rate(recsys_requests_total{code="InvalidArgument"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)
+          > 0.05
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests are being rejected as malformed"
+
+  - name: recsys-degradation
+    interval: 30s
+    rules:
+      # The rules in this group are the reason the file exists. Every one of
+      # them fires on requests that SUCCEEDED.
+
+      - alert: RecsysFallbackRate
+        # §16.1 alerts past 5%. The fallback means retrieval produced nothing
+        # at all, so the user got a popularity slate -- and ADR 0011 measured
+        # the decay optimum on this corpus at a ~29 minute half-life, which a
+        # build-time artifact cannot track. A high fallback rate is therefore
+        # doubly bad: worse recommendations AND staler ones.
+        expr: |
+          sum(rate(recsys_fallback_total[5m]))
+          / clamp_min(sum(rate(recsys_requests_total{code="OK"}[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of slates are the popularity fallback"
+
+      - alert: RecsysRankerDegraded
+        # The ranker missed its deadline or errored and the blended retrieval
+        # order shipped instead. Part K measured that order at 0.0716 NDCG@10
+        # against the ranker's 0.1283 -- roughly 56% of the quality, served
+        # with a 200 and a full slate.
+        expr: |
+          sum(rate(recsys_degraded_total{source="ranker"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total{code="OK"}[5m])), 0.001)
+          > 0.02
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests served the retrieval order"
+
+      - alert: RecsysFeatureGatewayDegraded
+        # The user fetch failed and the pipeline ran against a COLD user: no
+        # feature vector, no history. Every downstream stage is quietly worse
+        # and none of them fail.
+        expr: |
+          sum(rate(recsys_degraded_total{source="features"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total{code="OK"}[5m])), 0.001)
+          > 0.02
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests ran against a cold user"
+
+      - alert: RecsysRetrievalOnRungTwo
+        # incomplete_rows counts candidates scored with zero-filled model
+        # columns, which happens when the retrieval sidecar is unreachable and
+        # the orchestrator fell to in-process exact search (ADR 0013 rung 2).
+        #
+        # ⚠️ benchmarks.md measures that scan at 3.9ms of CPU per query. At the
+        # design doc's 500 peak QPS that is ~2.0 cores against the `cpu: "2"`
+        # pod limit, so a sustained rung-2 period at peak is a capacity
+        # problem, not just a quality one. Load-shed rather than ride it out.
+        expr: sum(rate(recsys_incomplete_rows_total[5m])) > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "retrieval is on rung 2; exact search is ~2 cores at peak QPS"
+
+      - alert: RecsysSeenFilterSaturated
+        # Part L measured the cliff: a filter sized for 100 items and given
+        # 1,000 reaches 100% bit load and answers "seen" to EVERY candidate.
+        # It has still never produced a false negative, and it now hides the
+        # whole slate.
+        #
+        # Alerted on the FUNNEL rather than on the filter, because
+        # after_filter collapsing is the observable consequence and needs no
+        # per-user scrape. The selector's guard means the slate is not
+        # actually empty -- an all-blocking mask is ignored -- so this is the
+        # only signal that the filter has stopped doing anything useful.
+        expr: |
+          histogram_quantile(
+            0.5,
+            sum by (le) (rate(recsys_stage_candidates_bucket{stage="after_filter"}[10m]))
+          ) < 1
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "the seen-list is blocking every candidate; check capacity against items per user"
+
+  - name: recsys-experiments
+    interval: 60s
+    rules:
+      - alert: RecsysExperimentImbalance
+        # A COARSE guard, and deliberately named as one. §17.2's real check is
+        # a chi-square test and lives in evaluation/experiments/srm.py, where
+        # it can be run against the full assignment log with a proper p-value.
+        # This catches the gross case -- an arm that has stopped receiving
+        # traffic, or one absorbing a holdback -- fast enough to stop an
+        # experiment before it accumulates a week of invalid data.
+        #
+        # ⚠️ An SRM invalidates the experiment REGARDLESS of what the primary
+        # metric did. Investigate assignment, logging and filtering before
+        # looking at any result.
+        expr: |
+          (
+            max(sum by (variant) (rate(recsys_experiment_assignments_total{variant!="none"}[30m])))
+            /
+            clamp_min(min(sum by (variant) (rate(recsys_experiment_assignments_total{variant!="none"}[30m]))), 0.001)
+          ) > 1.2
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: "experiment arms differ by more than 20%; run the chi-square before trusting any result"
+
+# --- What is deliberately NOT alerted on here ---------------------------------
+#
+# §16.1 lists five alerts. Two are missing, and they are missing rather than
+# approximated because a rule that fires on a metric not measuring what its
+# name claims is worse than no rule.
+#
+# **Feature freshness lag > 10 minutes.** The metric does not exist yet. The
+# feature gateway's FeaturesHealthResponse declares
+# `oldest_feature_age_seconds` and currently returns 0 -- Feast's event
+# timestamps come back only when requested per view, and a field that actually
+# means "the SDK answered" would make this alert fire on nothing. Owed.
+#
+# **Prediction-distribution PSI > 0.25.** `recsys_served_score` is a histogram
+# specifically so this is computable -- PSI compares two distributions over the
+# SAME bucket edges, which quantiles cannot be re-bucketed to give. But PSI
+# itself is not expressible in PromQL: it needs a reference distribution from a
+# known-good window and a sum over bucket pairs. That belongs in a scheduled
+# job reading the histogram, not in a rule file. Owed.

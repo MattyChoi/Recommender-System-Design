@@ -1,0 +1,104 @@
+# The serving ranker, as Triton sees it.
+#
+# Layout matters and is not optional: Triton reads <repo>/<model>/<version>/,
+# so the graph lives at serving/triton/ranker/1/model.onnx and `1` is the model
+# VERSION. `make onnx` writes it there.
+#
+# The graph takes RAW feature columns and does its own reciprocal, log1p and
+# standardisation -- see models/export/onnx.py. That is deliberate: it means
+# this config describes the whole contract, and there is no preprocessing step
+# living somewhere else that could drift away from the model it feeds.
+
+name: "ranker"
+platform: "onnxruntime_onnx"
+
+# --- Batching -----------------------------------------------------------------
+#
+# Triton owns the batch dimension, so `dims` below describe ONE sample and
+# Triton prepends the batch axis itself. The export emits [batch, 1] rather than
+# [batch] for exactly this reason -- a rank-1 output cannot be batched.
+#
+# **What the batcher buys here is not the usual win.** Dynamic batching is
+# normally the largest single optimisation because a naive service scores items
+# ONE AT A TIME and the batcher rescues it. That pathological case was designed
+# out upstream: one request already arrives as up to 100 candidates. What this
+# buys instead is combining CONCURRENT requests -- four requests of 100 become
+# one pass of 400 -- which matters at QPS and does nothing at all for a single
+# request in an idle system.
+#
+# 1024 is well above any single request, so several can combine. It is a ceiling
+# rather than a target.
+max_batch_size: 1024
+
+dynamic_batching {
+  # Sizes the batcher will try to form before dispatching. Powers of two because
+  # the underlying GEMMs prefer them, and stopping at 512 because a batch is
+  # already 100+ rows of a small model -- past that the queueing delay costs
+  # more than the wider matmul saves.
+  preferred_batch_size: [ 128, 256, 512 ]
+
+  # **The knob that trades latency for throughput, and the one number here that
+  # must be MEASURED rather than reasoned about.** The batcher waits up to this
+  # long for more requests before dispatching what it has. At zero it never
+  # waits and the feature degenerates to "batch whatever happened to arrive
+  # together"; too high and every request pays the delay whether or not anything
+  # joined it.
+  #
+  # 500us is a starting point against a 90ms end-to-end budget, chosen to be
+  # small enough that it cannot dominate and large enough to catch a neighbour
+  # at moderate QPS. It is NOT a tuned value: the honest version comes from a
+  # ghz sweep plotting p99 against QPS at 0 / 250 / 500 / 1000us, and that
+  # measurement is owed before this number is quoted anywhere.
+  max_queue_delay_microseconds: 500
+}
+
+input [
+  {
+    name: "features"
+    data_type: TYPE_FP32
+    # One sample: 11 raw feature columns. Triton prepends [batch].
+    #
+    # 11 is len(FEATURES), and the ORDER of those columns is the one part of the
+    # contract that could not be baked into the graph -- everything else, the
+    # reciprocal on ranks, the log1p on counts, the fitted standardiser, is
+    # inside it. So the order ships beside the model as 1/model.columns.json,
+    # is asserted by models/tests/test_export.py, and is checked again by the
+    # Go client before every call. A permuted column here is a valid-shaped
+    # input that scores a different world, silently.
+    dims: [ 11 ]
+  }
+]
+
+output [
+  {
+    name: "score"
+    data_type: TYPE_FP32
+    # One logit per sample. Logits, not probabilities: calibration is a separate
+    # isotonic fit (Part K) and is deliberately NOT in this graph. The ranker
+    # only has to ORDER candidates, and a calibrated number answers a different
+    # question -- "how much more likely than an average retrieved candidate" --
+    # against a base rate of 0.0038 set by the candidate pool.
+    dims: [ 1 ]
+  }
+]
+
+# --- Placement ----------------------------------------------------------------
+#
+# CPU, and that is a measurement rather than a limitation. The model is ~0.5M
+# parameters over a 100x11 input; the work is too small to amortise a host-to-
+# device copy, and this project's own Part H numbers show the same shape of
+# result -- a user-tower forward at batch 1 costs 0.28 ms, where the cost is
+# kernel launches rather than arithmetic. Revisit if the candidate count or the
+# model grows by an order of magnitude.
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]
+
+# Serve only the newest version present. The alternative -- serving every
+# version in the directory -- makes "which model answered this request?" a
+# question the response has to answer, and `model_version` in the response
+# contract exists precisely so that it can.
+version_policy: { latest: { num_versions: 1 } }

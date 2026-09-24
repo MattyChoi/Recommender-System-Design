@@ -1,0 +1,15 @@
+{
+  "features": [
+    "retrieval_score",
+    "two_tower_rank",
+    "trending_rank",
+    "n_sources",
+    "prior_clicks",
+    "train_clicks",
+    "content_similarity",
+    "history_length",
+    "is_cold_item",
+    "category_idx",
+    "subcategory_idx"
+  ]
+}

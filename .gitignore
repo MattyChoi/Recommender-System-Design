@@ -33,6 +33,7 @@ mlartifacts/
 evaluation/results/retrieval
 evaluation/results/sources
 evaluation/results/ranking
+*.onnx.data
 
 # Secrets and local config
 .env
