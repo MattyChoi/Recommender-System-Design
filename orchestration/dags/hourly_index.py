@@ -89,10 +89,27 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     params={
-        "checkpoint": "data/checkpoints/current.pt",
+        # The checkpoint every serving target already defaults to -- the
+        # Makefile's INDEX_CHECKPOINT, SOURCE_CHECKPOINT and
+        # RETRIEVAL_CHECKPOINT are all this run. It previously read
+        # `current.pt`, a file that has never existed in this repository, so
+        # the DAG was guaranteed to fail for anyone who ran it as shipped.
+        #
+        # It MUST match what `make index-vectors` was run with. Rung 2 of ADR
+        # 0013 searches serving/artifacts/items.bin using a query embedding
+        # cached from THIS tower; two checkpoints put the queries and the
+        # vectors in different spaces, and nothing at runtime notices.
+        "checkpoint": "data/checkpoints/both-logq-n4u0-b8192e10lr0.001-ab7e1d500b9bf792.pt",
         "artifacts": "/srv/recsys/index",
         "pointer": "/srv/recsys/index/CURRENT",
-        "kind": "flat",
+        # hnsw, not flat. ADR 0002 ships efSearch 512, the sidecar
+        # feature-detects SearchParametersHNSW, and its health response reports
+        # index_kind read off the OBJECT -- none of which means anything for a
+        # flat index. Flat is a defensible choice on a 65k catalogue; it is
+        # simply not the one the rest of the serving path is written for, so it
+        # is opted into rather than defaulted to. Matches INDEX_KIND in the
+        # Makefile and DEFAULT_KIND in indexing/promote.py.
+        "kind": "hnsw",
     },
     tags=["retrieval", "index"],
 ) as dag:

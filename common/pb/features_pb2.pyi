@@ -35,14 +35,16 @@ class GetItemsRequest(_message.Message):
     def __init__(self, items: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class GetItemsResponse(_message.Message):
-    __slots__ = ("values", "names", "found")
+    __slots__ = ("values", "names", "found", "cached")
     VALUES_FIELD_NUMBER: _ClassVar[int]
     NAMES_FIELD_NUMBER: _ClassVar[int]
     FOUND_FIELD_NUMBER: _ClassVar[int]
+    CACHED_FIELD_NUMBER: _ClassVar[int]
     values: _containers.RepeatedScalarFieldContainer[float]
     names: _containers.RepeatedScalarFieldContainer[str]
     found: _containers.RepeatedScalarFieldContainer[bool]
-    def __init__(self, values: _Optional[_Iterable[float]] = ..., names: _Optional[_Iterable[str]] = ..., found: _Optional[_Iterable[bool]] = ...) -> None: ...
+    cached: int
+    def __init__(self, values: _Optional[_Iterable[float]] = ..., names: _Optional[_Iterable[str]] = ..., found: _Optional[_Iterable[bool]] = ..., cached: _Optional[int] = ...) -> None: ...
 
 class FeaturesHealthRequest(_message.Message):
     __slots__ = ()

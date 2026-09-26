@@ -17,18 +17,42 @@ can produce two different binaries from one commit. Vendoring makes the
 generated client a function of the checked-in tree, which is the same reason
 `serving/testdata/*.json` is committed rather than regenerated in CI.
 
-## The version has to be pinned, and the default is not a pin
+## The version is pinned, and the pin is half of a pair
 
-`TRITON_PROTO_REF` defaults to `main`, which is a moving target and is **wrong
-for anything real**. Set it to the tag matching the Triton server actually being
-run — the container tag and the proto ref must agree, because a client generated
-from a newer `grpc_service.proto` can send fields an older server ignores
-silently. That failure looks like a model that quietly disregards a setting,
-which is considerably worse than a connection error.
+`TRITON_PROTO_REF` is **`r25.12`**, matching
+`nvcr.io/nvidia/tritonserver:25.12-py3` in `docker-compose.yml`. The branch
+keeps the leading `r`; the image tag drops it. **Change them together or not at
+all**, because a client generated from a newer `grpc_service.proto` can send
+fields an older server ignores silently. That failure looks like a model that
+quietly disregards a setting, which is considerably worse than a connection
+error.
+
+It defaulted to `main` for most of this project's life — a moving target — so
+the stubs in `internal/tritonpb` were generated from whatever `main` happened to
+be that day. The pin is what makes them a function of the commit, which is the
+same argument as vendoring in the first place.
 
 ```
-make triton-proto TRITON_PROTO_REF=r24.08
+make triton-proto TRITON_PROTO_REF=r25.12
+make proto
 ```
+
+**These are release BRANCHES, not tags.** `git ls-remote --tags` on this repo
+returns nothing at all, which is a confusing way to conclude that a version does
+not exist:
+
+```
+git ls-remote --heads https://github.com/triton-inference-server/common.git
+```
+
+### What the pin actually changed: nothing
+
+Re-fetching at `r25.12` and regenerating produced a **byte-identical**
+`grpc_service.proto`, `model_config.proto` and `internal/tritonpb`. The
+previously-unpinned stubs happened to match the release. Recorded because it is
+the more useful fact: the exposure here was zero, so the pin buys
+reproducibility rather than fixing a live bug, and anyone reading the git
+history will otherwise wonder what broke.
 
 ## Why the `M` flags exist
 

@@ -7,18 +7,20 @@ from typing import ClassVar as _ClassVar, Optional as _Optional
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class RetrieveRequest(_message.Message):
-    __slots__ = ("user_id", "k", "history", "user_feats", "ef_search")
+    __slots__ = ("user_id", "k", "history", "user_feats", "has_user_features", "ef_search")
     USER_ID_FIELD_NUMBER: _ClassVar[int]
     K_FIELD_NUMBER: _ClassVar[int]
     HISTORY_FIELD_NUMBER: _ClassVar[int]
     USER_FEATS_FIELD_NUMBER: _ClassVar[int]
+    HAS_USER_FEATURES_FIELD_NUMBER: _ClassVar[int]
     EF_SEARCH_FIELD_NUMBER: _ClassVar[int]
     user_id: str
     k: int
     history: _containers.RepeatedScalarFieldContainer[int]
     user_feats: _containers.RepeatedScalarFieldContainer[float]
+    has_user_features: bool
     ef_search: int
-    def __init__(self, user_id: _Optional[str] = ..., k: _Optional[int] = ..., history: _Optional[_Iterable[int]] = ..., user_feats: _Optional[_Iterable[float]] = ..., ef_search: _Optional[int] = ...) -> None: ...
+    def __init__(self, user_id: _Optional[str] = ..., k: _Optional[int] = ..., history: _Optional[_Iterable[int]] = ..., user_feats: _Optional[_Iterable[float]] = ..., has_user_features: _Optional[bool] = ..., ef_search: _Optional[int] = ...) -> None: ...
 
 class RetrieveResponse(_message.Message):
     __slots__ = ("items", "scores", "content_similarity", "embedding_cached", "index_kind", "index_version")

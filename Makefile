@@ -2,6 +2,7 @@
         topic delete_topic replay consume offsets \
         bands ablation shard-plan hash-bench retrieval-dist sources blend rank rank-neural rank-dist \
         headroom rerank seen-bench onnx index item-map catalogue popular index-vectors \
+        index-promote \
         retrieval-serve features-serve serve bench demo \
         go-build go-test go-race go-lint go-fmt fixtures lint fmt types test check
 
@@ -77,9 +78,21 @@ ENCODE_BATCH ?= 256
 help:  ## Show this help
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
+# HOST_IP is this machine's address AS A CONTAINER SEES IT, and it is computed
+# rather than configured because WSL reassigns it on reboot. Prometheus scrapes
+# the orchestrator through it: the orchestrator is a host process, and on Docker
+# Desktop's WSL backend `host.docker.internal` points at the WINDOWS host, not
+# at the distro the process is listening in. See infra/docker/prometheus.yml.
+export HOST_IP := $(shell hostname -I 2>/dev/null | awk '{print $$1}')
+
 up:
+	@test -n "$(HOST_IP)" || echo "  warning: HOST_IP is empty; Prometheus will fall back to host-gateway"
 	docker compose up -d --wait
 	docker exec recsys-minio sh -c 'mc alias set local http://localhost:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null && mc mb --ignore-existing local/mlflow local/recsys'
+	@echo "  scrape targets:"
+	@curl -s localhost:9090/api/v1/targets \
+	  | python3 -c "import json,sys; [print(f\"    {t['labels'].get('job'):22} {t['health']}\") for t in json.load(sys.stdin)['data']['activeTargets']]" \
+	  || echo "    (could not read Prometheus targets)"
 
 down:  ## Stop and remove containers, keeping data
 	docker compose down
@@ -89,9 +102,16 @@ clean:  ## Stop everything and DESTROY all volumes
 
 # Triton's own protobufs, vendored. See serving/proto/triton/README.md.
 #
-# The ref must match the Triton server container being run
-#	`make triton-proto TRITON_PROTO_REF=r25.02`
-TRITON_PROTO_REF ?= main
+# PINNED, not left at `main`. The ref must match the Triton server container
+# being run, because a client generated from a newer grpc_service.proto can send
+# fields an older server IGNORES IN SILENCE -- which reads as a model quietly
+# disregarding a setting rather than as an error. r25.12 here pairs with
+# `nvcr.io/nvidia/tritonserver:25.12-py3` in docker-compose.yml (the image tag
+# drops the leading r), and the two are changed together or not at all.
+#
+# These are release BRANCHES, not tags -- `git ls-remote --tags` returns nothing:
+#   git ls-remote --heads https://github.com/triton-inference-server/common.git
+TRITON_PROTO_REF ?= r25.12
 TRITON_PROTO_BASE = https://raw.githubusercontent.com/triton-inference-server/common/$(TRITON_PROTO_REF)/protobuf
 
 triton-proto:  ## Fetch Triton's protobufs (set TRITON_PROTO_REF to a release tag)
@@ -375,6 +395,13 @@ RANKER_CHECKPOINT ?= data/checkpoints/ranking/mmoe-two_tower+trending+covisit+co
 # directory is the model VERSION and is not optional.
 ONNX_OUT ?= serving/triton/ranker/1/model.onnx
 
+# DERIVED from ONNX_OUT, never written independently: models/export/onnx.py
+# writes the column order as `out.with_suffix(".columns.json")`, so pointing at
+# it by construction is the only spelling that cannot drift from the export.
+# The order is the one part of the serving contract no shape check can catch --
+# a permuted matrix has the right width and dtype and scores a different world.
+RANKER_COLUMNS ?= $(ONNX_OUT:.onnx=.columns.json)
+
 # `--extra serving`: onnx, onnxscript and onnxruntime live there. Listing the
 # other extras too, because `uv run --extra X` resolves only X
 onnx:  ## Export the serving ranker to ONNX, preprocessing baked into the graph
@@ -429,6 +456,34 @@ index-vectors:  ## Dump item embeddings for in-process exact search
 	  { echo 'set INDEX_CHECKPOINT=data/checkpoints/<run>.pt'; exit 1; }
 	uv run python -m scripts.dump_index_vectors $(INDEX_CHECKPOINT) --stem $(INDEX_STEM)
 
+# ADR 0013 rung 1: the index the retrieval sidecar actually serves. The sidecar
+# REFUSES TO START until something is promoted, and until now the only promoter
+# was the hourly DAG -- so the first index on any machine needed a heredoc.
+#
+# Same checkpoint as index-vectors above, and that is not a convention: rung 2
+# searches $(INDEX_STEM).bin with a query embedding cached from THIS tower, so
+# two checkpoints put queries and vectors in different spaces and nothing at
+# runtime notices.
+#
+# INDEX_ROOT is overridable because /srv is not creatable on macOS under SIP:
+#   make index-promote INDEX_ROOT=data/index
+# On Linux the default needs creating once:
+#   sudo mkdir -p /srv/recsys/index && sudo chown "$$USER" /srv/recsys/index
+#
+# Exits NON-ZERO when the gate refuses, which is a normal outcome and not a
+# failure of this target -- see indexing/promote.py.
+INDEX_ROOT ?= /srv/recsys/index
+INDEX_KIND ?= hnsw
+PROMOTE_ARGS ?=
+index-promote:  ## Build a FAISS index from INDEX_CHECKPOINT, gate it, promote it
+	@test -f "$(INDEX_CHECKPOINT)" || \
+	  { echo 'set INDEX_CHECKPOINT=data/checkpoints/<run>.pt'; exit 1; }
+	@test -d "$(INDEX_ROOT)" || \
+	  { echo 'create it first: sudo mkdir -p $(INDEX_ROOT) && sudo chown "$$USER" $(INDEX_ROOT)'; \
+	    echo '  or pick a writable one: make index-promote INDEX_ROOT=data/index'; exit 1; }
+	uv run python -m indexing.promote $(INDEX_CHECKPOINT) \
+	    --root $(INDEX_ROOT) --kind $(INDEX_KIND) $(PROMOTE_ARGS)
+
 # Holds the FAISS index and the two-tower user encoder, neither of which the Go
 # orchestrator can load.
 RETRIEVAL_CHECKPOINT ?= $(INDEX_CHECKPOINT)
@@ -446,21 +501,25 @@ features-serve:  ## Run the feature gateway (Feast behind gRPC) on :50053
 	@test -f "$(ITEM_MAP)" || { echo 'run: make item-map'; exit 1; }
 	uv run python -m serving.features --item-map $(ITEM_MAP) $(FEATURES_ARGS)
 
-# The orchestrator. Needs the retrieval sidecar and the feature gateway up, and
-# Triton serving the exported ranker. First: `make item-map catalogue onnx`.
+# The orchestrator. Triton comes from `make up`; the retrieval sidecar and the
+# feature gateway are host processes and do not, because they load artifacts
+# from the working tree -- as does this. First: `make item-map catalogue popular
+# onnx`, each of which is guarded below.
 SERVE_ARGS ?=
 serve:  ## Run the gRPC orchestrator on :50051
 	@test -f "$(ITEM_MAP)" || { echo 'run: make item-map'; exit 1; }
 	@test -f "$(CATALOGUE)" || { echo 'run: make catalogue'; exit 1; }
 	@test -f "$(POPULAR)" || { echo 'run: make popular'; exit 1; }
+	@test -f "$(RANKER_COLUMNS)" || { echo 'run: make onnx'; exit 1; }
 	@test -f "$(INDEX_STEM).json" || \
 	  echo '  note: no $(INDEX_STEM).json -- rung 2 disabled (run: make index-vectors)'
 	cd $(GO_DIR) && $(GO) run ./cmd/server \
 	    -item-map ../../$(ITEM_MAP) -catalogue ../../$(CATALOGUE) \
-	    -popular ../../$(POPULAR) -index-stem ../../$(INDEX_STEM) $(SERVE_ARGS)
+	    -popular ../../$(POPULAR) -columns ../../$(RANKER_COLUMNS) \
+	    -index-stem ../../$(INDEX_STEM) $(SERVE_ARGS)
 
-# §14.4's latency table. Needs the whole stack up: the orchestrator, both
-# sidecars, and Triton serving the exported ranker.
+# §14.4's latency table. Needs the whole stack: `make up` (Triton included),
+# then the orchestrator and both sidecars as host processes.
 BENCH_TARGET ?= localhost:50051
 BENCH_ARGS ?=
 bench:  ## Sweep the orchestrator to saturation with ghz

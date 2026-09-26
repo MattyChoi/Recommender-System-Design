@@ -35,12 +35,22 @@ groups:
         # 5ms. Fires before the end-to-end alert does, which is the point --
         # one stage doubling is visible here long before it consumes the whole
         # budget.
+        #
+        # NO `group_left` here, for two separate reasons. It is not NEEDED:
+        # both sides yield exactly one series per stage, so the match is
+        # one-to-one and the many-to-one modifier has nothing to do. And it
+        # does not PARSE: `group_left` takes an optional label list, so the
+        # parser binds the `(` opening the right-hand side as the start of
+        # `group_left(...)`, reads `label_replace` as a label name, and fails
+        # with "unexpected ( in grouping opts". Newlines do not separate them.
+        # Prometheus refuses to start on a rule file it cannot parse, so this
+        # one typo took the whole monitoring stack down.
         expr: |
           histogram_quantile(
             0.99,
             sum by (le, stage) (rate(recsys_stage_duration_seconds_bucket[5m]))
           )
-          > on (stage) group_left
+          > on (stage)
           (
             label_replace(vector(0.008), "stage", "features", "", "")
             or label_replace(vector(0.025), "stage", "retrieval", "", "")

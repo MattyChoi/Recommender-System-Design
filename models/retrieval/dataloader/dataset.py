@@ -40,11 +40,66 @@ LOG1P_FEATURES = frozenset({"user_impressions_24h", "user_clicks_24h", "user_ten
 USER_FLAGS = ("has_user_features",)
 CONTENT_VARIANTS = ("vec_title_abstract", "vec_title")
 
+#: Spark's ``dayofweek`` is 1..7 with **Sunday = 1**, which is why
+#: :func:`build_user_features` subtracts one before the cyclic encoding.
+#: Python's ``datetime.weekday()`` is 0..6 with Monday = 0 -- a caller that
+#: passes that directly produces a correctly-shaped, correctly-named vector
+#: rotated by a constant, which no width or range check can see.
+DAY_OF_WEEK_ORIGIN = 1
+
+USER_TOWER_COLUMNS: tuple[str, ...] = (
+    *USER_FEATURES,
+    *USER_FLAGS,
+    "hour_sin",
+    "hour_cos",
+    "day_of_week_sin",
+    "day_of_week_cos",
+)
+
 
 def _cyclic(values: np.ndarray, period: int) -> tuple[np.ndarray, np.ndarray]:
     """Sin/cos encoding of a cyclic integer feature."""
     radians = 2.0 * math.pi * values / period
     return np.sin(radians), np.cos(radians)
+
+
+def build_user_features(
+    static: dict[str, npt.NDArray[np.float32]],
+    has_user_features: npt.NDArray[np.float32],
+    hour_of_day: npt.NDArray[np.float32],
+    day_of_week: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """The tower's ``[R, 9]`` static input, from raw columns.
+
+    Args:
+        static: The four :data:`USER_FEATURES`, already null-filled. Each
+            ``[R]``. ``log1p`` is applied here, to :data:`LOG1P_FEATURES` only,
+            so callers pass RAW counts.
+        has_user_features: ``[R]`` 1.0 where the feature store had a row. At
+            serving this is ``GetUserResponse.found``; offline it is the
+            missingness flag the as-of join wrote.
+        hour_of_day: ``[R]`` 0..23.
+        day_of_week: ``[R]`` in **Spark's 1..7, Sunday = 1** convention. See
+            :data:`DAY_OF_WEEK_ORIGIN`.
+
+    Returns:
+        ``[R, 9]`` float32 in :data:`USER_TOWER_COLUMNS` order.
+
+    Raises:
+        KeyError: If ``static`` is missing one of :data:`USER_FEATURES`. Raised
+            rather than zero-filled: a silently absent column shifts every
+            later column left by one.
+    """
+    numeric: list[npt.NDArray[np.float32]] = []
+    for name in USER_FEATURES:
+        column = static[name]
+        numeric.append(np.log1p(column) if name in LOG1P_FEATURES else column)
+    numeric.append(has_user_features)
+    numeric.extend(_cyclic(hour_of_day, 24))
+    numeric.extend(_cyclic(day_of_week - DAY_OF_WEEK_ORIGIN, 7))
+
+    stacked: npt.NDArray[np.float32] = np.stack(numeric, axis=1).astype("float32")
+    return stacked
 
 
 def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> ItemTables:
@@ -137,21 +192,18 @@ def _tensors_from(
         .toPandas()
     )
 
-    numeric = []
-    for name in USER_FEATURES:
-        column = rows[name].fillna(0.0).to_numpy(dtype="float32")
-        numeric.append(np.log1p(column) if name in LOG1P_FEATURES else column)
-    for name in USER_FLAGS:
-        numeric.append(rows[name].fillna(False).to_numpy(dtype="float32"))
-    # Spark's dayofweek is 1..7, hour is 0..23; both wrap, so both get sin/cos.
-    numeric.extend(_cyclic(rows["hour_of_day"].to_numpy(dtype="float32"), 24))
-    numeric.extend(_cyclic(rows["day_of_week"].to_numpy(dtype="float32") - 1.0, 7))
+    numeric = build_user_features(
+        static={name: rows[name].fillna(0.0).to_numpy(dtype="float32") for name in USER_FEATURES},
+        has_user_features=rows[USER_FLAGS[0]].fillna(False).to_numpy(dtype="float32"),
+        hour_of_day=rows["hour_of_day"].to_numpy(dtype="float32"),
+        day_of_week=rows["day_of_week"].to_numpy(dtype="float32"),
+    )
 
     ids, mask = _pad_ragged(rows["history_idx"], max_len)
     neg_ids, neg_mask = _pad_ragged(rows["neg_idx"], max_negs)
 
     return SplitTensors(
-        user_feats=torch.from_numpy(np.stack(numeric, axis=1)),
+        user_feats=torch.from_numpy(numeric),
         history_ids=ids,
         history_mask=mask,
         item_ids=torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64")),

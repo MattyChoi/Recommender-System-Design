@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fretrieval.proto\x12\trecsys.v1\"e\n\x0fRetrieveRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\t\n\x01k\x18\x02 \x01(\x05\x12\x0f\n\x07history\x18\x03 \x03(\x05\x12\x12\n\nuser_feats\x18\x05 \x03(\x02\x12\x11\n\tef_search\x18\x04 \x01(\x05\"\x92\x01\n\x10RetrieveResponse\x12\r\n\x05items\x18\x01 \x03(\x05\x12\x0e\n\x06scores\x18\x02 \x03(\x02\x12\x1a\n\x12\x63ontent_similarity\x18\x06 \x03(\x02\x12\x18\n\x10\x65mbedding_cached\x18\x03 \x01(\x08\x12\x12\n\nindex_kind\x18\x04 \x01(\t\x12\x15\n\rindex_version\x18\x05 \x01(\t\"\x18\n\x16RetrievalHealthRequest\"\x90\x01\n\x17RetrievalHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x12\n\nindex_kind\x18\x03 \x01(\t\x12\x15\n\rindex_version\x18\x04 \x01(\t\x12\x17\n\x0findex_ef_search\x18\x05 \x01(\x05\x12\x12\n\nitem_count\x18\x06 \x01(\x05\x32\xa1\x01\n\tRetrieval\x12\x43\n\x08Retrieve\x12\x1a.recsys.v1.RetrieveRequest\x1a\x1b.recsys.v1.RetrieveResponse\x12O\n\x06Health\x12!.recsys.v1.RetrievalHealthRequest\x1a\".recsys.v1.RetrievalHealthResponseBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fretrieval.proto\x12\trecsys.v1\"\x80\x01\n\x0fRetrieveRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\t\n\x01k\x18\x02 \x01(\x05\x12\x0f\n\x07history\x18\x03 \x03(\x05\x12\x12\n\nuser_feats\x18\x05 \x03(\x02\x12\x19\n\x11has_user_features\x18\x06 \x01(\x08\x12\x11\n\tef_search\x18\x04 \x01(\x05\"\x92\x01\n\x10RetrieveResponse\x12\r\n\x05items\x18\x01 \x03(\x05\x12\x0e\n\x06scores\x18\x02 \x03(\x02\x12\x1a\n\x12\x63ontent_similarity\x18\x06 \x03(\x02\x12\x18\n\x10\x65mbedding_cached\x18\x03 \x01(\x08\x12\x12\n\nindex_kind\x18\x04 \x01(\t\x12\x15\n\rindex_version\x18\x05 \x01(\t\"\x18\n\x16RetrievalHealthRequest\"\x90\x01\n\x17RetrievalHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x12\n\nindex_kind\x18\x03 \x01(\t\x12\x15\n\rindex_version\x18\x04 \x01(\t\x12\x17\n\x0findex_ef_search\x18\x05 \x01(\x05\x12\x12\n\nitem_count\x18\x06 \x01(\x05\x32\xa1\x01\n\tRetrieval\x12\x43\n\x08Retrieve\x12\x1a.recsys.v1.RetrieveRequest\x1a\x1b.recsys.v1.RetrieveResponse\x12O\n\x06Health\x12!.recsys.v1.RetrievalHealthRequest\x1a\".recsys.v1.RetrievalHealthResponseBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,14 +32,14 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'retrieval_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb'
-  _globals['_RETRIEVEREQUEST']._serialized_start=30
-  _globals['_RETRIEVEREQUEST']._serialized_end=131
-  _globals['_RETRIEVERESPONSE']._serialized_start=134
-  _globals['_RETRIEVERESPONSE']._serialized_end=280
-  _globals['_RETRIEVALHEALTHREQUEST']._serialized_start=282
-  _globals['_RETRIEVALHEALTHREQUEST']._serialized_end=306
-  _globals['_RETRIEVALHEALTHRESPONSE']._serialized_start=309
-  _globals['_RETRIEVALHEALTHRESPONSE']._serialized_end=453
-  _globals['_RETRIEVAL']._serialized_start=456
-  _globals['_RETRIEVAL']._serialized_end=617
+  _globals['_RETRIEVEREQUEST']._serialized_start=31
+  _globals['_RETRIEVEREQUEST']._serialized_end=159
+  _globals['_RETRIEVERESPONSE']._serialized_start=162
+  _globals['_RETRIEVERESPONSE']._serialized_end=308
+  _globals['_RETRIEVALHEALTHREQUEST']._serialized_start=310
+  _globals['_RETRIEVALHEALTHREQUEST']._serialized_end=334
+  _globals['_RETRIEVALHEALTHRESPONSE']._serialized_start=337
+  _globals['_RETRIEVALHEALTHRESPONSE']._serialized_end=481
+  _globals['_RETRIEVAL']._serialized_start=484
+  _globals['_RETRIEVAL']._serialized_end=645
 # @@protoc_insertion_point(module_scope)

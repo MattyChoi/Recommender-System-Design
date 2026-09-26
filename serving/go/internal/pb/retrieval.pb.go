@@ -65,21 +65,41 @@ type RetrieveRequest struct {
 	// variable-length list already carries which entries are real, and sending a
 	// parallel mask would create a way for the two to disagree.
 	History []int32 `protobuf:"varint,3,rep,packed,name=history,proto3" json:"history,omitempty"`
-	// The static user feature vector, in the column order the tower was trained
-	// with -- `user_impressions_24h`, `user_clicks_24h`, `user_ctr_smoothed`,
-	// `user_tenure_hours` per docs/design.md §4b.
+	// The RAW static user block, in `serving/features/columns.py`'s
+	// USER_COLUMNS order -- `user_impressions_24h`, `user_clicks_24h`,
+	// `user_ctr_smoothed`, `user_tenure_hours` per docs/design.md §4b.
 	//
-	// `encode_user` takes (user_feats, history_ids, history_mask); history alone
-	// does not encode a user. Sent rather than fetched for the same reason as
-	// history: the orchestrator's §14.2 feature fetch has already paid for it,
-	// and a second read could see a different snapshot than the ranker's own
-	// features came from.
+	// ⚠️ **Raw, and NOT the tower's input.** The tower is fitted on nine
+	// columns: these four with log1p on the three counts, plus
+	// `has_user_features` and sin/cos pairs for hour-of-day and day-of-week. The
+	// sidecar assembles those by calling the same
+	// `models.retrieval.dataloader.dataset.build_user_features` that training
+	// calls, so the transform has exactly one implementation.
+	//
+	// This field used to be described as "the column order the tower was trained
+	// with", and the gateway sent these four in good faith. The result was
+	// InvalidArgument on every retrieval call and a popularity slate on every
+	// request, the first time the stack ran end to end.
+	//
+	// Sent rather than fetched for the same reason as history: the
+	// orchestrator's §14.2 feature fetch has already paid for it, and a second
+	// read could see a different snapshot than the ranker's own features came
+	// from.
 	//
 	// **Width is checked against the loaded tower, not trusted.** A short or
 	// permuted vector is a correctly-typed request that produces a plausible
 	// embedding for a user who does not exist, and the neighbours it retrieves
 	// look entirely reasonable.
 	UserFeats []float32 `protobuf:"fixed32,5,rep,packed,name=user_feats,json=userFeats,proto3" json:"user_feats,omitempty"`
+	// Whether the feature store actually had a row for this user.
+	//
+	// This is `GetUserResponse.found`, forwarded. It becomes the tower's
+	// `has_user_features` column, so it is a MODEL INPUT rather than telemetry:
+	// the gateway serves zeros on a miss, and this flag is the only thing
+	// distinguishing "a user with genuinely zero impressions" from "a user the
+	// store has never seen". Defaulting it to false on a hit would tell the
+	// tower every user is cold.
+	HasUserFeatures bool `protobuf:"varint,6,opt,name=has_user_features,json=hasUserFeatures,proto3" json:"has_user_features,omitempty"`
 	// efSearch for this request, 0 for the server's configured default.
 	//
 	// Per-request because it is the one index knob worth sweeping against live
@@ -148,6 +168,13 @@ func (x *RetrieveRequest) GetUserFeats() []float32 {
 		return x.UserFeats
 	}
 	return nil
+}
+
+func (x *RetrieveRequest) GetHasUserFeatures() bool {
+	if x != nil {
+		return x.HasUserFeatures
+	}
+	return false
 }
 
 func (x *RetrieveRequest) GetEfSearch() int32 {
@@ -392,13 +419,14 @@ var File_retrieval_proto protoreflect.FileDescriptor
 
 const file_retrieval_proto_rawDesc = "" +
 	"\n" +
-	"\x0fretrieval.proto\x12\trecsys.v1\"\x8e\x01\n" +
+	"\x0fretrieval.proto\x12\trecsys.v1\"\xba\x01\n" +
 	"\x0fRetrieveRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\f\n" +
 	"\x01k\x18\x02 \x01(\x05R\x01k\x12\x18\n" +
 	"\ahistory\x18\x03 \x03(\x05R\ahistory\x12\x1d\n" +
 	"\n" +
-	"user_feats\x18\x05 \x03(\x02R\tuserFeats\x12\x1b\n" +
+	"user_feats\x18\x05 \x03(\x02R\tuserFeats\x12*\n" +
+	"\x11has_user_features\x18\x06 \x01(\bR\x0fhasUserFeatures\x12\x1b\n" +
 	"\tef_search\x18\x04 \x01(\x05R\befSearch\"\xde\x01\n" +
 	"\x10RetrieveResponse\x12\x14\n" +
 	"\x05items\x18\x01 \x03(\x05R\x05items\x12\x16\n" +

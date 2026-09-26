@@ -11,6 +11,8 @@ Window: `2019-11-09T00:00:00` to `2019-11-16T00:00:00` · float tolerance: rel_t
 |---|---|---|---|---|---|---|
 | item_stats | `item_impressions_24h` | 200 | 22,417 | 200 | 0 | 0 |
 | item_stats | `item_clicks_24h` | 200 | 22,417 | 200 | 0 | 0 |
+| item_stats | `item_impressions_cum` | 200 | 22,417 | 200 | 0 | 0 |
+| item_stats | `item_clicks_cum` | 200 | 22,417 | 200 | 0 | 0 |
 | item_stats | `item_ctr_smoothed` | 200 | 22,417 | 200 | 0 | 0 |
 | item_stats | `cat_expanding_ctr` | 200 | 22,417 | 200 | 0 | 0 |
 | item_stats | `item_age_hours` | 200 | 22,417 | 200 | 0 | 0 |

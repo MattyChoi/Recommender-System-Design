@@ -96,6 +96,16 @@ message GetItemsResponse {
   // defaults were used. A cold article is normal on a news corpus; ALL of them
   // being cold is a broken materialisation.
   repeated bool found = 3;
+
+  // How many of these rows came from the gateway's in-process cache rather
+  // than from Feast.
+  //
+  // On the wire because a cache that has quietly stopped being hit is a
+  // latency regression with NO ERROR ATTACHED -- and this one is load-bearing:
+  // assembling 400 uncached rows costs 9.7ms at p50 and 126ms at p99, holds
+  // the GIL while it does, and starves GetUser into missing its 8ms budget.
+  // The retrieval sidecar carries `embedding_cached` for the same reason.
+  int32 cached = 4;
 }
 
 message FeaturesHealthRequest {}

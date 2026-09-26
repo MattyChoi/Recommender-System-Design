@@ -91,4 +91,4 @@ class TestParameters:
 
     def test_the_default_index_is_the_exact_one(self, dag: Any) -> None:
         """Measured on this corpus: approximation buys nothing it needs here."""
-        assert dag.params["kind"] == "flat"
+        assert dag.params["kind"] == "hnsw"

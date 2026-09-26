@@ -14,9 +14,18 @@ scrape_configs:
   #
   # Port 9102, not 9090: Prometheus publishes itself on 9090 and the two would
   # collide on the host. See the -metrics flag in cmd/server.
+  #
+  # ⚠️ `recsys-host`, NOT `host.docker.internal`. On Docker Desktop's WSL
+  # backend that name resolves to the Windows host while the orchestrator
+  # listens inside the WSL distro -- the scrape was refused for a full day and
+  # every panel and alert quietly evaluated an empty series. `recsys-host` is
+  # mapped in docker-compose.yml from $HOST_IP, which `make up` computes.
+  #
+  # Verify after any change, because a down target is invisible on a dashboard:
+  #   curl -s localhost:9090/api/v1/targets | grep -o '"health":"[a-z]*"'
   - job_name: recsys-orchestrator
     static_configs:
-      - targets: ["host.docker.internal:9102"]
+      - targets: ["recsys-host:9102"]
 
   - job_name: prometheus
     static_configs:
@@ -27,3 +36,18 @@ scrape_configs:
   - job_name: otel-collector
     static_configs:
       - targets: ["otel-collector:8888"]
+
+  # Triton's own metrics. `triton:8002` -- the compose service name, because
+  # this scrape stays inside the network and does not go back out through the
+  # published port.
+  #
+  # This is the source for the `max_queue_delay_microseconds` sweep that
+  # serving/triton/ranker/config.pbtxt says is owed before that 500us is quoted
+  # anywhere. `nv_inference_queue_duration_us` is time spent waiting for the
+  # batcher and `nv_inference_compute_infer_duration_us` is the forward pass;
+  # the orchestrator's own recsys_stage_duration_seconds{stage="rank"} sees only
+  # their sum plus the network, and cannot separate a slow model from a batcher
+  # that held the request waiting for a neighbour.
+  - job_name: triton
+    static_configs:
+      - targets: ["triton:8002"]

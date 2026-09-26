@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rpc"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
 )
 
@@ -32,7 +33,9 @@ import (
 // time out.
 type Sidecar struct {
 	client pb.RetrievalClient
-	conn   *grpc.ClientConn
+	//: Several connections behind one ClientConnInterface. Nil in tests, which
+	//: inject `client` directly; Close tolerates that.
+	conn *rpc.Balanced
 
 	// SourceName is what this source is called in quotas, degraded_sources and
 	// the per-item attribution. Configurable because Config.Quotas is
@@ -95,28 +98,70 @@ type Searcher interface {
 // DialSidecar opens a connection without blocking on the server being up.
 // gRPC reconnects on its own, and a serving process that refuses to start
 // because a dependency is briefly down turns a blip into an outage.
+// `conns` HTTP/2 connections, not one: gRPC-Go serialises every outbound frame
+// on a connection through one loopyWriter goroutine, which a profile put at
+// 30.5% of the orchestrator's CPU. See internal/rpc.
 func DialSidecar(
-	target, name string, k int, deadline time.Duration, opts ...grpc.DialOption,
+	target, name string, k, conns int, deadline time.Duration, opts ...grpc.DialOption,
 ) (*Sidecar, error) {
 	// Caller options LAST, so a caller can override the transport credentials
 	// rather than silently having them re-set beneath it.
 	opts = append([]grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}, opts...)
-	conn, err := grpc.NewClient(target, opts...)
+	pool, err := rpc.Dial(target, conns, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dialling retrieval sidecar at %s: %w", target, err)
 	}
 	return &Sidecar{
-		client:     pb.NewRetrievalClient(conn),
-		conn:       conn,
+		client:     pb.NewRetrievalClient(pool),
+		conn:       pool,
 		SourceName: name,
 		Deadline:   deadline,
 		K:          k,
 	}, nil
 }
 
-func (s *Sidecar) Close() error { return s.conn.Close() }
+// Ready asks the sidecar whether it has an index loaded.
+//
+// It is also the CONNECTION WARMER. grpc.NewClient dials lazily -- it returns
+// before any socket exists -- so the first RPC through a fresh client pays TCP
+// and HTTP/2 setup. Against a 25 ms source budget that is most of it, and the
+// first request after every restart duly missed the deadline and shipped a
+// degraded slate. cmd/server calls this once at startup so the first REAL
+// request costs what the second one does.
+//
+// The index kind and version are recorded on the way past, so the health
+// endpoint can answer before any request has arrived rather than reporting
+// "unknown" until traffic starts.
+func (s *Sidecar) Ready(ctx context.Context) error {
+	response, err := s.client.Health(ctx, &pb.RetrievalHealthRequest{})
+	if err != nil {
+		return fmt.Errorf("retrieval sidecar Health: %w", err)
+	}
+	s.setLastIndex(response.GetIndexKind(), response.GetIndexVersion())
+	if !response.GetReady() {
+		return fmt.Errorf("retrieval sidecar is up but not ready: %s", response.GetDetail())
+	}
+	return nil
+}
+
+// Close is nil-safe because the tests build a Sidecar with an injected client
+// and no connections at all.
+func (s *Sidecar) Close() error {
+	if s.conn == nil {
+		return nil
+	}
+	return s.conn.Close()
+}
+
+// Connections reports the pool size, for the startup log.
+func (s *Sidecar) Connections() int {
+	if s.conn == nil {
+		return 0
+	}
+	return s.conn.Connections()
+}
 
 func (s *Sidecar) Name() string { return s.SourceName }
 
@@ -134,7 +179,14 @@ func (s *Sidecar) Retrieve(
 		// than the one the ranker's own features came from.
 		UserFeats: user.Feats,
 		History:   user.History,
-		EfSearch:  s.EFSearch,
+		// A MODEL INPUT, not telemetry. The gateway serves zeros when the store
+		// has no row, so this flag is the only thing distinguishing a genuinely
+		// quiet user from an unknown one -- it becomes the tower's
+		// `has_user_features` column. Dropping it would tell the tower every
+		// user is cold, which is a plausible embedding for a user who does not
+		// exist.
+		HasUserFeatures: user.Found,
+		EfSearch:        s.EFSearch,
 	})
 	if err != nil {
 		return s.degrade(ctx, user, err)

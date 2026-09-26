@@ -24,11 +24,14 @@ package ranking
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rpc"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/tritonpb"
 )
@@ -48,7 +51,9 @@ const (
 // Client scores against a Triton model over gRPC.
 type Client struct {
 	client pb.GRPCInferenceServiceClient
-	conn   *grpc.ClientConn
+	//: Several connections behind one ClientConnInterface -- see internal/rpc.
+	//: Nil in tests, which inject `client` directly.
+	conn *rpc.Balanced
 
 	// Model is the name in config.pbtxt.
 	Model string
@@ -65,23 +70,36 @@ type Client struct {
 // Dial opens a connection. It does NOT block on the server being up: gRPC
 // reconnects on its own, and a serving process that refuses to start because a
 // dependency is briefly down turns a recoverable blip into an outage.
-func Dial(target, model string, columns []string, opts ...grpc.DialOption) (*Client, error) {
+// `conns` connections rather than one: gRPC-Go funnels a connection's outbound
+// frames through a single loopyWriter goroutine, and this client sends the
+// largest payload in the pipeline (400 candidates x 11 float32). See
+// internal/rpc.
+func Dial(
+	target, model string, columns []string, conns int, opts ...grpc.DialOption,
+) (*Client, error) {
 	opts = append([]grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}, opts...)
-	conn, err := grpc.NewClient(target, opts...)
+	pool, err := rpc.Dial(target, conns, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dialling triton at %s: %w", target, err)
 	}
 	return &Client{
-		client:  pb.NewGRPCInferenceServiceClient(conn),
-		conn:    conn,
+		client:  pb.NewGRPCInferenceServiceClient(pool),
+		conn:    pool,
 		Model:   model,
 		Columns: columns,
 	}, nil
 }
 
-func (c *Client) Close() error { return c.conn.Close() }
+// Close is nil-safe: the tests build a Client with an injected client and no
+// connections.
+func (c *Client) Close() error {
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
+}
 
 // Score sends one request's candidates and returns one logit per candidate.
 func (c *Client) Score(ctx context.Context, features service.Features) ([]float64, error) {
@@ -131,24 +149,71 @@ func (c *Client) Score(ctx context.Context, features service.Features) ([]float6
 		return nil, fmt.Errorf("triton ModelInfer: %w", err)
 	}
 
-	for _, output := range response.GetOutputs() {
+	for index, output := range response.GetOutputs() {
 		if output.GetName() != outputName {
 			continue
 		}
-		scores := output.GetContents().GetFp32Contents()
+		scores, err := outputFloats(response, index)
+		if err != nil {
+			return nil, err
+		}
 		// One score per candidate, checked. The orchestrator zips scores
 		// against items positionally, so a short response would rank each item
 		// by the next item's score -- a full, plausible, wrong slate.
 		if len(scores) != len(features.Rows) {
 			return nil, fmt.Errorf("%d scores for %d candidates", len(scores), len(features.Rows))
 		}
-		out := make([]float64, len(scores))
-		for index, value := range scores {
-			out[index] = float64(value)
+		return scores, nil
+	}
+	return nil, fmt.Errorf("response carried no %q output", outputName)
+}
+
+// outputFloats reads output `index` out of a response, from whichever field
+// carries it.
+//
+// **The asymmetry with the request above is not a style choice.** Sending
+// `contents.fp32_contents` is a real option -- Triton accepts either, and the
+// typed field has protobuf define the float encoding instead of a byte-layout
+// convention. On the RESPONSE there is no such option: Triton's server always
+// writes output tensors into `raw_output_contents` and leaves the typed
+// `contents` field empty. Reading the typed field got an empty slice back from
+// a perfectly successful inference, which surfaced as "the ranker degraded"
+// while Triton's own stats reported 400 inferences, zero failures.
+//
+// The typed branch is kept and tried first because a fake or a non-Triton
+// server may populate it, and because the unit tests do.
+//
+// `raw_output_contents[i]` pairs with `outputs[i]` positionally; there is no
+// name on it. Little-endian because that is what Triton documents for raw
+// tensor data, and the length check below is the only thing standing between a
+// byte-order mistake and a slate of plausible nonsense.
+func outputFloats(response *pb.ModelInferResponse, index int) ([]float64, error) {
+	if typed := response.GetOutputs()[index].GetContents().GetFp32Contents(); len(typed) > 0 {
+		out := make([]float64, len(typed))
+		for position, value := range typed {
+			out[position] = float64(value)
 		}
 		return out, nil
 	}
-	return nil, fmt.Errorf("response carried no %q output", outputName)
+
+	raw := response.GetRawOutputContents()
+	if index >= len(raw) {
+		return nil, fmt.Errorf(
+			"output %d carried neither typed contents nor a raw_output_contents entry "+
+				"(%d present)", index, len(raw),
+		)
+	}
+	buffer := raw[index]
+	if len(buffer)%4 != 0 {
+		return nil, fmt.Errorf("%d bytes is not a whole number of float32", len(buffer))
+	}
+
+	out := make([]float64, len(buffer)/4)
+	for position := range out {
+		bits := binary.LittleEndian.Uint32(buffer[position*4:])
+		out[position] = float64(math.Float32frombits(bits))
+	}
+	return out, nil
 }
 
 // checkColumns refuses a matrix built in a different order from the graph's.

@@ -84,16 +84,49 @@ output [
 
 # --- Placement ----------------------------------------------------------------
 #
-# CPU, and that is a measurement rather than a limitation. The model is ~0.5M
-# parameters over a 100x11 input; the work is too small to amortise a host-to-
-# device copy, and this project's own Part H numbers show the same shape of
-# result -- a user-tower forward at batch 1 costs 0.28 ms, where the cost is
-# kernel launches rather than arithmetic. Revisit if the candidate count or the
-# model grows by an order of magnitude.
+# GPU, and the CPU argument this replaced was not wrong -- it was measured at
+# the wrong batch size.
+#
+# **What it used to say, and why it was reasonable.** "CPU, and that is a
+# measurement rather than a limitation. The model is ~0.5M parameters over a
+# 100x11 input; the work is too small to amortise a host-to-device copy, and
+# Part H's user-tower forward at batch 1 costs 0.28 ms, where the cost is
+# kernel launches rather than arithmetic." That holds at ONE request, which is
+# the only load the project had ever put through it.
+#
+# **What a real sweep measured, 2026-09-25.** Under concurrency the dynamic
+# batcher combines requests into batches of ~650 rows, and at that size the
+# copy is amortised many times over while the arithmetic is no longer trivial:
+#
+#   count: 1, batch 404   compute_infer 3.40 ms   =  8.4 us/row  = 119k rows/s
+#   count: 2, batch 646   compute_infer 10.16 ms  = 15.7 us/row  = 127k rows/s
+#
+# 24 cores, and a second instance bought 7% -- two onnxruntime sessions each
+# defaulting to 24 intra-op threads is 48 threads on 24 cores, so the per-row
+# cost nearly doubled. The cores were already saturated at count: 1.
+#
+# That ceiling is the whole story: 300 rps x 400 candidates is 120,000 rows/s
+# against ~119,000 available, and the measured knee was 300 rps. `queue`
+# averaged 36.7 ms against a 35 ms rank deadline -- requests timing out waiting
+# for a free instance, NOT waiting for the batcher, whose delay is 500 us.
+#
+# So the old comment's own escape clause fired: "revisit if the candidate count
+# or the model grows by an order of magnitude." The candidate count per BATCH
+# did exactly that, by a factor of ~650, the moment real concurrency arrived.
+#
+# ⚠️ This splits the serving path by machine -- the Apple Silicon Mac cannot
+# run it. See claude/mac-migration.md: Triton already stays on BigBox.
+#
+# ONE instance, and `count` is not a free multiplier here either: a second CUDA
+# context on one card contends for the same SMs, the way two onnxruntime
+# sessions contended for the same cores. Sweep it only with a measurement, and
+# watch the `degraded` column rather than p99 -- the rank stage misses its 35 ms
+# deadline and ships the retrieval order long before end-to-end latency leaves
+# budget.
 instance_group [
   {
     count: 1
-    kind: KIND_CPU
+    kind: KIND_GPU
   }
 ]
 

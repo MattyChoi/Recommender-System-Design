@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x66\x65\x61tures.proto\x12\trecsys.v1\"6\n\x0eGetUserRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x13\n\x0bmax_history\x18\x02 \x01(\x05\"j\n\x0fGetUserResponse\x12\x0e\n\x06values\x18\x01 \x03(\x02\x12\r\n\x05names\x18\x02 \x03(\t\x12\x0f\n\x07history\x18\x03 \x03(\x05\x12\x18\n\x10unmapped_history\x18\x04 \x01(\x05\x12\r\n\x05\x66ound\x18\x05 \x01(\x08\" \n\x0fGetItemsRequest\x12\r\n\x05items\x18\x01 \x03(\x05\"@\n\x10GetItemsResponse\x12\x0e\n\x06values\x18\x01 \x03(\x02\x12\r\n\x05names\x18\x02 \x03(\t\x12\r\n\x05\x66ound\x18\x03 \x03(\x08\"\x17\n\x15\x46\x65\x61turesHealthRequest\"u\n\x16\x46\x65\x61turesHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\"\n\x1aoldest_feature_age_seconds\x18\x03 \x01(\x03\x12\x18\n\x10item_map_version\x18\x04 \x01(\t2\xe0\x01\n\x08\x46\x65\x61tures\x12@\n\x07GetUser\x12\x19.recsys.v1.GetUserRequest\x1a\x1a.recsys.v1.GetUserResponse\x12\x43\n\x08GetItems\x12\x1a.recsys.v1.GetItemsRequest\x1a\x1b.recsys.v1.GetItemsResponse\x12M\n\x06Health\x12 .recsys.v1.FeaturesHealthRequest\x1a!.recsys.v1.FeaturesHealthResponseBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x66\x65\x61tures.proto\x12\trecsys.v1\"6\n\x0eGetUserRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x13\n\x0bmax_history\x18\x02 \x01(\x05\"j\n\x0fGetUserResponse\x12\x0e\n\x06values\x18\x01 \x03(\x02\x12\r\n\x05names\x18\x02 \x03(\t\x12\x0f\n\x07history\x18\x03 \x03(\x05\x12\x18\n\x10unmapped_history\x18\x04 \x01(\x05\x12\r\n\x05\x66ound\x18\x05 \x01(\x08\" \n\x0fGetItemsRequest\x12\r\n\x05items\x18\x01 \x03(\x05\"P\n\x10GetItemsResponse\x12\x0e\n\x06values\x18\x01 \x03(\x02\x12\r\n\x05names\x18\x02 \x03(\t\x12\r\n\x05\x66ound\x18\x03 \x03(\x08\x12\x0e\n\x06\x63\x61\x63hed\x18\x04 \x01(\x05\"\x17\n\x15\x46\x65\x61turesHealthRequest\"u\n\x16\x46\x65\x61turesHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\"\n\x1aoldest_feature_age_seconds\x18\x03 \x01(\x03\x12\x18\n\x10item_map_version\x18\x04 \x01(\t2\xe0\x01\n\x08\x46\x65\x61tures\x12@\n\x07GetUser\x12\x19.recsys.v1.GetUserRequest\x1a\x1a.recsys.v1.GetUserResponse\x12\x43\n\x08GetItems\x12\x1a.recsys.v1.GetItemsRequest\x1a\x1b.recsys.v1.GetItemsResponse\x12M\n\x06Health\x12 .recsys.v1.FeaturesHealthRequest\x1a!.recsys.v1.FeaturesHealthResponseBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -39,11 +39,11 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GETITEMSREQUEST']._serialized_start=193
   _globals['_GETITEMSREQUEST']._serialized_end=225
   _globals['_GETITEMSRESPONSE']._serialized_start=227
-  _globals['_GETITEMSRESPONSE']._serialized_end=291
-  _globals['_FEATURESHEALTHREQUEST']._serialized_start=293
-  _globals['_FEATURESHEALTHREQUEST']._serialized_end=316
-  _globals['_FEATURESHEALTHRESPONSE']._serialized_start=318
-  _globals['_FEATURESHEALTHRESPONSE']._serialized_end=435
-  _globals['_FEATURES']._serialized_start=438
-  _globals['_FEATURES']._serialized_end=662
+  _globals['_GETITEMSRESPONSE']._serialized_end=307
+  _globals['_FEATURESHEALTHREQUEST']._serialized_start=309
+  _globals['_FEATURESHEALTHREQUEST']._serialized_end=332
+  _globals['_FEATURESHEALTHRESPONSE']._serialized_start=334
+  _globals['_FEATURESHEALTHRESPONSE']._serialized_end=451
+  _globals['_FEATURES']._serialized_start=454
+  _globals['_FEATURES']._serialized_end=678
 # @@protoc_insertion_point(module_scope)

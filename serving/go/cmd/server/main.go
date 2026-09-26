@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -41,6 +42,7 @@ import (
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/popular"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/ranking"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rpc"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/server"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/sources"
@@ -67,6 +69,7 @@ type options struct {
 	featuresAPI string
 	triton      string
 	tritonModel string
+	conns       int
 
 	sourceName   string
 	candidates   int
@@ -134,7 +137,12 @@ func parse() options {
 		"external id to internal index; `make item-map`")
 	flag.StringVar(&o.cataloguE, "catalogue", "serving/artifacts/catalogue.json",
 		"per-item category indices; `make catalogue`")
-	flag.StringVar(&o.columns, "columns", "serving/artifacts/ranker.columns.json",
+	// Beside the ONNX file, because that is where the export writes it:
+	// models/export/onnx.py does `out.with_suffix(".columns.json")`, so the
+	// path is DERIVED from ONNX_OUT rather than chosen here. An earlier default
+	// of serving/artifacts/ranker.columns.json named a file nothing creates,
+	// and since readColumns is fail-fast that made `make serve` unstartable.
+	flag.StringVar(&o.columns, "columns", "serving/triton/ranker/1/model.columns.json",
 		"the exported graph's column order, written beside the ONNX file by `make onnx`")
 	flag.StringVar(&o.popular, "popular", "serving/artifacts/popular.json",
 		"the fallback slate; `make popular`")
@@ -156,6 +164,13 @@ func parse() options {
 	flag.StringVar(&o.retrieval, "retrieval", "localhost:50052", "retrieval sidecar")
 	flag.StringVar(&o.featuresAPI, "features", "localhost:50053", "feature gateway")
 	flag.StringVar(&o.triton, "triton", "localhost:8001", "triton gRPC")
+	// HTTP/2 connections PER BACKEND. gRPC-Go serialises a connection's
+	// outbound frames through one loopyWriter goroutine, which a CPU profile at
+	// 500 rps put at 30.5% of this process's samples -- with ~21% more in
+	// futex wakeups and almost no application code anywhere. 1 restores the old
+	// behaviour; this is a knob to sweep, not a tuned value. See internal/rpc.
+	flag.IntVar(&o.conns, "conns", rpc.DefaultConnections,
+		"HTTP/2 connections per backend; 1 was the original single-writer behaviour")
 	flag.StringVar(&o.tritonModel, "triton-model", "ranker", "triton model name")
 
 	// Part I measured that at a fixed budget no blend beats giving every slot
@@ -207,6 +222,55 @@ func readColumns(path string) ([]string, error) {
 		return nil, fmt.Errorf("%s declares no features", path)
 	}
 	return decoded.Features, nil
+}
+
+// namedProbe is one backend's readiness check, for the startup warm-up.
+//
+// A slice rather than a map, so the order is the order they are tried and the
+// log reads the same way every time.
+type namedProbe struct {
+	name  string
+	check func(context.Context) error
+}
+
+// warmConnections dials every backend once, before the first real request.
+//
+// **grpc.NewClient does not connect.** It returns before any socket exists, so
+// the first RPC through each client pays TCP and HTTP/2 setup -- and with three
+// backends reached from three different pipeline stages, that cost is spread
+// across the first three requests, one each. Measured on this stack:
+//
+//	1   features 8ms (its deadline), retrieval 25ms (its deadline)  -> degraded
+//	2   rank 35ms (its deadline)                                    -> degraded
+//	3   features 1ms, retrieval 2ms, rank 5ms                       -> clean
+//
+// One connection per request, one degraded slate each. That is indistinguishable
+// from a slow dependency in every signal the pipeline emits, and it was read as
+// one four separate times before the cause was named. A benchmark that does not
+// warm first measures this and reports it as p99.
+//
+// **FAIL-SOFT, deliberately.** This file's doctrine is fail-fast on artifacts
+// and fail-soft on services: an artifact that will not load is wrong for every
+// request that will ever arrive, but a backend that is briefly down is wrong
+// only for the requests that arrive while it is down, and gRPC reconnects on
+// its own. So every result is logged and none is fatal -- refusing to start
+// here would turn a blip into an outage, which is exactly what the dialling
+// code above declines to do.
+func warmConnections(ctx context.Context, probes []namedProbe) {
+	for _, probe := range probes {
+		started := time.Now()
+		inner, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := probe.check(inner)
+		cancel()
+
+		took := time.Since(started).Round(time.Millisecond)
+		if err != nil {
+			log.Printf("  warm       %-9s FAILED in %v (%v); its first request pays setup",
+				probe.name, took, err)
+			continue
+		}
+		log.Printf("  warm       %-9s ok in %v", probe.name, took)
+	}
 }
 
 // probe answers the health endpoint.
@@ -331,7 +395,7 @@ func run(o options) error {
 	// are separate traces is exactly the picture tracing exists to avoid.
 	traced := grpc.WithStatsHandler(otelgrpc.NewClientHandler())
 
-	gateway, err := sources.DialGateway(o.featuresAPI, traced)
+	gateway, err := sources.DialGateway(o.featuresAPI, o.conns, traced)
 	if err != nil {
 		return err
 	}
@@ -340,7 +404,7 @@ func run(o options) error {
 	gateway.ItemColumns = nil
 
 	sidecar, err := sources.DialSidecar(
-		o.retrieval, o.sourceName, o.candidates, o.srcDeadline, traced,
+		o.retrieval, o.sourceName, o.candidates, o.conns, o.srcDeadline, traced,
 	)
 	if err != nil {
 		return err
@@ -368,7 +432,7 @@ func run(o options) error {
 		}
 	}
 
-	ranker, err := ranking.Dial(o.triton, o.tritonModel, columns, traced)
+	ranker, err := ranking.Dial(o.triton, o.tritonModel, columns, o.conns, traced)
 	if err != nil {
 		return err
 	}
@@ -442,6 +506,17 @@ func run(o options) error {
 	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
 
 	log.Printf("orchestrator on :%d, metrics on %s", o.port, o.metricsAddr)
+	// GOMAXPROCS beside NumCPU, because they can differ and the difference is
+	// invisible everywhere else. A fan-out pipeline pinned to one P handles
+	// concurrent requests one at a time and misses per-stage deadlines while
+	// the machine sits idle -- which reads as a slow DEPENDENCY in every signal
+	// this service emits, since the stage timer cannot tell "the sidecar was
+	// slow" from "this process never got scheduled to read the reply".
+	//
+	// Go reads the cgroup CPU limit in recent versions and the environment
+	// always, so this is not a constant even on one machine.
+	log.Printf("  runtime    GOMAXPROCS %d of %d CPUs, go %s",
+		runtime.GOMAXPROCS(0), runtime.NumCPU(), runtime.Version())
 	if o.otlpEndpoint == "" {
 		log.Printf("  tracing    off")
 	} else {
@@ -451,6 +526,7 @@ func run(o options) error {
 	log.Printf("  retrieval  %s", o.retrieval)
 	log.Printf("  features   %s", o.featuresAPI)
 	log.Printf("  triton     %s/%s", o.triton, o.tritonModel)
+	log.Printf("  conns      %d per backend (1 = one loopyWriter, the measured limit)", o.conns)
 	log.Printf("  catalogue  %s (%d rows, %s)", o.cataloguE, catalog.Size(), catalog.Version())
 	log.Printf("  columns    %d, from %s", len(columns), o.columns)
 	log.Printf("  budget     %v end to end, %v rank, %v features", o.deadline, o.rankDeadline, o.featDeadline)
@@ -464,6 +540,15 @@ func run(o options) error {
 		log.Printf("  experiment %q, arms %v (%.1f%% allocated)",
 			experiment.ID, experiment.Names(), experiment.Allocated())
 	}
+
+	// After the configuration log and before Serve: the lines below belong to
+	// startup, and a reader wants them beside the config they describe rather
+	// than interleaved with the first requests.
+	warmConnections(context.Background(), []namedProbe{
+		{"features", gateway.Ready},
+		{"retrieval", sidecar.Ready},
+		{"triton", ranker.Ready},
+	})
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)

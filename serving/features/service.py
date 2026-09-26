@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from common.pb import features_pb2, features_pb2_grpc
+from serving.features.cache import ItemFeatureCache
 from serving.features.columns import (
     HISTORY_COLUMN,
     HISTORY_VIEW,
@@ -125,6 +126,49 @@ def load(repo: Path = FEATURE_REPO, item_map: Path | None = None) -> Loaded:
     return Loaded(store=FeatureStore(repo_path=str(repo)), items=ItemIndex.load(path))
 
 
+def warm(loaded: Loaded) -> float:
+    """Pay Feast's lazy initialisation at startup instead of on a real request.
+
+    **Measured, not precautionary.** The first `GetUser` after this process
+    starts costs 69-125 ms against an 8 ms feature budget, and the warm cost is
+    1 ms. Feast builds its provider, its online store client and its Redis
+    connection on first use, and the orchestrator's degradation is not graceful
+    about it: a missed feature deadline leaves the request with no user vector,
+    the retrieval sidecar refuses a request whose feature block is the wrong
+    width, and the whole slate collapses to popularity. One slow read costs the
+    entire funnel.
+
+    Both views are touched, not just the user one. They initialise separately:
+    the `rank` stage hit its 35 ms ceiling twice in 60 requests, both early in a
+    run, on a stage whose warm cost is 12-19 ms and whose model computes in
+    3.4 ms -- the `item_stats` path warming is the remaining suspect.
+
+    A sentinel entity is used rather than a real one. The store answers a miss
+    with nulls just as fast as a hit, and picking a real id would make startup
+    depend on a particular user existing.
+
+    Returns:
+        Seconds spent, for the caller to log. Never raises: a gateway that
+        refuses to start because a warmup read failed turns a slow dependency
+        into an outage, and `Health` already reports an unreadable store.
+    """
+    import time
+
+    started = time.perf_counter()
+    for view, columns, key in (
+        (USER_VIEW, USER_COLUMNS, "user_id"),
+        (ITEM_VIEW, ITEM_COLUMNS, "item_id"),
+    ):
+        try:
+            loaded.store.get_online_features(
+                features=feature_refs(view, columns),
+                entity_rows=[{key: "__warmup__"}],
+            ).to_dict()
+        except Exception as exc:
+            print(f"  warmup of {view} failed ({exc}); the first request will pay for it")
+    return time.perf_counter() - started
+
+
 def _column(row: dict[str, Any], name: str, position: int) -> tuple[float, bool]:
     """One value out of Feast's response, and whether it was actually there.
 
@@ -139,8 +183,13 @@ def _column(row: dict[str, Any], name: str, position: int) -> tuple[float, bool]
 
 
 class FeaturesServicer(features_pb2_grpc.FeaturesServicer):
-    def __init__(self, loaded: Loaded) -> None:
+    def __init__(self, loaded: Loaded, cache: ItemFeatureCache | None = None) -> None:
         self.loaded = loaded
+        #: Item rows only. There is no user cache and should not be: a user row
+        #: is read once per request by the one user it belongs to, so caching
+        #: them would cache one-hit entries. Item rows are shared across every
+        #: request whose candidate set contains them.
+        self.cache = cache
 
     # --- users ---------------------------------------------------------------
 
@@ -212,27 +261,64 @@ class FeaturesServicer(features_pb2_grpc.FeaturesServicer):
             )
         # The `or ""` is unreachable past that guard; it is there so the types
         # line up without asserting.
-        external = [self.loaded.items.external(index) or "" for index in request.items]
+        wanted = list(request.items)
 
-        rows = self.loaded.store.get_online_features(
-            features=feature_refs(ITEM_VIEW, ITEM_COLUMNS),
-            entity_rows=[{"item_id": item} for item in external],
-        ).to_dict()
+        # Cached rows first, so Feast is only asked for what is actually
+        # missing. This is the hot path: assembling 400 uncached rows is 9.7ms
+        # at p50 and 126ms at p99, and it holds the GIL throughout -- which is
+        # what starves GetUser, whose own service time is 1ms, into missing its
+        # 8ms budget. See cache.py.
+        if self.cache is None:
+            hits: dict[int, Any] = {}
+            misses = list(dict.fromkeys(wanted))
+        else:
+            hits, misses = self.cache.take(wanted)
+
+        fresh: dict[int, tuple[tuple[float, ...], bool]] = {}
+        if misses:
+            # The `or ""` is unreachable past the guard above; it is there so
+            # the types line up without asserting.
+            external = [self.loaded.items.external(index) or "" for index in misses]
+            rows = self.loaded.store.get_online_features(
+                features=feature_refs(ITEM_VIEW, ITEM_COLUMNS),
+                entity_rows=[{"item_id": item} for item in external],
+            ).to_dict()
+
+            for position, index in enumerate(misses):
+                row: list[float] = []
+                present_any = False
+                for name in ITEM_COLUMNS:
+                    value, present = _column(rows, name, position)
+                    row.append(value)
+                    present_any = present_any or present
+                fresh[index] = (tuple(row), present_any)
+
+            if self.cache is not None:
+                self.cache.fill(fresh)
 
         values: list[float] = []
         found: list[bool] = []
-        for position in range(len(external)):
-            present_any = False
-            for name in ITEM_COLUMNS:
-                value, present = _column(rows, name, position)
-                values.append(value)
-                present_any = present_any or present
-            found.append(present_any)
+        for index in wanted:
+            entry = hits.get(index)
+            if entry is not None:
+                row_values, row_found = entry.values, entry.found
+            else:
+                # Present by construction: every index is either a hit or was
+                # in `misses`, and `misses` was just fetched.
+                row_values, row_found = fresh[index]
+            values.extend(row_values)
+            found.append(row_found)
 
-        # Flattened row-major, in REQUEST order. The orchestrator reshapes it,
-        # and a message per candidate would allocate ~500 objects per request
-        # to carry four floats each.
-        return features_pb2.GetItemsResponse(values=values, names=list(ITEM_COLUMNS), found=found)
+        # Flattened row-major, in REQUEST order -- which is NOT the order rows
+        # were fetched in, since misses are deduplicated. The orchestrator
+        # reshapes it, and a message per candidate would allocate ~500 objects
+        # per request to carry six floats each.
+        return features_pb2.GetItemsResponse(
+            values=values,
+            names=list(ITEM_COLUMNS),
+            found=found,
+            cached=len(wanted) - sum(1 for index in wanted if index not in hits),
+        )
 
     # --- health --------------------------------------------------------------
 

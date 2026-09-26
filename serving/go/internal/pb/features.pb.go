@@ -247,7 +247,16 @@ type GetItemsResponse struct {
 	// Per-item, aligned with the request: false where the store had no row and
 	// defaults were used. A cold article is normal on a news corpus; ALL of them
 	// being cold is a broken materialisation.
-	Found         []bool `protobuf:"varint,3,rep,packed,name=found,proto3" json:"found,omitempty"`
+	Found []bool `protobuf:"varint,3,rep,packed,name=found,proto3" json:"found,omitempty"`
+	// How many of these rows came from the gateway's in-process cache rather
+	// than from Feast.
+	//
+	// On the wire because a cache that has quietly stopped being hit is a
+	// latency regression with NO ERROR ATTACHED -- and this one is load-bearing:
+	// assembling 400 uncached rows costs 9.7ms at p50 and 126ms at p99, holds
+	// the GIL while it does, and starves GetUser into missing its 8ms budget.
+	// The retrieval sidecar carries `embedding_cached` for the same reason.
+	Cached        int32 `protobuf:"varint,4,opt,name=cached,proto3" json:"cached,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -301,6 +310,13 @@ func (x *GetItemsResponse) GetFound() []bool {
 		return x.Found
 	}
 	return nil
+}
+
+func (x *GetItemsResponse) GetCached() int32 {
+	if x != nil {
+		return x.Cached
+	}
+	return 0
 }
 
 type FeaturesHealthRequest struct {
@@ -428,11 +444,12 @@ const file_features_proto_rawDesc = "" +
 	"\x10unmapped_history\x18\x04 \x01(\x05R\x0funmappedHistory\x12\x14\n" +
 	"\x05found\x18\x05 \x01(\bR\x05found\"'\n" +
 	"\x0fGetItemsRequest\x12\x14\n" +
-	"\x05items\x18\x01 \x03(\x05R\x05items\"V\n" +
+	"\x05items\x18\x01 \x03(\x05R\x05items\"n\n" +
 	"\x10GetItemsResponse\x12\x16\n" +
 	"\x06values\x18\x01 \x03(\x02R\x06values\x12\x14\n" +
 	"\x05names\x18\x02 \x03(\tR\x05names\x12\x14\n" +
-	"\x05found\x18\x03 \x03(\bR\x05found\"\x17\n" +
+	"\x05found\x18\x03 \x03(\bR\x05found\x12\x16\n" +
+	"\x06cached\x18\x04 \x01(\x05R\x06cached\"\x17\n" +
 	"\x15FeaturesHealthRequest\"\xad\x01\n" +
 	"\x16FeaturesHealthResponse\x12\x14\n" +
 	"\x05ready\x18\x01 \x01(\bR\x05ready\x12\x16\n" +

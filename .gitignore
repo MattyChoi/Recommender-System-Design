@@ -13,6 +13,9 @@ wheels/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
+# `airflow db migrate` drops a sqlite database and task logs in AIRFLOW_HOME.
+# Pointed at the repo (AIRFLOW_HOME=$PWD/.airflow) so it does not land in ~.
+.airflow/
 .coverage
 htmlcov/
 

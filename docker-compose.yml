@@ -131,11 +131,26 @@ services:
       # mounted in, rather than being pasted into the scrape config.
       - "./serving/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"
     # The orchestrator runs on the HOST, not in this file: it loads artifacts
-    # from the working tree and talks to sidecars started with `make`. Docker
-    # Desktop resolves host.docker.internal for free; native Linux does not,
-    # and BigBox is Linux, so it is mapped explicitly.
+    # from the working tree and talks to sidecars started with `make`.
+    #
+    # ⚠️ `host.docker.internal` IS NOT THAT HOST HERE, and this cost a day of
+    # blind monitoring. On Docker Desktop's WSL backend the name resolves
+    # happily -- to the WINDOWS host (192.168.65.254) -- while the orchestrator
+    # listens inside the WSL distro, which has its own address. The scrape got
+    # `connection refused`, every dashboard panel and all nine alert rules
+    # evaluated an empty series, and nothing said so: a target that is DOWN and
+    # a service emitting no traffic look identical on a graph.
+    #
+    # (The previous comment here said "Docker Desktop resolves it for free;
+    # native Linux does not, and BigBox is Linux." BigBox is neither -- it is
+    # Docker Desktop driving a WSL distro, where the name resolves AND is wrong.)
+    #
+    # So the distro's own address is passed in by `make up`, which computes it
+    # fresh each time because WSL reassigns it on reboot. host-gateway is the
+    # fallback for a real Linux host, where it is correct.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "recsys-host:${HOST_IP:-host-gateway}"
 
   # OpenTelemetry collector: the tail-sampling decision point.
   #
@@ -155,6 +170,62 @@ services:
       - "8888:8888"              # its own metrics, scraped by prometheus above
     volumes:
       - "./infra/docker/otel-collector.yaml:/etc/otel/config.yaml:ro"
+
+  # The ranker, behind Triton's gRPC API on 8001.
+  #
+  # ⚠️ The image tag and TRITON_PROTO_REF in the Makefile are ONE decision.
+  # `25.12-py3` here means `r25.12` there (the branch keeps the leading r, the
+  # image tag drops it). Bumping one alone generates a client that can send
+  # fields this server silently ignores -- see serving/proto/triton/README.md.
+  #
+  # ⚠️ NEEDS THE GPU. serving/triton/ranker/config.pbtxt pins
+  # `instance_group { kind: KIND_GPU }`, and Triton FAILS TO LOAD THE MODEL if
+  # the card is not reachable -- the container comes up, the healthcheck never
+  # passes, and `--wait` hangs rather than reporting why. Check first:
+  #
+  #   docker run --rm --gpus all nvcr.io/nvidia/tritonserver:25.12-py3 nvidia-smi
+  #
+  # This was KIND_CPU until 2026-09-25, on a measurement taken at one request
+  # per batch. A real concurrency sweep found the batcher forming ~650-row
+  # batches, where the host-to-device copy is amortised and 24 cores cap out at
+  # ~119k rows/s -- against the 120k that 300 rps x 400 candidates needs. The
+  # config file carries the full numbers.
+  triton:
+    image: nvcr.io/nvidia/tritonserver:25.12-py3
+    container_name: recsys-triton
+    command: ["tritonserver", "--model-repository=/models"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "8000:8000"              # HTTP/REST v2, used only by the healthcheck below
+      - "8001:8001"              # gRPC -- the orchestrator's -triton flag
+      - "8002:8002"              # its own Prometheus metrics, scraped by prometheus
+    volumes:
+      # The MODEL REPOSITORY, not the model. Triton reads <repo>/<model>/<version>/,
+      # so this must be the directory holding `ranker/`, never `ranker/` itself.
+      # Read-only: Triton only ever reads it, and a writable mount invites a
+      # container to modify a checked-in artifact.
+      - "./serving/triton:/models:ro"
+    # 64MB is Docker's default and Triton's docs call for more. Not measured
+    # here -- the CPU onnxruntime path for a model this small has never come
+    # close -- but an obscure shared-memory failure is a bad way to find the
+    # floor, so it is raised rather than left to chance.
+    shm_size: "1gb"
+    # curl, not the python trick the mlflow service needs: the tritonserver
+    # image ships it. /v2/health/ready answers 200 only once the model
+    # repository has LOADED, so `--wait` gates on the ranker being servable
+    # rather than on the process existing.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   grafana:
     image: grafana/grafana:13.2.0        # Grafana 13.2.0, released 2026-08-18

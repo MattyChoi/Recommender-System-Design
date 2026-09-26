@@ -1,4 +1,4 @@
-// Copyright 2018-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright 2018-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -2227,9 +2227,23 @@ type ModelEnsembling struct {
 	//@@
 	//@@     The models and the input / output mappings used within the ensemble.
 	//@@
-	Step          []*ModelEnsembling_Step `protobuf:"bytes,1,rep,name=step,proto3" json:"step,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Step []*ModelEnsembling_Step `protobuf:"bytes,1,rep,name=step,proto3" json:"step,omitempty"`
+	//@@  .. cpp:var:: uint32 max_inflight_requests
+	//@@
+	//@@     The maximum number of concurrent inflight requests allowed at each
+	//@@     ensemble step per inference request. This limit prevents unbounded
+	//@@     memory growth when ensemble steps produce responses faster than
+	//@@     downstream steps can consume, e.g. decoupled models.
+	//@@     Default value is 0, which indicates that no limit is enforced.
+	//@@
+	//@@     Note: Applying this limit may block upstream steps while they wait
+	//@@     for downstream capacity. This blocking does not cancel or internally
+	//@@     time out intermediate requests, but clients may experience increased
+	//@@     end-to-end latency.
+	//@@
+	MaxInflightRequests uint32 `protobuf:"varint,2,opt,name=max_inflight_requests,json=maxInflightRequests,proto3" json:"max_inflight_requests,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ModelEnsembling) Reset() {
@@ -2267,6 +2281,13 @@ func (x *ModelEnsembling) GetStep() []*ModelEnsembling_Step {
 		return x.Step
 	}
 	return nil
+}
+
+func (x *ModelEnsembling) GetMaxInflightRequests() uint32 {
+	if x != nil {
+		return x.MaxInflightRequests
+	}
+	return 0
 }
 
 // @@
@@ -5464,9 +5485,10 @@ const file_model_config_proto_rawDesc = "" +
 	"\x14preferred_batch_size\x18\x02 \x03(\x05R\x12preferredBatchSize\x12?\n" +
 	"\x1cmax_queue_delay_microseconds\x18\x03 \x01(\x04R\x19maxQueueDelayMicroseconds\x12+\n" +
 	"\x11preserve_ordering\x18\x04 \x01(\bR\x10preserveOrderingB\x11\n" +
-	"\x0fstrategy_choice\"\xd2\x03\n" +
+	"\x0fstrategy_choice\"\x86\x04\n" +
 	"\x0fModelEnsembling\x123\n" +
-	"\x04step\x18\x01 \x03(\v2\x1f.inference.ModelEnsembling.StepR\x04step\x1a\x89\x03\n" +
+	"\x04step\x18\x01 \x03(\v2\x1f.inference.ModelEnsembling.StepR\x04step\x122\n" +
+	"\x15max_inflight_requests\x18\x02 \x01(\rR\x13maxInflightRequests\x1a\x89\x03\n" +
 	"\x04Step\x12\x1d\n" +
 	"\n" +
 	"model_name\x18\x01 \x01(\tR\tmodelName\x12#\n" +

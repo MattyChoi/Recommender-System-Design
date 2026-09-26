@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,16 @@ from data_pipeline.features.user_history import MAX_HISTORY
 from indexing.build_index import to_item_ids
 from indexing.lifecycle import current
 from indexing.pipeline import load_version
-from models.retrieval.dataloader.dataset import CONTENT_VARIANTS, load_item_tables
+from models.retrieval.dataloader.dataset import (
+    CONTENT_VARIANTS,
+    USER_FEATURES,
+    USER_TOWER_COLUMNS,
+    build_user_features,
+    load_item_tables,
+)
 from models.retrieval.evaluate import load_tower
 from models.retrieval.two_tower import TwoTower
+from serving.features.columns import USER_COLUMNS
 from serving.retrieval.cache import UserEmbeddingCache
 
 #: Where the hourly DAG writes versions and points CURRENT. Matches
@@ -92,6 +100,19 @@ def recent(history: Sequence[int]) -> list[int]:
     return [item for item in history[:MAX_HISTORY] if item > 0]
 
 
+def spark_day_of_week(when: datetime) -> int:
+    """``when`` as Spark's ``dayofweek``: 1..7 with **Sunday = 1**.
+
+    The tower's cyclic day encoding was fitted on Spark's convention, and
+    Python's ``isoweekday()`` is 1..7 with **Monday = 1**. Handing the latter
+    straight to :func:`~models.retrieval.dataloader.dataset.build_user_features`
+    rotates the encoding by a constant -- a vector of the right width, the right
+    names, the right dtype and an entirely plausible range, describing a user
+    reading on the wrong day.
+    """
+    return (when.isoweekday() % 7) + 1
+
+
 def _tower_width(tower: TwoTower, n_user_feats: int, device: torch.device) -> int:
     """The tower's output width, measured rather than configured.
 
@@ -158,7 +179,8 @@ def load(
     label = current(pointer)
     if label is None:
         raise RuntimeError(
-            f"no index promoted at {pointer}; run the hourly_index DAG or promote one by hand"
+            f"no index promoted at {pointer}; run `make index-promote` "
+            f"(indexing/promote.py) or the hourly_index DAG"
         )
     index = load_version(artifacts, label)
 
@@ -173,6 +195,17 @@ def load(
     # configured value that disagrees produces a plausible embedding for a user
     # who does not exist.
     n_user_feats = int(state["user_norm.weight"].shape[0])
+    if n_user_feats != len(USER_TOWER_COLUMNS):
+        # Refused at load rather than per request. USER_TOWER_COLUMNS is what
+        # this process can BUILD; if the checkpoint wants a different number
+        # there is no vector to send it, and every request would abort with the
+        # same message once a second instead of once at boot.
+        raise RuntimeError(
+            f"{checkpoint} was fitted with {n_user_feats} user features, but "
+            f"build_user_features emits {len(USER_TOWER_COLUMNS)} "
+            f"({', '.join(USER_TOWER_COLUMNS)}); the checkpoint and this code are "
+            "from different builds"
+        )
 
     tower = load_tower(checkpoint, items, n_user_feats, where)
     tower.eval()
@@ -214,6 +247,39 @@ class RetrievalServicer(retrieval_pb2_grpc.RetrievalServicer):
         self._encode_lock = threading.Lock()
 
     # --- encoding ------------------------------------------------------------
+
+    def tower_features(
+        self, raw: list[float], has_user_features: bool, when: datetime
+    ) -> list[float]:
+        """The gateway's raw block, widened to the tower's input.
+
+        Delegates to
+        :func:`~models.retrieval.dataloader.dataset.build_user_features`, which
+        training also calls, so the log1p set and the cyclic encodings have one
+        implementation. Reimplementing them here would drift from the checkpoint
+        with nothing to catch it -- every column would keep its name, its dtype
+        and a plausible magnitude.
+
+        Args:
+            raw: The four ``USER_COLUMNS`` values, in gateway order.
+            has_user_features: Whether the store had a row. A model input, not
+                telemetry: the gateway serves zeros on a miss, and this is the
+                only thing separating a genuinely quiet user from an unknown one.
+            when: Request time, for the cyclic hour and day columns.
+
+        Returns:
+            ``len(USER_TOWER_COLUMNS)`` floats.
+        """
+        widened = build_user_features(
+            static={
+                name: np.array([value], dtype="float32")
+                for name, value in zip(USER_FEATURES, raw, strict=True)
+            },
+            has_user_features=np.array([float(has_user_features)], dtype="float32"),
+            hour_of_day=np.array([float(when.hour)], dtype="float32"),
+            day_of_week=np.array([float(spark_day_of_week(when))], dtype="float32"),
+        )
+        return [float(value) for value in widened[0]]
 
     def encode(
         self, user_id: str, user_feats: list[float], history: list[int]
@@ -317,11 +383,12 @@ class RetrievalServicer(retrieval_pb2_grpc.RetrievalServicer):
         # correctly-typed request that produces a plausible embedding for a
         # user who does not exist, and the neighbours it retrieves look
         # entirely reasonable.
-        if len(request.user_feats) != self.loaded.n_user_feats:
+        if len(request.user_feats) != len(USER_COLUMNS):
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT,
-                f"{len(request.user_feats)} user features, the tower was fitted with "
-                f"{self.loaded.n_user_feats}",
+                f"{len(request.user_feats)} user features, the gateway's raw block is "
+                f"{len(USER_COLUMNS)} ({', '.join(USER_COLUMNS)}); the derived "
+                f"{len(USER_TOWER_COLUMNS) - len(USER_COLUMNS)} are built here, not sent",
             )
         if request.ef_search and not self.search_params and self.loaded.kind == "hnsw":
             # Refused rather than serviced by mutating the shared index. See
@@ -334,9 +401,20 @@ class RetrievalServicer(retrieval_pb2_grpc.RetrievalServicer):
                 "efSearch cannot be honoured without racing concurrent searches",
             )
 
-        vector, cached = self.encode(
-            request.user_id, list(request.user_feats), list(request.history)
+        # The raw four become the tower's nine HERE, through the same function
+        # training calls. The derived five -- has_user_features and the two
+        # cyclic time pairs -- are not on the wire: the flag is, as a bool, and
+        # the clock is this process's.
+        #
+        # ⚠️ The embedding therefore depends on the HOUR, while the Redis cache
+        # is keyed on user_id alone. A cached vector is stale for the rest of
+        # its TTL once the hour rolls over. That is bounded by cache.DEFAULT_TTL
+        # and has not been measured against recall; it is a real cost of putting
+        # time in the user tower, and it is named rather than hidden.
+        tower_feats = self.tower_features(
+            list(request.user_feats), request.has_user_features, datetime.now(UTC)
         )
+        vector, cached = self.encode(request.user_id, tower_feats, list(request.history))
         items, scores = self.search(vector, request.k, request.ef_search)
 
         # Index 0 is the reserved OOV row, which is not an article and must not

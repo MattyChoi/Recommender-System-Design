@@ -57,21 +57,42 @@ message RetrieveRequest {
   // parallel mask would create a way for the two to disagree.
   repeated int32 history = 3;
 
-  // The static user feature vector, in the column order the tower was trained
-  // with -- `user_impressions_24h`, `user_clicks_24h`, `user_ctr_smoothed`,
-  // `user_tenure_hours` per docs/design.md §4b.
+  // The RAW static user block, in `serving/features/columns.py`'s
+  // USER_COLUMNS order -- `user_impressions_24h`, `user_clicks_24h`,
+  // `user_ctr_smoothed`, `user_tenure_hours` per docs/design.md §4b.
   //
-  // `encode_user` takes (user_feats, history_ids, history_mask); history alone
-  // does not encode a user. Sent rather than fetched for the same reason as
-  // history: the orchestrator's §14.2 feature fetch has already paid for it,
-  // and a second read could see a different snapshot than the ranker's own
-  // features came from.
+  // ⚠️ **Raw, and NOT the tower's input.** The tower is fitted on nine
+  // columns: these four with log1p on the three counts, plus
+  // `has_user_features` and sin/cos pairs for hour-of-day and day-of-week. The
+  // sidecar assembles those by calling the same
+  // `models.retrieval.dataloader.dataset.build_user_features` that training
+  // calls, so the transform has exactly one implementation.
+  //
+  // This field used to be described as "the column order the tower was trained
+  // with", and the gateway sent these four in good faith. The result was
+  // InvalidArgument on every retrieval call and a popularity slate on every
+  // request, the first time the stack ran end to end.
+  //
+  // Sent rather than fetched for the same reason as history: the
+  // orchestrator's §14.2 feature fetch has already paid for it, and a second
+  // read could see a different snapshot than the ranker's own features came
+  // from.
   //
   // **Width is checked against the loaded tower, not trusted.** A short or
   // permuted vector is a correctly-typed request that produces a plausible
   // embedding for a user who does not exist, and the neighbours it retrieves
   // look entirely reasonable.
   repeated float user_feats = 5;
+
+  // Whether the feature store actually had a row for this user.
+  //
+  // This is `GetUserResponse.found`, forwarded. It becomes the tower's
+  // `has_user_features` column, so it is a MODEL INPUT rather than telemetry:
+  // the gateway serves zeros on a miss, and this flag is the only thing
+  // distinguishing "a user with genuinely zero impressions" from "a user the
+  // store has never seen". Defaulting it to false on a hit would tell the
+  // tower every user is cold.
+  bool has_user_features = 6;
 
   // efSearch for this request, 0 for the server's configured default.
   //

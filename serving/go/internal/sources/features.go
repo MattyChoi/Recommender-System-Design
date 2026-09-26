@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rpc"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
 )
 
@@ -21,7 +22,9 @@ import (
 // used from Python, behind one hop, and this is the near side of it.
 type Gateway struct {
 	client pb.FeaturesClient
-	conn   *grpc.ClientConn
+	//: Several connections behind one ClientConnInterface -- see internal/rpc.
+	//: Nil in tests, which inject `client` directly; Close tolerates that.
+	conn *rpc.Balanced
 
 	// UserColumns is the order the tower was fitted with, from
 	// serving/features/columns.py. Empty disables the check, which has to be
@@ -33,19 +36,28 @@ type Gateway struct {
 	ItemColumns []string
 }
 
-// DialGateway opens a connection without blocking on the server being up.
-func DialGateway(target string, opts ...grpc.DialOption) (*Gateway, error) {
+// DialGateway opens `conns` connections without blocking on the server being
+// up. More than one because gRPC-Go serialises a connection's outbound frames
+// through a single loopyWriter goroutine -- see internal/rpc.
+func DialGateway(target string, conns int, opts ...grpc.DialOption) (*Gateway, error) {
 	opts = append([]grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}, opts...)
-	conn, err := grpc.NewClient(target, opts...)
+	pool, err := rpc.Dial(target, conns, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dialling feature gateway at %s: %w", target, err)
 	}
-	return &Gateway{client: pb.NewFeaturesClient(conn), conn: conn}, nil
+	return &Gateway{client: pb.NewFeaturesClient(pool), conn: pool}, nil
 }
 
-func (g *Gateway) Close() error { return g.conn.Close() }
+// Close is nil-safe: the tests build a Gateway with an injected client and no
+// connections.
+func (g *Gateway) Close() error {
+	if g.conn == nil {
+		return nil
+	}
+	return g.conn.Close()
+}
 
 // Fetch gets the user's features and history before the fan-out.
 func (g *Gateway) Fetch(
