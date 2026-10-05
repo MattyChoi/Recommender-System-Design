@@ -27,6 +27,7 @@ artifacts/
 *.parquet
 *.pt
 *.onnx
+*.onnx.data
 *.faiss
 mlruns/
 mlartifacts/

@@ -1,5 +1,5 @@
-.PHONY: proto help up down clean raw bronze silver gold content retrieval feast parity eval sweep results gap coverage compare baselines torch-env data \
-        topic delete_topic replay consume offsets \
+.PHONY: proto help up down clean raw bronze silver gold content retrieval feast parity eval sweep \
+		results gap coverage compare baselines torch-env data topic delete_topic replay consume offsets \
         bands ablation shard-plan hash-bench retrieval-dist sources blend rank rank-neural rank-dist \
         headroom rerank seen-bench index serve bench demo lint fmt types test check
 
@@ -174,7 +174,7 @@ results:  ## Rebuild docs/baselines.md from evaluation/results/*.json
 parity:  ## Materialisation parity: Redis vs the gold series
 	uv run python -m data_pipeline.features.parity --sample $(PARITY_SAMPLE)
 
-data: raw bronze silver gold  ## Build every layer under data/
+data: raw bronze silver gold content ## Build every layer under data/
 
 topic:  ## Create the replay topic -- run ONCE before the first replay
 	$(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
@@ -330,7 +330,7 @@ seen-bench:  ## Bloom-filter seen-list: memory against exact storage, and the er
 rerank:  ## MMR / caps / freshness / exploration -> the relevance-diversity table
 	@test -f "$(SOURCE_CHECKPOINT)" || \
 	  { echo "set SOURCE_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
-	@test -f "$(RANKER)" || { echo "set RANKER= to a booster from `make rank`"; exit 1; }
+	@test -f "$(RANKER)" || { echo "set RANKER= to a booster from 'make rank'"; exit 1; }
 	uv run python -m models.reranking.evaluate $(SOURCE_CHECKPOINT) \
 	    --ranker $(RANKER) $(RERANK_ARGS)
 
@@ -340,6 +340,18 @@ index:  ## Recall/QPS curve: HNSW and IVF-PQ against exact search
 	@test -f "$(INDEX_CHECKPOINT)" || \
 	  { echo "set INDEX_CHECKPOINT=data/checkpoints/<run>.pt"; exit 1; }
 	uv run python -m indexing.benchmark_index $(INDEX_CHECKPOINT) $(INDEX_ARGS)
+
+# Must be a rank-neural checkpoint
+RANKER_CHECKPOINT ?= data/checkpoints/ranking/mmoe-two_tower+trending+covisit+content-c100-4c80d49d59df4f4a-7fb9c9cfebba.pt
+ONNX_OUT ?= serving/triton/ranker/1/model.onnx
+
+# `--extra serving`: onnx, onnxscript and onnxruntime live there. Listing the
+# other extras too, because `uv run --extra X` resolves only X
+onnx:  ## Export the serving ranker to ONNX, preprocessing baked into the graph
+	@test -f "$(RANKER_CHECKPOINT)" || \
+	  { echo "set RANKER_CHECKPOINT=data/checkpoints/ranking/<mmoe run>.pt"; exit 1; }
+	uv run --extra serving --extra sharded --extra orchestration \
+	    python -m models.export.ranker_onnx $(RANKER_CHECKPOINT) --out $(ONNX_OUT)
 
 serve:  ## Run the gRPC orchestrator
 	@echo "TODO: serving"; exit 1

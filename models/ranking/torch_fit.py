@@ -166,7 +166,7 @@ def prepare(rows: RankingRows) -> Preparation:
     sparse = prepared[:, sparse_columns].astype(np.int64)
     return Preparation(
         scaler=Standardiser.fit(prepared[:, dense_columns]),
-        cardinalities=tuple(int(sparse[:, index].max()) + 1 for index in range(sparse.shape[1])),
+        cardinalities=tuple(int(sparse[:, index].max()) for index in range(sparse.shape[1])),
         positive_rate=float(rows.labels.mean()),
     )
 
