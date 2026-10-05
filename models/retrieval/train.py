@@ -21,7 +21,7 @@ from common.torch_env import (
 )
 from common.tracking import provenance, require_reachable, run_label, track
 from data_pipeline.features.user_history import MAX_HISTORY
-from evaluation.offline.geometry import _geometry
+from evaluation.offline.geometry import geometry
 from models.classes.batching import Batch
 from models.classes.dataset import ItemTables, SplitTensors
 from models.classes.train import Counters, Hits, TrainingRun
@@ -212,7 +212,7 @@ def validate(
     finally:
         tower.train(was_training)
 
-    return {f"recall@{k}": float(hit.float().mean()) if len(hit) else 0.0, **_geometry(items)}
+    return {f"recall@{k}": float(hit.float().mean()) if len(hit) else 0.0, **geometry(items)}
 
 
 def item_geometry(model: torch.nn.Module) -> dict[str, float]:
@@ -225,7 +225,7 @@ def item_geometry(model: torch.nn.Module) -> dict[str, float]:
     was_training = tower.training
     tower.eval()
     try:
-        return _geometry(tower.precompute_items()[1:])
+        return geometry(tower.precompute_items()[1:])
     finally:
         tower.train(was_training)
 

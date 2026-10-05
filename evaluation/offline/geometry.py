@@ -82,7 +82,7 @@ def spread_of(embeddings: torch.Tensor, sample: int = 2000, seed: int = 0) -> Sp
     )
 
 
-def _geometry(items: torch.Tensor) -> dict[str, float]:
+def geometry(items: torch.Tensor) -> dict[str, float]:
     spread = spread_of(items)
     return {"item_rank": spread.effective_rank, "item_cosine": spread.cosine}
 
