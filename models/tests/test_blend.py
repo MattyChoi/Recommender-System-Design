@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 import torch
 
+from models.classes.sources import Retrieved
 from models.retrieval.blend import (
     attribute,
     check_aligned,
@@ -25,7 +26,6 @@ from models.retrieval.blend import (
     hit_matrix,
     leave_one_out,
 )
-from models.retrieval.sources import Retrieved
 
 
 def _source(name: str, top: list[list[int]], clicked: list[int]) -> Retrieved:
@@ -73,6 +73,17 @@ class TestAttribution:
         shares = attribute([a, b])
 
         assert shares["a"] == (1.0, 0.0), "one pair in the union, shared"
+
+    def test_a_source_repeating_an_item_still_offers_it_alone(self) -> None:
+        """A re-clicked article appears twice in ``recent``; that is one offer."""
+        a = _source("a", [[1, 1, 2]], [1])
+        b = _source("b", [[2, 0, 0]], [1])
+
+        shares = attribute([a, b])
+
+        # union pairs: (0,1), (0,2) -- (0,1) is a's alone, however often it lists it
+        assert shares["a"] == (1.0, 0.5)
+        assert shares["b"] == (0.5, 0.0)
 
 
 class TestQuotaAndRedistribution:

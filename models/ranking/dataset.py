@@ -28,7 +28,8 @@ import numpy.typing as npt
 import torch
 
 from models.classes.dataset import ItemTables, SplitTensors
-from models.retrieval.sources import Retrieved, encode_users
+from models.classes.sources import Retrieved
+from models.retrieval.sources import encode_users
 from models.retrieval.two_tower import TwoTower
 
 # Columns, in the order the matrix carries them. Named because LightGBM reports

@@ -29,6 +29,7 @@ from common.torch_env import describe, select_device
 from common.tracking import provenance, require_reachable, run_label, track
 from data_pipeline.features.user_history import MAX_HISTORY
 from evaluation.offline.stats import paired_bootstrap, per_user_means
+from models.classes.sources import RESULTS, load_retrieved
 from models.ranking.calibration import calibrate
 from models.ranking.calibration import render as render_calibration
 from models.ranking.compare import RESULTS as RUNS
@@ -48,7 +49,6 @@ from models.retrieval.dataloader.dataset import (
     prior_window_counts,
 )
 from models.retrieval.evaluate import load_tower
-from models.retrieval.sources import RESULTS, load_retrieved
 
 CHECKPOINTS = Path("data/checkpoints/ranking")
 

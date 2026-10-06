@@ -15,9 +15,9 @@ import pytest
 import torch
 
 from models.classes.dataset import SplitTensors
+from models.classes.sources import Retrieved
 from models.retrieval.dataloader.batching import make_loader
 from models.retrieval.sources import (
-    Retrieved,
     covisit_edges,
     covisit_source,
     recent_source,
@@ -132,7 +132,7 @@ class TestSources:
         prior = torch.zeros(N_ITEMS + 1, dtype=torch.long)
         prior[3], prior[7] = 5, 9
 
-        top = trending_source(prior, rows=4, k=6)
+        top = trending_source(prior, n_requests=4, k=6)
 
         assert (top == top[0]).all()
         assert top[0, 0].item() == 7 and top[0, 1].item() == 3
@@ -171,7 +171,7 @@ class TestSources:
                     {"item_id": 2, "related_item_id": 6, "weight": 3.0},
                 ]
 
-        ptr, neighbour, weight = covisit_edges(_Frame(), n_rows=8)  # type: ignore[arg-type]
+        ptr, neighbour, weight = covisit_edges(_Frame(), n_items=8)  # type: ignore[arg-type]
 
         assert int(ptr[1]) == 0 and int(ptr[2]) == 1 and int(ptr[3]) == 3
         assert neighbour[int(ptr[1]) : int(ptr[2])].tolist() == [4]

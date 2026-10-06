@@ -6,44 +6,23 @@
   single source's Recall@100 as though the two were comparable.
 * ``quota``  -- ``k // n_sources`` slots each, so the blend returns about k
   candidates in total, the same budget the two-tower alone gets.
+
+Ex run:
+    `uv run python -m models.retrieval.blend --names two-tower trending --k 100`
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 
 from evaluation.offline.stats import PairedResult, paired_bootstrap, per_user_means
-from models.retrieval.sources import RESULTS, SOURCE_NAMES, Retrieved, load_retrieved
-
-
-@dataclass(frozen=True)
-class Contribution:
-    """One source's line in I3's table.
-
-    Attributes:
-        source: Which source.
-        share: Fraction of the union's (request, item) pairs this source offers.
-        unique: Fraction of the union's pairs **only** this source offers.
-        alone: Recall@k with nothing else in the blend.
-        found_only_here: Clicked items this source found and no other did, as a
-            share of all requests. The number that decides whether a source
-            earns its slot -- a source can contribute 30% of the candidates and
-            none of the answers.
-        loss: Recall lost by dropping it from the quota blend, paired per user.
-    """
-
-    source: str
-    share: float
-    unique: float
-    alone: float
-    found_only_here: float
-    loss: PairedResult | None
+from models.classes.sources import RESULTS, Blend, Contribution, Retrieved, load_retrieved
+from models.retrieval.sources import SOURCE_NAMES
 
 
 def check_aligned(sources: Sequence[Retrieved]) -> None:
@@ -99,7 +78,13 @@ def hit_matrix(
 def _pair_keys(
     sources: Sequence[Retrieved], quota: int | Sequence[int] | None
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """Every (request, item) the blend offers, and which source offered it."""
+    """Every (request, item) the blend offers, and which source offered it.
+
+    Each source contributes a pair at most once. A list can repeat an item --
+    ``recent_source`` does whenever a user re-clicked an article -- and without
+    the dedup that repeat counts as a second offer, so ``attribute`` would call
+    a pair only one source offers "shared".
+    """
     stride = int(max(int(source.top.max()) for source in sources)) + 1
     request = np.arange(len(sources[0].item_ids))
 
@@ -110,8 +95,9 @@ def _pair_keys(
         flat = top.reshape(-1)
         rows = np.repeat(request, top.shape[1])
         keep = flat > 0
-        keys.append(rows[keep].astype(np.int64) * stride + flat[keep].astype(np.int64))
-        owner.append(np.full(int(keep.sum()), index, dtype=np.int64))
+        mine = np.unique(rows[keep].astype(np.int64) * stride + flat[keep].astype(np.int64))
+        keys.append(mine)
+        owner.append(np.full(len(mine), index, dtype=np.int64))
     return np.concatenate(keys), np.concatenate(owner)
 
 
@@ -183,8 +169,9 @@ def contributions(
     k: int,
     mask: npt.NDArray[np.bool_] | None = None,
 ) -> list[Contribution]:
-    """I3's table, over the requests ``mask`` selects."""
-    rows = np.ones(len(user_ids), dtype=bool) if mask is None else mask
+    """Contribution calculation of each source, over the requests ``mask`` selects."""
+    if mask is None:
+        mask = np.ones(len(user_ids), dtype=bool)
     shares = attribute(sources)
     alone = hit_matrix(sources)
     losses = leave_one_out(sources, user_ids, k, mask)
@@ -199,32 +186,15 @@ def contributions(
                 source=source.source,
                 share=share,
                 unique=unique,
-                alone=float(alone[index][rows].mean()),
-                found_only_here=float(only[rows].mean()),
+                alone=float(alone[index][mask].mean()),
+                found_only_here=float(only[mask].mean()),
                 loss=losses.get(source.source),
             )
         )
     return out
 
 
-@dataclass(frozen=True)
-class Blend:
-    """One allocation of the slot budget, and what it recalls.
-
-    Attributes:
-        label: How the slots were divided, spelled out -- the allocation IS the
-            condition, so it travels with the number.
-        recall: Recall@k of the union under that allocation.
-        pool: Mean distinct candidates put forward per request.
-    """
-
-    label: str
-    recall: float
-    pool: float
-
-
 def render(rows: Sequence[Contribution], k: int, blends: Sequence[Blend]) -> str:
-    """I3's table."""
     head = (
         f"{'source':>10}  {'% of pool':>9}  {'% unique':>9}  {'alone':>8}  "
         f"{'only here':>9}  {'loss if dropped':>17}"

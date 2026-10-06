@@ -7,13 +7,16 @@
 | ``recent`` | the user's own history | immediate intent, re-reads |
 | ``covisit`` | item-item co-occurrence | "because you read X" |
 | ``content`` | frozen sentence vectors | brand-new items with no interactions |
+
+Ex run:
+    `uv run python -m models.retrieval.sources \
+        data/checkpoints/both-logq-n4u0-b8192e10lr0.001-ab7e1d500b9bf792.pt`
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +30,7 @@ from common.torch_env import describe, select_device
 from common.utils import read_gold
 from data_pipeline.features.user_history import MAX_HISTORY
 from models.classes.dataset import SplitTensors
+from models.classes.sources import RESULTS, Retrieved
 from models.retrieval.baselines.covisit import build_covisitation
 from models.retrieval.dataloader.dataset import (
     CONTENT_VARIANTS,
@@ -41,78 +45,33 @@ from models.retrieval.two_tower import TwoTower
 
 DEFAULT_K = 100
 SOURCE_NAMES = ("two_tower", "trending", "recent", "covisit", "content")
-RESULTS = Path("evaluation/results/sources")
 
 # Requests per scoring chunk. A dense [rows, 65238] score buffer is the binding
 # cost, so this is a memory knob and not a modelling one.
 SCORE_ROWS = 1024
 
 
-@dataclass(frozen=True)
-class Retrieved:
-    """One source's candidates for every validation request.
+def _chunks(rows: int, size: int = SCORE_ROWS) -> Sequence[tuple[int, int]]:
+    return [(start, min(start + size, rows)) for start in range(0, rows, size)]
 
-    Attributes:
-        source: Which source produced this.
-        top: ``[R, k]`` item indices, best first, **0 where the source ran out
-            of candidates**. Never padded with filler.
-        item_ids: ``[R]`` the item actually clicked.
-        user_ids: ``[R]`` who made the request, so a comparison can pair on the
-            user rather than on the row.
-        k: The cutoff.
+
+def encode_users(tower: TwoTower, split: SplitTensors, device: torch.device) -> torch.Tensor:
+    """``[R, out_dim]`` unit-norm request vectors, one per row of the split.
+
+    Split out because the ANN benchmark needs the same queries the exact search
+    uses. Encoding them twice from two expressions is how an index gets measured
+    against a slightly different set of requests than the thing it approximates.
     """
-
-    source: str
-    top: torch.Tensor
-    item_ids: torch.Tensor
-    user_ids: torch.Tensor
-    k: int
-
-    @property
-    def hit(self) -> torch.Tensor:
-        """``[R]`` whether the clicked item is anywhere in the top k."""
-        found: torch.Tensor = (self.top == self.item_ids.unsqueeze(1)).any(dim=1)
-        return found
-
-    @property
-    def pool(self) -> torch.Tensor:
-        """``[R]`` real candidates returned, which is <= k for a short source."""
-        sizes: torch.Tensor = (self.top > 0).sum(dim=1)
-        return sizes
-
-    @property
-    def recall(self) -> float:
-        return float(self.hit.float().mean()) if len(self.hit) else float("nan")
-
-    @property
-    def reach(self) -> float:
-        """Share of requests the source could answer at all."""
-        return float((self.pool > 0).float().mean()) if len(self.top) else float("nan")
-
-    def save(self, directory: Path = RESULTS) -> Path:
-        """Keep the candidates, not just the hit -- the blend needs the lists."""
-        directory.mkdir(parents=True, exist_ok=True)
-        destination = directory / f"{self.source}.npz"
-        np.savez_compressed(
-            destination,
-            top=self.top.numpy(),
-            item_ids=self.item_ids.numpy(),
-            user_ids=self.user_ids.numpy(),
-            k=np.asarray(self.k),
-            source=np.asarray(self.source),
-        )
-        return destination
-
-
-def load_retrieved(source: str, directory: Path = RESULTS) -> Retrieved:
-    """Read one source's candidates back."""
-    with np.load(directory / f"{source}.npz", allow_pickle=False) as data:
-        return Retrieved(
-            source=str(data["source"]),
-            top=torch.from_numpy(data["top"]),
-            item_ids=torch.from_numpy(data["item_ids"]),
-            user_ids=torch.from_numpy(data["user_ids"]),
-            k=int(data["k"]),
+    with torch.no_grad():
+        return torch.cat(
+            [
+                tower.encode_user(
+                    split.user_feats[start:end].to(device),
+                    split.history_ids[start:end].to(device),
+                    split.history_mask[start:end].to(device),
+                ).cpu()
+                for start, end in _chunks(len(split.item_ids))
+            ]
         )
 
 
@@ -153,10 +112,6 @@ def top_k_from_scores(
     return top
 
 
-def _chunks(rows: int, size: int = SCORE_ROWS) -> Sequence[tuple[int, int]]:
-    return [(start, min(start + size, rows)) for start in range(0, rows, size)]
-
-
 def two_tower_source(
     tower: TwoTower, split: SplitTensors, device: torch.device, k: int = DEFAULT_K
 ) -> torch.Tensor:
@@ -176,30 +131,10 @@ def two_tower_source(
     return torch.cat(out)
 
 
-def encode_users(tower: TwoTower, split: SplitTensors, device: torch.device) -> torch.Tensor:
-    """``[R, out_dim]`` unit-norm request vectors, one per row of the split.
-
-    Split out because the ANN benchmark needs the same queries the exact search
-    uses. Encoding them twice from two expressions is how an index gets measured
-    against a slightly different set of requests than the thing it approximates.
-    """
-    with torch.no_grad():
-        return torch.cat(
-            [
-                tower.encode_user(
-                    split.user_feats[start:end].to(device),
-                    split.history_ids[start:end].to(device),
-                    split.history_mask[start:end].to(device),
-                ).cpu()
-                for start, end in _chunks(len(split.item_ids))
-            ]
-        )
-
-
-def trending_source(prior: torch.Tensor, rows: int, k: int = DEFAULT_K) -> torch.Tensor:
+def trending_source(prior: torch.Tensor, n_requests: int, k: int = DEFAULT_K) -> torch.Tensor:
     """Point-in-time popularity: the same list for every request."""
     counts = prior[1:].to(torch.float32).unsqueeze(0)
-    return top_k_from_scores(counts, k, positive_only=True).expand(rows, k).clone()
+    return top_k_from_scores(counts, k, positive_only=True).expand(n_requests, k).clone()
 
 
 def recent_source(
@@ -219,11 +154,11 @@ def recent_source(
     return top
 
 
-def covisit_edges(edges: DataFrame, n_rows: int) -> tuple[torch.Tensor, ...]:
+def covisit_edges(edges: DataFrame, n_items: int) -> tuple[torch.Tensor, ...]:
     """The co-visitation matrix as CSR over item indices.
 
     Returns:
-        ``(ptr [n_rows + 1], neighbour [E], weight [E])``.
+        ``(ptr [n_items + 1], neighbour [E], weight [E])``.
     """
     collected = edges.select("item_id", "related_item_id", "weight").collect()
     source = torch.tensor([row["item_id"] for row in collected], dtype=torch.long)
@@ -233,8 +168,8 @@ def covisit_edges(edges: DataFrame, n_rows: int) -> tuple[torch.Tensor, ...]:
     order = torch.argsort(source, stable=True)
     source, target, weight = source[order], target[order], weight[order]
 
-    counts = torch.bincount(source, minlength=n_rows)
-    ptr = torch.zeros(n_rows + 1, dtype=torch.long)
+    counts = torch.bincount(source, minlength=n_items)
+    ptr = torch.zeros(n_items + 1, dtype=torch.long)
     ptr[1:] = counts.cumsum(0)
     return ptr, target, weight
 
@@ -245,7 +180,7 @@ def covisit_source(
     weight: torch.Tensor,
     history_ids: torch.Tensor,
     history_mask: torch.Tensor,
-    n_rows: int,
+    n_items: int,
     k: int = DEFAULT_K,
 ) -> torch.Tensor:
     """Summed edge weight from everything the user clicked, to each candidate."""
@@ -253,7 +188,7 @@ def covisit_source(
     for start, end in _chunks(len(history_ids)):
         ids = history_ids[start:end]
         mask = history_mask[start:end]
-        buffer = torch.zeros(len(ids), n_rows, dtype=torch.float32)
+        buffer = torch.zeros(len(ids), n_items, dtype=torch.float32)
 
         request, slot = torch.nonzero(mask, as_tuple=True)
         seeds = ids[request, slot]
@@ -299,6 +234,88 @@ def content_source(
     return torch.cat(out)
 
 
+def build_sources(
+    args: argparse.Namespace,
+) -> tuple[dict[str, torch.Tensor], SplitTensors, SplitTensors, int]:
+    """All five sources keyed by name, the two splits, and the item-table size."""
+    settings = load_settings()
+    device = select_device()
+    print(f"sources: {describe(device)}")
+
+    spark = get_spark(settings, app="retrieval-sources")
+    try:
+        items = load_item_tables(settings, args.variant)
+        n_items = int(items.content.shape[0])
+        train_split, val_split = load_train_and_validation(
+            spark, settings, args.max_history, args.max_negs, args.holdout_hours
+        )
+        prior = prior_window_counts(spark, settings, args.holdout_hours, n_items)
+
+        # TRAIN ONLY, and the same boundary the split was carved on: an edge
+        # built over the validation window carries the click being predicted.
+        examples = read_gold(spark, settings, "training_examples/train")
+        boundary = _boundary(_clicked_rows(examples), args.holdout_hours)
+        window = examples.where(f.col("ts") < f.lit(boundary)).select(
+            f.col("user_idx").alias("user_id"),
+            f.col("item_idx").alias("item_id"),
+            "impression_id",
+            "ts",
+            "clicked",
+        )
+        matrix = build_covisitation(window, max_gap_seconds=args.covisit_max_gap)
+        ptr, neighbour, weight = covisit_edges(matrix, n_items)
+        seeded = int((ptr[1:] > ptr[:-1]).sum())
+        print(f"  covisitation: {len(neighbour):,} edges over {seeded:,} items")
+    finally:
+        spark.stop()
+
+    tower = load_tower(args.checkpoint, items, train_split.user_feats.shape[1], device)
+    n_requests = len(val_split.item_ids)
+
+    built = {
+        "two_tower": two_tower_source(tower, val_split, device, args.k),
+        "trending": trending_source(prior, n_requests, args.k),
+        "recent": recent_source(val_split.history_ids, val_split.history_mask, args.k),
+        "covisit": covisit_source(
+            ptr, neighbour, weight, val_split.history_ids, val_split.history_mask, n_items, args.k
+        ),
+        "content": content_source(
+            items.content, val_split.history_ids, val_split.history_mask, device, args.k
+        ),
+    }
+
+    return built, train_split, val_split, n_items
+
+
+def render_and_save(
+    built: dict[str, torch.Tensor],
+    train_split: SplitTensors,
+    val_split: SplitTensors,
+    n_items: int,
+    directory: Path = RESULTS,
+    k: int = DEFAULT_K,
+) -> None:
+    """Print a table of reach and recall for each source and save the candidates to disk."""
+    train_counts = np.bincount(train_split.item_ids.numpy(), minlength=n_items).astype("int64")
+    band = band_of(train_counts[val_split.item_ids.numpy()])
+    long_tail = band < int(np.searchsorted(np.asarray(BAND_EDGES), 26, side="left"))
+
+    header = (
+        f"{'source':>10}  {'reach':>7}  {'mean pool':>9}  "
+        f"{'recall@' + str(k):>11}  {'long tail':>9}"
+    )
+    print(f"\n{header}\n{'-' * len(header)}")
+    for name in SOURCE_NAMES:
+        got = Retrieved(name, built[name], val_split.item_ids, val_split.user_ids, k)
+        got.save(directory)
+        tail = got.hit.numpy()[long_tail]
+        print(
+            f"{name:>10}  {got.reach:>7.4f}  {float(got.pool.float().mean()):>9.1f}  "
+            f"{got.recall:>11.4f}  {tail.mean():>9.4f}"
+        )
+    print(f"\n  candidates -> {directory}/<source>.npz over {len(val_split.item_ids):,} requests")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path, help="The two-tower arm to put in the blend.")
@@ -315,70 +332,12 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Build every source's candidates over one split and keep them."""
     args = _parser().parse_args(argv)
-    settings = load_settings()
-    device = select_device()
-    print(f"sources: {describe(device)}")
+    if not args.checkpoint.exists():
+        raise FileNotFoundError(args.checkpoint)
 
-    spark = get_spark(settings, app="retrieval-sources")
-    try:
-        items = load_item_tables(settings, args.variant)
-        n_rows = int(items.content.shape[0])
-        train_split, val_split = load_train_and_validation(
-            spark, settings, args.max_history, args.max_negs, args.holdout_hours
-        )
-        prior = prior_window_counts(spark, settings, args.holdout_hours, n_rows)
+    built, train_split, val_split, n_items = build_sources(args)
+    render_and_save(built, train_split, val_split, n_items, args.out, args.k)
 
-        # TRAIN ONLY, and the same boundary the split was carved on: an edge
-        # built over the validation window carries the click being predicted.
-        examples = read_gold(spark, settings, "training_examples/train")
-        boundary = _boundary(_clicked_rows(examples), args.holdout_hours)
-        window = examples.where(f.col("ts") < f.lit(boundary)).select(
-            f.col("user_idx").alias("user_id"),
-            f.col("item_idx").alias("item_id"),
-            "impression_id",
-            "ts",
-            "clicked",
-        )
-        matrix = build_covisitation(window, max_gap_seconds=args.covisit_max_gap)
-        ptr, neighbour, weight = covisit_edges(matrix, n_rows)
-        seeded = int((ptr[1:] > ptr[:-1]).sum())
-        print(f"  covisitation: {len(neighbour):,} edges over {seeded:,} items")
-    finally:
-        spark.stop()
-
-    tower = load_tower(args.checkpoint, items, train_split.user_feats.shape[1], device)
-    rows = len(val_split.item_ids)
-
-    built = {
-        "two_tower": two_tower_source(tower, val_split, device, args.k),
-        "trending": trending_source(prior, rows, args.k),
-        "recent": recent_source(val_split.history_ids, val_split.history_mask, args.k),
-        "covisit": covisit_source(
-            ptr, neighbour, weight, val_split.history_ids, val_split.history_mask, n_rows, args.k
-        ),
-        "content": content_source(
-            items.content, val_split.history_ids, val_split.history_mask, device, args.k
-        ),
-    }
-
-    train_counts = np.bincount(train_split.item_ids.numpy(), minlength=n_rows).astype("int64")
-    band = band_of(train_counts[val_split.item_ids.numpy()])
-    long_tail = band < int(np.searchsorted(np.asarray(BAND_EDGES), 26, side="left"))
-
-    header = (
-        f"{'source':>10}  {'reach':>7}  {'mean pool':>9}  "
-        f"{'recall@' + str(args.k):>11}  {'long tail':>9}"
-    )
-    print(f"\n{header}\n{'-' * len(header)}")
-    for name in SOURCE_NAMES:
-        got = Retrieved(name, built[name], val_split.item_ids, val_split.user_ids, args.k)
-        got.save(args.out)
-        tail = got.hit.numpy()[long_tail]
-        print(
-            f"{name:>10}  {got.reach:>7.4f}  {float(got.pool.float().mean()):>9.1f}  "
-            f"{got.recall:>11.4f}  {tail.mean():>9.4f}"
-        )
-    print(f"\n  candidates -> {args.out}/<source>.npz over {rows:,} requests")
     return 0
 
 

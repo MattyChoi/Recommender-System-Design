@@ -174,7 +174,7 @@ def _boundary(examples: DataFrame, holdout_hours: int) -> datetime:
 
 
 def prior_window_counts(
-    spark: SparkSession, settings: Settings, holdout_hours: int, n_rows: int
+    spark: SparkSession, settings: Settings, holdout_hours: int, n_items: int
 ) -> torch.Tensor:
     """Clicks per item in the window immediately BEFORE validation.
 
@@ -189,7 +189,7 @@ def prior_window_counts(
     reference line turns into a strawman.
 
     Returns:
-        ``[n_rows]`` counts, index 0 reserved and always zero.
+        ``[n_items]`` counts, index 0 reserved and always zero.
     """
     examples = _clicked_rows(read_gold(spark, settings, "training_examples/train"))
     boundary = _boundary(examples, holdout_hours)
@@ -198,7 +198,7 @@ def prior_window_counts(
         & (f.col("ts") < f.lit(boundary))
     )
 
-    counts = torch.zeros(n_rows, dtype=torch.long)
+    counts = torch.zeros(n_items, dtype=torch.long)
     for row in window.groupBy("item_idx").count().collect():
         counts[row["item_idx"]] = row["count"]
     return counts
