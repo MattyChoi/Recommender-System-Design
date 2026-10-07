@@ -9,7 +9,7 @@ both towers, or the ID table keeps training through the user side and the
 content-only arm of the ablation quietly benefits from the thing it is meant to
 be doing without.
 
-``use_content`` is the mirror of that, and G1 asks for three arms rather than
+``use_content`` mirrors that, and the ablation asks for three arms rather than
 two: ID-only, content-only, and both. The same contamination applies in reverse,
 one level out -- category and subcategory are content, since a cold article has
 both, so an ID-only arm that kept them would not be ID-only.
@@ -38,7 +38,7 @@ OUT_DIM = 8
 
 @pytest.fixture
 def tables() -> dict[str, torch.Tensor]:
-    """Item-indexed tables, row 0 reserved for OOV and padding (B2)."""
+    """Item-indexed tables, row 0 reserved for OOV and padding."""
     content = torch.arange((N_ITEMS + 1) * CONTENT_DIM, dtype=torch.float32).reshape(
         N_ITEMS + 1, CONTENT_DIM
     )
@@ -82,7 +82,7 @@ def _in_features(tower: Tower) -> int:
 class TestTheUnitSphere:
     def test_the_tower_output_has_unit_norm(self) -> None:
         """Which is what makes the dot product cosine, and lets FAISS use
-        METRIC_INNER_PRODUCT in Part J."""
+        METRIC_INNER_PRODUCT in the ANN index."""
         out = Tower(in_dim=6, out_dim=OUT_DIM)(torch.randn(4, 6))
 
         assert torch.allclose(out.norm(dim=-1), torch.ones(4), atol=1e-5)
@@ -322,8 +322,8 @@ class TestUseId:
 
 
 class TestUseContent:
-    """G1's third arm. ``use_id`` alone gives only two of the three the manual
-    asks for -- content-only and both -- because content was unconditional."""
+    """The third ablation arm. ``use_id`` alone gives only two of the three
+    arms -- content-only and both -- because content was unconditional."""
 
     def test_it_removes_every_content_derived_table(self, tables: dict[str, torch.Tensor]) -> None:
         """Category and subcategory go with the vectors, not with the ID.
@@ -395,7 +395,7 @@ class TestUseContent:
 class TestReservedIndexZero:
     def test_the_tables_are_sized_n_items_plus_one(self, tables: dict[str, torch.Tensor]) -> None:
         """Off by one here is an IndexError on the highest-numbered item, which
-        is the last one anybody tests by hand (B2)."""
+        is the last one anybody tests by hand."""
         model = _model(tables)
 
         assert model.item_id_emb is not None and model.content is not None
@@ -489,7 +489,7 @@ class TestDeterminism:
 
 class TestPrecompute:
     def test_it_matches_encoding_one_at_a_time(self, tables: dict[str, torch.Tensor]) -> None:
-        """This output becomes the Part J index, so a batching bug here would
+        """This output becomes the ANN index, so a batching bug here would
         surface as inexplicably poor recall much later."""
         model = _model(tables).eval()
 

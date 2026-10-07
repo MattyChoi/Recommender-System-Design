@@ -213,7 +213,7 @@ def _worker_reaching_past_ddp_diverges(local_rank: int, world: int, init: str) -
     try:
         torch.manual_seed(0)
         wrapped = DistributedDataParallel(_tiny_tower())
-        # What §9's G5 sketch does. DDP arms its all-reduce inside its own
+        # What the naive sketch does. DDP arms its all-reduce inside its own
         # forward, so going straight to the module skips the bookkeeping and the
         # gradient hooks return early.
         _one_step(wrapped.module, local_rank)

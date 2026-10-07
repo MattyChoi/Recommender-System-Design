@@ -3,7 +3,7 @@
 **The first is the hash itself.** A hash with structure in it produces a
 collision rate that looks like a property of the technique and is really a
 property of the hash. So the measured rate is checked against the closed form it
-should match, and the identity map -- which is what the manual's
+should match, and the identity map -- which is what the naive
 ``hash(item_idx) % b`` actually computes, since ``hash()`` is the identity on
 small ints -- is checked to be different from what this module does.
 
@@ -15,8 +15,8 @@ is quoted -- the standing rule about checking A and B *can* differ, applied to
 three things at once.
 
 No ``importorskip`` here: ``hashing`` deliberately imports ``sizing`` rather than
-``sharded_embeddings``, so this half of G4 runs on a machine that has never
-installed the ``sharded`` extra.
+``sharded_embeddings``, so this half of the embedding-table work runs on a
+machine that has never installed the ``sharded`` extra.
 """
 
 from __future__ import annotations
@@ -40,15 +40,16 @@ def _ids(count: int) -> list[str]:
 class TestTheHash:
     def test_it_is_reproducible(self) -> None:
         """blake2b, not ``hash()``. Python salts ``hash()`` on strings per
-        process unless PYTHONHASHSEED is pinned, so the manual's version puts an
+        process unless PYTHONHASHSEED is pinned, so the naive version puts an
         item in a different bucket on every run -- the same defect class as
-        ``F.shuffle`` in G3's negatives and ``f.rand`` in the random baseline."""
+        ``F.shuffle`` in the sampled negatives and ``f.rand`` in the random
+        baseline."""
         ids = _ids(500)
 
         assert np.array_equal(bucket_of(ids, 64), bucket_of(ids, 64))
 
     def test_it_is_not_the_identity_on_the_index(self) -> None:
-        """``hash()`` on an int below 2**61 IS that int, so the manual's
+        """``hash()`` on an int below 2**61 IS that int, so the naive
         ``hash(item_idx) % b`` is ``item_idx % b`` -- a perfectly uniform
         round-robin that measures the index, not a hash. Anything learned from
         it would not transfer to a system hashing real string ids."""

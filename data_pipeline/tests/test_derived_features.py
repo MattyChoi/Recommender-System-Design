@@ -115,7 +115,8 @@ def test_the_unknowable_row_yields_none(
 ) -> None:
     """No item history and no category prior. Training drops these -- 6,262 rows.
 
-    Serving cannot drop a request, so Part M must decide what the ranker gets.
+    Serving cannot drop a request, so the orchestrator must decide what the
+    ranker gets.
     This test exists to keep that decision visible rather than defaulted.
     """
     assert odfv_answer[3][3] is None

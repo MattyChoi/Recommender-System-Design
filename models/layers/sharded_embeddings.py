@@ -72,7 +72,7 @@ def build_ebc(
         That is a real difference from ``nn.Embedding`` and it lands on the one
         property the two-tower is built around:
         :meth:`~models.retrieval.two_tower.TwoTower.encode_item` is a function of
-        ``item_idx`` ALONE, which is what allows the Part J index to be
+        ``item_idx`` ALONE, which is what allows the ANN index to be
         precomputed. Adopting a two-table collection would mean feeding a dummy
         user feature through every item-tower call. Two separate collections
         would avoid it -- at the cost of the planner losing the chance to balance
@@ -150,7 +150,7 @@ def plan_for(
         topology: From :func:`synthetic_topology`.
         batch_size: Feeds the cost model's all-to-all estimate, so it belongs to
             the *training configuration* being planned for rather than to the
-            hardware. 8192 matches what G2 and G3 trained at.
+            hardware. 8192 matches what the two-tower runs trained at.
 
     Returns:
         The chosen :class:`ShardingPlan`. Read it with :func:`placements`.

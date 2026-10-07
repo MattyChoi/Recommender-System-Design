@@ -19,7 +19,7 @@ sense against a target:
 | Assumption | Value |
 |---|---|
 | Users | 10M |
-| Items | ~160K (MIND news catalog) — inside the guide's 100K–2M ANN target, see ADR 0004 |
+| Items | ~160K (MIND news catalog) — inside the usual 100K–2M ANN range, see ADR 0004 |
 | Peak QPS | 500 |
 | p99 end-to-end | < 100 ms |
 | Retrain cadence | daily batch |
@@ -67,8 +67,8 @@ than a segment rate. **User sequence** — the "last 50 clicked items" — is no
 because MIND's `history` is a *constant per-user snapshot*, identical across every
 impression that user makes (verified at zero exceptions over 100,000 users). Used raw it
 would be stale by up to six days. Topping it up with in-window clicks as of each label is
-an array-valued as-of aggregation, and it belongs with the sequential model in Part H
-rather than here.
+an array-valued as-of aggregation, and it belongs with the sequential model rather
+than here.
 
 **`age_hours` is a proxy, and the proxy is the interesting part.** MIND's `news.tsv`
 carries no publication timestamp, so an article's age is measured from its **first
@@ -92,7 +92,7 @@ Naming non-goals up front:
 - No federated or differential-privacy layer.
 - No multi-region serving; single region, single index replica.
 - No cross-surface models; the homepage rail is the only surface.
-- No LLM-based generative retrieval (see §25 of the guide — deliberately deferred).
+- No LLM-based generative retrieval — deliberately deferred.
 
 ## 6. Failure modes
 

@@ -1,10 +1,10 @@
 # Training/serving skew report
 
-**Status: blocked on Part M, deliberately.** Skew is measured by logging the feature
-vectors a *serving* layer actually used and recomputing offline what training would have
-produced for the same entities at the same timestamps. There is no serving layer yet, so
-there is nothing to log and nothing to compare against. This file is sequenced, not
-forgotten.
+**Status: blocked on the serving orchestrator, deliberately.** Skew is measured by
+logging the feature vectors a *serving* layer actually used and recomputing offline what
+training would have produced for the same entities at the same timestamps. There is no
+serving layer yet, so there is nothing to log and nothing to compare against. This file
+is sequenced, not forgotten.
 
 Generated, never hand-written — a hand-maintained skew report is a claim, not a
 measurement.
@@ -24,7 +24,8 @@ item.item_age_hours               6.2         11.4       0.290    SKEW
 because MIND ships no publication timestamp (see `docs/design.md`). A serving layer has no
 such history to hand and will reach for ingestion time instead — so the same article gets
 two different ages, diverging by however long the pipeline lags. That is a real, plausible
-bug rather than a hypothetical, and it is the first thing to check once Part M can log.
+bug rather than a hypothetical, and it is the first thing to check once the orchestrator
+can log.
 
 ## Two more places skew can enter, neither caught by a parity test
 

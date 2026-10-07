@@ -99,9 +99,9 @@ def distributed_backend(device: torch.device) -> str:
     fails at the first collective rather than at initialisation.
 
     Note:
-        At ``world_size == 1`` the all-gather in G5's loss is a no-op on either
-        backend. The reason to initialise a process group on a single device at
-        all is to exercise the gradient-flowing gather -- a plain
+        At ``world_size == 1`` the all-gather in the distributed loss is a no-op
+        on either backend. The reason to initialise a process group on a single
+        device at all is to exercise the gradient-flowing gather -- a plain
         ``dist.all_gather`` detaches, silently training on 1/N of the negatives,
         and a code path that is never entered cannot be tested.
     """

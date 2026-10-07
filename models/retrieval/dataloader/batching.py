@@ -2,8 +2,8 @@
 
 Three things happen per batch that cannot happen once up front: the history is
 randomly truncated, the slate negatives are assembled into columns, and each
-column is tagged with which distribution it was drawn from so G2's correction
-can use the right ``log_q``.
+column is tagged with which distribution it was drawn from so the logQ
+correction can use the right ``log_q``.
 
 No DataLoader workers. ``SplitTensors`` is already resident, so a worker process
 would pickle ~100 MB across a process boundary to produce data that is already

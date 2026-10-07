@@ -16,7 +16,7 @@ rather than a rewrite.
 ``EmbeddingBagCollection.forward`` is all-or-nothing across its tables: it
 indexes the input by every table's feature name, so a batch missing one raises.
 That disqualified it for the two-tower, whose ``encode_item`` must be a function
-of the item id ALONE -- that is what lets the Part J index be precomputed. **A
+of the item id ALONE -- that is what lets the ANN index be precomputed. **A
 ranker has no such call.** It scores (user, item) pairs and therefore always has
 every categorical in hand at once, which is exactly the access pattern a
 collection assumes.

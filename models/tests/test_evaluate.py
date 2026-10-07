@@ -206,9 +206,9 @@ class TestTheReport:
     def test_the_long_tail_row_is_the_rows_a_counting_retriever_cannot_reach(
         self, hits: Hits
     ) -> None:
-        """G3's second column. The edge is not arbitrary: pop@k is exactly zero
-        below it, so this is 'unreachable by counting' rather than a percentile
-        someone chose."""
+        """The long-tail column of the negatives table. The edge is not
+        arbitrary: pop@k is exactly zero below it, so this is 'unreachable by
+        counting' rather than a percentile someone chose."""
         # Bands 0-4 are <26 clicks; band 8 is 501+. Rows 0-4 are in the tail.
         band = np.array([0, 0, 1, 1, 4, 8])
         popularity = np.zeros(6, dtype=bool)

@@ -5,7 +5,7 @@ beside it -- and exactly one of their jobs differs: fitting. Loading the gold
 tables, replaying retrieval into a candidate table, splitting it by user,
 scoring the funnel, pairing against the order retrieval already produced, and
 recording the run are the same work in both, and **they have to stay the same
-work** or the head-to-head that Part K turns on stops being a head-to-head.
+work** or the head-to-head between them stops being a head-to-head.
 
 So that half lives here. A trainer supplies scores and gets a report; if it
 wants a different denominator it has to change this file, where the change is

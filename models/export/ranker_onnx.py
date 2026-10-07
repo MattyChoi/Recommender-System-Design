@@ -149,9 +149,9 @@ def export(servable: ServableRanker, out: Path, batch: int = 4) -> Path:
     """Write the ONNX graph, with a dynamic batch axis.
 
     A fixed batch size would make the artefact usable only at the size it was
-    traced with, and the candidate count per request is not constant -- Part I's
-    blend tops up short source lists, so a request can carry fewer than the
-    configured maximum.
+    traced with, and the candidate count per request is not constant --
+    multi-source blending tops up short source lists, so a request can carry
+    fewer than the configured maximum.
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     example = torch.zeros(batch, len(servable.names), dtype=torch.float32)

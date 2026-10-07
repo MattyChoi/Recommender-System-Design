@@ -1,7 +1,7 @@
 """One bronze row, as it appears on the Kafka topic.
 
 The field names below are taken verbatim from ``recsys.v1.InteractionEvent`` in
-``serving/proto/events.proto``. JSON is what goes on the wire -- Part P's Flink
+``serving/proto/events.proto``. JSON is what goes on the wire -- the Flink
 table declares ``'format'='json'``, and a topic you can read with
 ``kafka-console-consumer`` is worth more during a demo than the bytes saved by
 protobuf. The proto stays the single definition of the field set;
@@ -95,8 +95,8 @@ def to_record(row: dict[str, Any], ingest_ms: int) -> dict[str, Any]:
         "dwell_ms": 0,
         # EMPTY: MIND logs no propensity, and the policy that produced these
         # impressions is undocumented. This is THE reason off-policy evaluation
-        # in Part O has to lean on estimated propensities rather than logged
-        # ones -- worth being able to say out loud.
+        # has to lean on estimated propensities rather than logged ones --
+        # worth being able to say out loud.
         "propensity": 0.0,
         # EMPTY: no device column in the dataset.
         "device": "",

@@ -1,8 +1,8 @@
 """``make hash-bench`` -- the hashing trick, and what its collisions actually cost.
 
 ===================  ====================================================
-``catalogue``        share of ALL items sharing a bucket -- the number the
-                     manual asks for, and the least informative of the three
+``catalogue``        share of ALL items sharing a bucket -- the headline
+                     number, and the least informative of the three
 ``trained``          share of the 7,179 gradient-receiving items sharing a
                      bucket WITH ANOTHER TRAINED ITEM. An untrained neighbour
                      never updates, so it cannot interfere.
@@ -266,9 +266,9 @@ def render(rows: Sequence[Collisions], n_items: int, n_trained: int, dim: int = 
         "",
         "**What is not measured: the recall cost.** Nothing above trains a model with a",
         "hashed table, so nothing above says what a collision does to Recall@100. The",
-        "collision rate is an input to that question, not an answer. G1's gate already",
-        "measured the whole ID table as worth +0.0049 recall on this corpus, which",
-        "bounds how much any of this can matter here.",
+        "collision rate is an input to that question, not an answer. The item-tower",
+        "ablation already measured the whole ID table as worth +0.0049 recall on this",
+        "corpus, which bounds how much any of this can matter here.",
     ]
     return "\n".join(lines) + "\n"
 

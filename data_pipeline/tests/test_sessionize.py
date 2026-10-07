@@ -1,4 +1,4 @@
-"""Sessionization behaviour (guide 5.2).
+"""Sessionization behaviour.
 
 These tests build their own frames, so they run without ``data/`` and without
 a built pipeline. They pin the two decisions encoded in ``sessionize``:

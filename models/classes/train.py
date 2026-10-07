@@ -22,11 +22,12 @@ class Counters:
     Attributes:
         positives: Frequency of the clicked items.
         slate: Frequency of the impression negatives.
-        corrected: False makes every ``log_q`` zero, which is G2's gate --
-            "train with and without the correction". A per-row constant is
-            invisible to softmax, so zeros are exactly "no correction". Living
-            here rather than as a flag threaded through ``fit``, ``run_epoch``
-            and ``train_step`` keeps the thing being ablated in one place.
+        corrected: False makes every ``log_q`` zero, which is the correction's
+            gate -- "train with and without the correction". A per-row constant
+            is invisible to softmax, so zeros are exactly "no correction".
+            Living here rather than as a flag threaded through ``fit``,
+            ``run_epoch`` and ``train_step`` keeps the thing being ablated in
+            one place.
     """
 
     positives: StreamingLogQ

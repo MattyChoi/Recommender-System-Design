@@ -3,7 +3,7 @@
 The item tower reads content vectors on every forward pass, so recomputing them
 per epoch would dominate training time. They are computed once here and cached.
 
-**Two variants, deliberately.** ``vec_title`` matches exactly what F3's content
+**Two variants, deliberately.** ``vec_title`` matches exactly what the content
 baseline tokenises, so the neural content tower can be compared against it with
 the input held fixed. ``vec_title_abstract`` is the better representation and
 what the model should actually use. Caching both turns "is the cold-item gap
@@ -46,7 +46,7 @@ DEFAULT_ENCODER = "BAAI/bge-base-en-v1.5"
 
 # A subcategory with one item is an item-ID embedding wearing a different hat:
 # a free parameter trained by that item alone, and reachable in the
-# content-only arm of G1's ablation, which is meant to have none. 149 of 270
+# content-only arm of the ablation, which is meant to have none. 149 of 270
 # subcategories sit below 25 and cover 1.32% of the catalogue; on the category
 # side the cut takes games (1 item), northamerica (1), middleeast (2) and kids
 # (22), with a clean gap to movies at 672.

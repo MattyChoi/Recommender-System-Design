@@ -54,7 +54,7 @@ def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> 
         spark: Active session.
         settings: The root configuration object.
         variant: Which cached vectors to use. ``vec_title_abstract`` is the
-            better representation; ``vec_title`` is what F3's content baseline
+            better representation; ``vec_title`` is what the content baseline
             tokenises, so it is the one to pass when the comparison needs the
             input held fixed.
 

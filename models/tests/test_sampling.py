@@ -10,7 +10,7 @@ normaliser looks exactly like no correction at all.
 And the prior must survive the decay. Decaying the Laplace mass along with the
 observations means a never-sampled item drifts toward ``log q = -inf``,
 collecting an unbounded correction it earned no evidence for. On this corpus
-that is not hypothetical: C2 measured ~63% of the item table never appearing in
+that is not hypothetical: we measured ~63% of the item table never appearing in
 an impression.
 """
 
@@ -52,7 +52,7 @@ class TestTheDistribution:
     def test_the_prior_does_not_decay_away(self) -> None:
         """A short half-life and a long stream: the floor must hold.
 
-        With the manual's shared decay this value falls without bound.
+        With a shared decay this value falls without bound.
         """
         counter = StreamingLogQ(N_ITEMS, half_life=1.0)
         for _ in range(50):
@@ -66,7 +66,7 @@ class TestTheDecay:
     def test_it_is_per_example_not_per_call(self) -> None:
         """The same number of examples must fade an observation by the same
         factor however they are batched, or the half-life means something
-        different at every batch size -- which is the defect in the manual's
+        different at every batch size -- which is the defect in the naive
         per-step ``decay``.
 
         Note this is NOT the same as two half-batches leaving the same state as
@@ -109,7 +109,7 @@ class TestTheOrdering:
 
 class TestUniformNegatives:
     def test_the_reserved_index_is_never_drawn(self) -> None:
-        """Index 0 is OOV and padding (B2). Drawn as a negative it would teach
+        """Index 0 is OOV and padding. Drawn as a negative it would teach
         the model to push the padding vector away from every user, which is a
         direction with no meaning."""
         device = select_device("cpu")
@@ -149,7 +149,7 @@ class TestTheState:
 
     def test_the_counts_follow_a_device_move(self, counter: StreamingLogQ) -> None:
         """Registered as a buffer so `.to()` moves it, which is what removes the
-        two host round-trips the manual's version does on every step."""
+        two host round-trips the naive version does on every step."""
         assert "observed" in dict(counter.named_buffers())
         device = select_device("cpu")
         assert counter.to(device).observed.device.type == device.type

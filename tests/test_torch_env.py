@@ -1,4 +1,4 @@
-"""Device decisions, and the rule that keeps Part G runnable on both machines.
+"""Device decisions, and the rule that keeps training runnable on both machines.
 
 This project is built on an Apple-silicon Mac and on a 4090 under WSL2, so every
 device-dependent decision lives in ``common/torch_env.py`` and nowhere else. The
@@ -131,9 +131,9 @@ def test_no_module_names_a_device_but_torch_env() -> None:
     """The portability rule, enforced rather than remembered.
 
     A comment asking people to route device choices through ``torch_env`` will
-    not survive Part K. This will: the moment someone debugging on one machine
-    writes ``torch.device("cuda")`` or ``autocast("cuda")`` into a model, the
-    build goes red and names the line.
+    not survive the ranking work. This will: the moment someone debugging on
+    one machine writes ``torch.device("cuda")`` or ``autocast("cuda")`` into a
+    model, the build goes red and names the line.
 
     Comments and docstrings are exempt -- this reads the AST, not the text --
     and a genuinely justified literal can be kept by putting

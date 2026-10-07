@@ -1,6 +1,6 @@
 """The four ways this pooler could be wrong while training perfectly happily.
 
-**Causality, in the right direction.** The manual's snippet, applied to a
+**Causality, in the right direction.** The obvious mask, applied to a
 most-recent-first sequence, gives the OLDEST click the full context and the
 newest click nothing but itself. Nothing errors and the loss still falls. So the
 test does not check that a mask exists -- it perturbs one position at a time and
@@ -48,7 +48,7 @@ ID_DIM = 64  # TwoTower's default, and the width of the history block
 #: at all, survived only on the residual path, and
 #: ``test_the_oldest_click_reaches_the_output`` failed against correct code.
 #:
-#: The project has this failure on record already, from G5: "LayerNorm
+#: The project has this failure on record already: "LayerNorm
 #: normalised away a per-rank input difference", one of three tests that were
 #: green or red for a reason unrelated to their hypothesis. A perturbation test
 #: against a normalised input has to perturb something normalisation keeps.
@@ -102,7 +102,7 @@ class TestCausalDirection:
     def test_a_padding_slot_cannot_reach_the_output(self, pooler: SASRec) -> None:
         """**The test that distinguishes the two mask directions.**
 
-        With the manual's layout the user vector is read from a padding slot, so
+        With the naive layout the user vector is read from a padding slot, so
         writing into padding would change the answer. Here it must not: the
         output comes from the last REAL position and padding is masked.
         """
@@ -117,7 +117,7 @@ class TestCausalDirection:
     def test_the_newest_click_is_not_masked_from_itself(self, pooler: SASRec) -> None:
         """A one-item history must depend on that item.
 
-        Under the manual's direction applied to this layout, position 0 attends
+        Under the naive direction applied to this layout, position 0 attends
         only to itself -- which happens to be right for a length-1 row and wrong
         for every other, so a test using only short rows would pass on a
         backwards mask. This one exists to be read alongside the two above.
@@ -180,7 +180,7 @@ class TestLengthInvariance:
 
 
 class TestWiringIntoTheUserTower:
-    """H2 moved the history projection from AFTER the pool to BEFORE it.
+    """The history projection moved from AFTER the pool to BEFORE it.
 
     The reordering exists so the sequence pooler sees ``id_dim`` columns rather
     than the content table's 768. It is safe only because ``history_proj`` is
@@ -202,7 +202,7 @@ class TestWiringIntoTheUserTower:
         ).eval()
 
     def test_the_projection_commutes_with_the_masked_mean(self) -> None:
-        """**Why H2's reordering leaves the pooled arm's numbers alone.**
+        """**Why that reordering leaves the pooled arm's numbers alone.**
 
         ``proj(mean(v)) == mean(proj(v))`` for a bias-free linear map. Equality
         is to float tolerance, not bit-exact: the two orders sum a different
@@ -235,8 +235,9 @@ class TestWiringIntoTheUserTower:
 
     @pytest.mark.parametrize("use_id", [True, False])
     def test_the_sequence_arm_changes_the_user_embedding(self, use_id: bool) -> None:
-        """Both G1 arms must reach the pooler, or Part H can only be measured on
-        one of them -- and the content-only arm is the one G1 found interesting."""
+        """Both item-tower arms must reach the pooler, or sequence pooling can
+        only be measured on one of them -- and the content-only arm is the one
+        the ablation found interesting."""
         pooled = self._tower(use_id=use_id, use_sequence=False)
         attended = self._tower(use_id=use_id, use_sequence=True)
 

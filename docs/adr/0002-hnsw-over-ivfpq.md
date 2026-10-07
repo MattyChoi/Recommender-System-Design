@@ -5,11 +5,11 @@ number, whose title promised a decision that had not been measured.**
 
 ## Context
 
-Part J built all three candidate indexes over the item tower's 65,238 x 128
-output and swept them: exact (`IndexFlatIP`), a navigable graph
+All three candidate indexes were built over the item tower's 65,238 x 128
+output and swept: exact (`IndexFlatIP`), a navigable graph
 (`IndexHNSWFlat`, M=32, efConstruction=200) and a clustered compressed index
 (`IndexIVFPQ`, nlist=1021, m=32, nbits=8). Full tables in
-[benchmarks.md](../benchmarks.md#the-ann-index-part-j).
+[benchmarks.md](../benchmarks.md#the-ann-index).
 
 Two quantities are both called recall and are not the same. **`agreement`** is
 overlap with exact search's top 100 -- a property of the index. **`recall`** is
@@ -29,7 +29,7 @@ drop candidates nobody was going to click.
 index**, which is what every quality number in this project is measured
 against.
 
-**This overrides Part J's own corpus-level recommendation, deliberately, and
+**This overrides the measured corpus-level recommendation, deliberately, and
 the reason is the design target rather than the measurement.** On MIND-small,
 exact search wins outright: 33.4 MB, 0.51 ms p99, no build step, no parameters
 to tune, exact by construction. A linear scan costs **5.6 ns per item per
@@ -51,7 +51,7 @@ agreement is the cheap side of the trade.
 ## Consequences
 
 **An obligation, not just a footprint: the parameter must be re-tuned on every
-index rebuild.** This is Part J's sharpest operational finding. Agreement is
+index rebuild.** This is the sharpest operational finding here. Agreement is
 reproducible across checkpoints to within 0.001 at every setting, but **what
 that agreement costs in clicks is not** — it moved 7x for HNSW at efSearch=128
 between two seeds and reversed sign for IVF-PQ. An index rebuilt nightly
@@ -68,7 +68,7 @@ converges on exact answers, and why the graph is not a compression technique.
 **IVF-PQ is rejected on measurement, not on principle.** It is 10x smaller
 (3.3 MB) and buys no speed at all here: ~33k QPS flat across every `nprobe`,
 because skipping 98% of a small catalogue does not pay once the lookup-table
-overhead is counted. Its quality result was also the one Part J retracted —
+overhead is counted. Its quality result was also the one retracted —
 significant and positive on one checkpoint, insignificant and negative on the
 next.
 
@@ -85,7 +85,7 @@ cannot name which one answered it cannot be attributed after the fact.
 ## Alternatives considered
 
 **Exact search (`IndexFlatIP`).** Wins on this corpus on every axis that
-matters and is what Part J recommended. Retained as the offline reference and
+matters and is what the sweep picked. Retained as the offline reference and
 as the fallback if the serving index fails to load. Revisit as the serving
 choice if the catalogue stays below ~1M items.
 

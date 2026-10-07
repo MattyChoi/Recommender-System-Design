@@ -26,10 +26,10 @@ from models.layers.sharded_embeddings import (
 )
 from models.layers.sizing import DESIGN_TARGET_ITEMS, table_bytes
 
-#: ``item_map``'s size, measured. The manual's G4 says "160K MIND articles",
-#: which is wrong in the same way ADR 0004 and ``docs/design.md`` are wrong --
-#: and it matters here, because 160K would put the corpus inside the guide's
-#: stated 100K-2M ANN band and 65,238 puts it below the floor.
+#: ``item_map``'s size, measured. A commonly quoted figure is "160K MIND
+#: articles", which is wrong in the same way ADR 0004 and ``docs/design.md``
+#: are wrong -- and it matters here, because 160K would put the corpus inside
+#: the usual 100K-2M ANN band and 65,238 puts it below the floor.
 MIND_ITEMS = 65_238
 MIND_USERS = 94_057
 
@@ -205,7 +205,7 @@ def render(
         "",
         "**The corpus is not in the regime this machinery is for.** MIND-small's",
         f"`item_map` is {MIND_ITEMS:,} rows -- a {table_bytes(MIND_ITEMS, DIM) / 1024**2:.1f} MiB",
-        'table. The manual\'s own G4 text says "160K MIND articles"; the measured',
+        'table. A commonly quoted figure is "160K MIND articles"; the measured',
         "number is less than half that, and below the 100K floor ADR 0004 claims the",
         "corpus sits inside.",
         "",

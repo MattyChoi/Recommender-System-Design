@@ -4,10 +4,10 @@ No broker, no JVM, no built pipeline. The producer was split so that every
 decision worth testing lives in a pure function, and these run in milliseconds
 as a result.
 
-The property that matters most here is DETERMINISM. Part P3 compares a
-streamed aggregate against a batch scan of the same window; if two replays of
-identical input can disagree, a red parity test tells you nothing about
-whether the streaming logic is correct.
+The property that matters most here is DETERMINISM. The replay-parity check
+compares a streamed aggregate against a batch scan of the same window; if two
+replays of identical input can disagree, a red parity test tells you nothing
+about whether the streaming logic is correct.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ def test_zero_lateness_is_a_pass_through() -> None:
 def test_injected_delay_never_exceeds_the_bound() -> None:
     """The bound is the contract with the consumer's watermark.
 
-    Part P's Flink table allows 30 seconds of lateness. A record delayed past
+    The Flink table allows 30 seconds of lateness. A record delayed past
     that is DROPPED, not handled late -- so an injector that can overshoot its
     own maximum would show up downstream as silent data loss.
     """
@@ -171,7 +171,7 @@ def test_arrivals_come_out_in_ingest_order() -> None:
 
 
 def test_the_same_seed_replays_identically() -> None:
-    """Without this, P3's batch/stream parity comparison proves nothing."""
+    """Without this, the batch/stream parity comparison proves nothing."""
     rows = _rows(120, step_seconds=1)
     first = _drive(rows, LatenessInjector(6_000, 0.25, seed=42))
     second = _drive(rows, LatenessInjector(6_000, 0.25, seed=42))

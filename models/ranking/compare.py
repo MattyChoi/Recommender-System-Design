@@ -1,6 +1,6 @@
 """Pair two ranking runs on the same users.
 
-Three comparisons in Part K ended in "the intervals overlap, so nothing can be
+Three ranking comparisons ended in "the intervals overlap, so nothing can be
 said", which is not a fact about the data -- it is a fact about comparing two
 MARGINAL intervals. Between-user variance dwarfs the effect: some users are far
 easier to serve than others, and that spread is much larger than the two or

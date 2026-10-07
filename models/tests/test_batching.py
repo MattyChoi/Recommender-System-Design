@@ -1,8 +1,8 @@
 """Batch assembly, and the two things that would poison training silently.
 
 The first is index 0 reaching the candidate pool. It is the reserved OOV row
-(B2) with a permanently zero embedding, so as a column it is a candidate every
-user is scored against and no user can ever be near. Padding the slate negatives
+with a permanently zero embedding, so as a column it is a candidate every user
+is scored against and no user can ever be near. Padding the slate negatives
 would put it there in every batch that had a short slate.
 
 The second is history dropout running at validation. It would shorten exactly
@@ -85,8 +85,9 @@ class TestTheCandidatePool:
         assert bool(batch.neg_is_slate[:4].all())
 
     def test_the_uniform_arm_appends_and_labels_its_columns(self, split: SplitTensors) -> None:
-        """G3's '+ mixed uniform negatives' row. Extra columns, never marked as
-        slate, so they take the closed-form log_q rather than the counter's."""
+        """The '+ mixed uniform negatives' row of the negatives table. Extra
+        columns, never marked as slate, so they take the closed-form log_q
+        rather than the counter's."""
         batch = make_collate(split, N_ITEMS, uniform_negs=3, generator=_generator())(
             list(range(ROWS))
         )

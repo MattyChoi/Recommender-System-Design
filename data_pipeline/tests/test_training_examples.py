@@ -1,4 +1,4 @@
-"""Point-in-time feature attachment and cold-start handling (guide D2).
+"""Point-in-time feature attachment and cold-start handling.
 
 Frames are built inline, so none of this needs a built corpus. The cold-start
 assertions matter more than they look on this dataset: 46.2% of the articles
@@ -96,7 +96,7 @@ def test_a_warm_item_reads_only_its_past(
 def test_a_cold_item_gets_the_category_prior_not_a_zero_rate(
     labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
-    """The distinction the guide is specific about.
+    """A distinction worth being specific about.
 
     N2 has no feature bucket anywhere, so every item column comes back null.
     Zero-filling the RATE would tell the ranker this article has a measured
@@ -142,7 +142,7 @@ def test_the_joins_never_multiply_labels(
 def test_context_features_come_from_the_label_timestamp(
     labels: DataFrame, series: DataFrame, users: DataFrame, affinity: DataFrame
 ) -> None:
-    """Cheap, and the only D1 group available without another table."""
+    """Cheap, and the only context-feature group available without another table."""
     got = _rows(attach_point_in_time_features(labels, series, users, affinity))["N1"]
 
     assert got["hour_of_day"] == 12

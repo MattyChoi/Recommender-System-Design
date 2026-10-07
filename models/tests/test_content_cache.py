@@ -12,8 +12,8 @@ And the floor is an ablation-integrity control, not a size optimisation. On this
 catalogue 91 of 270 subcategories have fewer than five items and at least 25 are
 singletons. A singleton subcategory embedding is trained by one item and read by
 that item alone -- a per-item free parameter, which is exactly what
-``use_id=False`` is supposed to remove in G1's content-only arm. The floor folds
-those to 0, where ``padding_idx`` zeroes them.
+``use_id=False`` is supposed to remove in the content-only ablation arm. The
+floor folds those to 0, where ``padding_idx`` zeroes them.
 """
 
 from __future__ import annotations

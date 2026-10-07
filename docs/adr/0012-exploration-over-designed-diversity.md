@@ -4,11 +4,11 @@
 
 ## Context
 
-Part L built the policy layer over the ranker's top 100: MMR, per-category
+The policy layer was built over the ranker's top 100: MMR, per-category
 caps, a freshness boost, epsilon-greedy exploration with logged propensities,
 and a Redis-backed Bloom seen-list. Every arm shares one fitted booster, so the
 table measures policy rather than model variance. Full numbers in
-[ranking.md](../ranking.md#the-policy-layer-part-l).
+[ranking.md](../ranking.md#the-policy-layer).
 
 **The ceiling was measured before any policy was built.** A re-ranker cannot
 serve what retrieval never proposed, so coverage is bounded by the candidate

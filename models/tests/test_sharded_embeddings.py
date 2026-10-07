@@ -1,4 +1,4 @@
-"""G4's module, and the four ways it could be wrong while looking right.
+"""The sharded table, and the four ways it could be wrong while looking right.
 
 **The first is parity.** The whole claim this module supports is negative -- "at
 65K items TorchRec is not worth its complexity, and here is the number." That
@@ -18,7 +18,7 @@ types on an accelerator and four on CPU. Planning a GPU design target against
 ``"cpu"`` deletes row-wise from the search space, returns a perfectly valid plan,
 and the report concludes the planner never chooses row-wise.
 
-**The fourth is that the report might be vacuous.** G4c's deliverable is a plan
+**The fourth is that the report might be vacuous.** Its deliverable is a plan
 that CHANGES as the constraint changes. If the planner returns ``table_wise``
 whatever topology it is handed, there is nothing to report -- so a test checks
 the decision can move at all, before a sweep is built on the assumption that it
@@ -138,7 +138,7 @@ class TestParityWithNnEmbedding:
         table's feature name, so asking for the item embedding alone is not
         expressible. ``nn.Embedding`` has no such coupling, and
         ``TwoTower.encode_item`` is a function of ``item_idx`` alone -- which is
-        the property the whole Part J precomputation rests on. Pinned here
+        the property the whole ANN-index precomputation rests on. Pinned here
         because it is an argument in the writeup, not an incidental.
         """
         collection = build_ebc(N_ITEMS, N_USERS, dim=DIM, device=torch.device("cpu"))
@@ -226,7 +226,7 @@ class TestThePlan:
 
     @pytest.mark.slow
     def test_a_table_too_large_for_one_device_is_split(self) -> None:
-        """**The test that stops G4c being vacuous**, and the size is DERIVED.
+        """**The test that stops a vacuous report**, and the size is DERIVED.
 
         The report's whole content is which sharding type the planner picks. If
         the answer is ``table_wise`` whatever it is handed, a sweep prints the
@@ -264,14 +264,14 @@ class TestTableBytes:
 
     def test_this_corpus_table_is_under_17_mb(self) -> None:
         """The other half of the same sentence: 65,239 x 64 x fp32 is nothing,
-        which is why G1's gate could measure the table as near-worthless without
-        anyone noticing a memory problem first."""
+        which is why the ablation's gate could measure the table as
+        near-worthless without anyone noticing a memory problem first."""
         assert table_bytes(65_239, 64) < 17 * 1024**2
 
     def test_optimiser_state_is_excluded_and_that_is_the_point(self) -> None:
         """Adam carries two moments per parameter, so a fused table's real
         footprint is ~3x this. Quoting parameter bytes as "the memory" is the
         usual way an embedding table's cost gets understated threefold, and
-        G4d's "memory saved" number is where that would bite."""
+        the "memory saved" number is where that would bite."""
         assert table_bytes(1000, 64) == 1000 * 64 * 4
         assert table_bytes(1000, 64, bytes_per_element=2) == 1000 * 64 * 2

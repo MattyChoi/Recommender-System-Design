@@ -14,12 +14,12 @@ latency and throughput.
 
 ## Per-source contribution and leave-one-out ablations
 
-`TODO` -- Part I. The three-arm item-tower ablation (ID / content / both) in
-[retrieval.md](retrieval.md) is the closest thing that exists.
+`TODO` -- the blending work. The three-arm item-tower ablation (ID / content /
+both) in [retrieval.md](retrieval.md) is the closest thing that exists.
 
 ---
 
-# Embedding tables (Part G4)
+# Embedding tables
 
 **Hardware: RTX 4090, 24,564 MiB, WSL2 · torch 2.13.0+cu130 · torchrec 1.8.0 ·
 fbgemm-gpu 1.8.0.** Requires `uv sync --extra sharded`.
@@ -31,7 +31,7 @@ collective runs, no throughput is observed. Those numbers are a cost model's
 prediction. `make hash-bench` measures a real hash over the real catalogue but
 trains nothing. Only the two-rank test at the foot of this page runs anything.
 
-## G4c -- when the planner starts splitting
+## When the planner starts splitting
 
 `make shard-plan` · dim 64, fp32, batch 8192, compute device `cuda`, storage
 reservation fixed at 15%.
@@ -78,11 +78,11 @@ skewed, and TorchRec can take skew through `ParameterConstraints`. Unmodelled he
 ### What this says about the project
 
 **MIND-small is 1,312x below the crossover.** The `item_map` is 65,238 rows --
-a 15.9 MiB table. The Field Manual's G4 text says "160K MIND articles"; the
+a 15.9 MiB table. A commonly quoted figure is "160K MIND articles"; the
 measured number is less than half that, and below the 100K floor ADR 0004 claims
 the corpus sits inside. Same wrong figure as `docs/design.md` lines 22 and 34.
 
-**The manual's own 2M design target is still 43x below it.** Building for the
+**Even a 2M design target is still 43x below it.** Building for the
 design target demonstrates the mechanism; it does not produce a decision. Every
 2M row above is `table_wise`, one shard, one rank.
 
@@ -93,7 +93,7 @@ from **zero recall** while measuring it at **0.0037 of cold-band recall to the
 bad**. That gate reads +0.0049 overall, against a between-run sd of 0.0103; see
 [retrieval.md](retrieval.md#seed-variance-and-what-it-costs-this-page).
 
-## G4d -- the hashing trick
+## The hashing trick
 
 `make hash-bench` · blake2b over the original string ids, dim 64, fp32.
 **65,238 catalogue items, of which 7,179 (11.0%) ever receive a gradient.**
@@ -110,7 +110,7 @@ Full table: **15.9 MiB**.
 
 Three denominators, because "the collision rate" is three different questions:
 
-- **`catalogue`** -- every item sharing a bucket. What the manual asks for.
+- **`catalogue`** -- every item sharing a bucket. The conventional choice.
 - **`trained`** -- of the 7,179 gradient-receiving items, those sharing with
   *another trained item*. An untrained neighbour never updates, so it cannot
   interfere.
@@ -166,7 +166,7 @@ that question, not an answer. The item-tower gate bounds how much it could matte
 on this corpus: the entire ID table is worth +0.0049 at the most, and that delta
 is inside seed noise.
 
-## G4e -- what actually ran
+## What actually ran
 
 `models/tests/test_sharded_distributed.py`, two gloo ranks on CPU, spawned.
 
@@ -203,7 +203,7 @@ embedding is wanted. Asking for one table's output alone is not expressible.
 
 That lands on the property this project is built around.
 `TwoTower.encode_item` is a function of `item_idx` **alone**, which is what lets
-the Part J index be precomputed as `encode_item(arange(1, n_items+1))`. A
+the ANN index be precomputed as `encode_item(arange(1, n_items+1))`. A
 two-table collection would force a dummy user feature through every item-tower
 call. Two separate collections avoid it -- at the cost of the planner losing the
 chance to balance both tables against each other, which is most of the reason to
@@ -212,12 +212,12 @@ scale**, alongside the unsupported +0.0049, the 15.9 MiB, and the 1,312x.
 
 ---
 
-# Sequence pooling (Part H3)
+# Sequence pooling
 
 **Hardware: RTX 4090, 24,564 MiB, WSL2.** What the SASRec user-tower pooler costs
 to train and to serve, against the mean pooler it replaces. Quality -- which is
-what actually decided H3 -- is in
-[retrieval.md](retrieval.md#sequence-pooling-part-h).
+what actually decided the choice -- is in
+[retrieval.md](retrieval.md#sequence-pooling).
 
 ## Serving: per-request user encode
 
@@ -308,9 +308,9 @@ these do not.
 
 ## Latency: before and after optimization
 
-`TODO` -- Part M. `docs/design.md` carries the 90 ms budget with the `Actual`
-column empty, deliberately: a budget derived from measurements already taken is a
-description, not a budget.
+`TODO` -- the serving orchestrator. `docs/design.md` carries the 90 ms budget
+with the `Actual` column empty, deliberately: a budget derived from measurements
+already taken is a description, not a budget.
 
 The user-encode figures above are **one component** of that budget, not a draft
 of it. They exclude the feature fetch, the ANN search and the network, which are
@@ -318,14 +318,14 @@ where a 90 ms budget is actually spent.
 
 ---
 
-# The ANN index (Part J)
+# The ANN index
 
 **Hardware: RTX 4090 host, faiss-cpu 1.15.1 · 65,238 items x 128d · 19,006
 queries · nlist=1021, m=32, nbits=8 · HNSW M=32, efConstruction=200.**
 
 Everything here is **measured**: real indexes, real searches, real clocks. The
 quality side -- and one retracted finding -- is in
-[retrieval.md](retrieval.md#the-ann-index-part-j).
+[retrieval.md](retrieval.md#the-ann-index).
 
 ## The sweep
 
@@ -423,7 +423,7 @@ the seen filter buys the most coverage at 45x exploration's price.
 
 ---
 
-# The seen-list (Part L)
+# The seen-list
 
 **Redis 7.4.11-alpine, `redis://localhost:6379/1` · `make seen-bench` for the
 arithmetic, `make rerank RERANK_ARGS="... --seen"` for the live figures.**

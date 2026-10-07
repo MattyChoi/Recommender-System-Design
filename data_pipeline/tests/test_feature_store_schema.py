@@ -163,7 +163,7 @@ def test_the_feature_service_covers_every_batch_view() -> None:
 
 
 def test_the_feature_service_excludes_the_unwritten_push_view() -> None:
-    """user_realtime has no producer until Part Q's Flink job exists."""
+    """user_realtime has no producer until the streaming Flink job exists."""
     served = {projection.name for projection in ranker_v1.feature_view_projections}
 
     assert "user_realtime" not in served

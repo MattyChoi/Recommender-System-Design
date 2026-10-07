@@ -4,8 +4,8 @@
 ``meta`` tensors, with no kernel executed and no collective performed. Every
 number it prints is TorchRec's cost model's opinion. That is a legitimate thing
 to report and it is not a measurement, so something has to establish that the
-plan it produces corresponds to a module that runs at all -- otherwise G4's whole
-deliverable is a spreadsheet.
+plan it produces corresponds to a module that runs at all -- otherwise the whole
+sharding deliverable is a spreadsheet.
 
 The property worth testing is the one that only exists with two processes: **a
 rank that does not hold a table still gets the right vector back.** Under

@@ -22,9 +22,9 @@ class StreamingLogQ(nn.Module):
         n_items: Catalogue size. The table is ``n_items + 1`` for the reserved
             OOV row.
         half_life: Examples after which an observation carries half its weight.
-        prior: Laplace pseudo-count, held OUT of the decay. The manual seeds the
-            counts at one and decays everything, so the smoothing mass
-            evaporates and a never-sampled item drifts toward log q = -inf,
+        prior: Laplace pseudo-count, held OUT of the decay. Seeding the counts
+            at one and decaying everything would make the smoothing mass
+            evaporate and a never-sampled item drift toward log q = -inf,
             earning an enormous correction on no evidence.
     """
 

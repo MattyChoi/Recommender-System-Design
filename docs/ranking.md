@@ -22,7 +22,7 @@ leakage through a repeated user impossible.
 > `n_sources` — at the cost of no slot. The confirmation is exact: the candidate
 > ceiling over all 19,006 requests is **0.3776**, which is `two_tower` alone at
 > 100 in [retrieval.md](retrieval.md#the-five-alone), to four decimals. This is
-> Part I's finding carried forward — at a fixed budget no blend beat the
+> the blending finding carried forward — at a fixed budget no blend beat the
 > two-tower alone — but it means "four sources" here describes the feature
 > table, not the pool.
 
@@ -217,9 +217,9 @@ Those differ by the candidate pool, and a pool is a denominator.
 
 > ⚠️ An earlier version of this table used equal-width buckets and put 286,173
 > of 286,200 rows in `[0.00, 0.10)`. The diagram collapsed to a single point
-> and looked like flawless calibration. The manual asks for the rate "by
-> decile" and means quantile bins; with them the calibrator's resolution is 10
-> distinct buckets and the deciles track observed closely.
+> and looked like flawless calibration. Reporting the rate "by decile" means
+> quantile bins; with them the calibrator's resolution is 10 distinct buckets
+> and the deciles track observed closely.
 
 ---
 
@@ -286,12 +286,12 @@ Nothing on this page licenses a choice of α, β, γ.
 
 ---
 
-## The policy layer (Part L)
+## The policy layer
 
 Ranking optimises an item. Re-ranking optimises the **slate**, over the top 100
 the ranker scored. Four policies, one fixed booster shared by every arm — a
 refitted ranker per row would let model variation into a table that claims to
-measure policy, and Part K measured that leak at up to 0.0010 NDCG.
+measure policy, and we measured that leak at up to 0.0010 NDCG.
 
 ### First, whether there is anything to recover
 
@@ -432,7 +432,7 @@ coverage-buyer and the wrong instrument for buying coverage — **a correctness
 requirement whose diversity gain is a side effect.** Sizing, the real memory
 cost (2.1× the payload bits, once Redis key overhead is counted), the
 saturation cliff and the TTL-versus-guarantee trade are in
-[benchmarks.md](benchmarks.md#the-seen-list-part-l).
+[benchmarks.md](benchmarks.md#the-seen-list).
 
 ---
 

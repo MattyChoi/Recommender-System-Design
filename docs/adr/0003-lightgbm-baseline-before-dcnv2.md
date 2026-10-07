@@ -23,8 +23,9 @@ candidate rows, split by user into 13,284 fitting and 5,722 held-out requests.
 quota all 100 slots go to the first source, so the pool is `two_tower`'s top
 100; the others contribute `trending_rank` and `n_sources` and consume no slot.
 The pool's recall over all 19,006 requests is 0.3776 — `two_tower` alone at 100
-in `docs/retrieval.md`, to four decimals. That is Part I's decision carried
-forward, and it is why a ranking arm's name should not be read as a blend.
+in `docs/retrieval.md`, to four decimals. That is the blending stage's
+decision carried forward, and it is why a ranking arm's name should not be
+read as a blend.
 
 ## Decision
 

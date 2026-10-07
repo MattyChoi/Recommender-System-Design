@@ -1,6 +1,6 @@
 """``make compare`` -- the paired test, on two real models over the same users.
 
-E3 built :func:`paired_bootstrap` and nothing called it. The machinery was
+:func:`paired_bootstrap` was built and nothing called it. The machinery was
 tested and then never pointed at a model, which is how a project ends up
 quoting a 0.0006 difference as though someone had checked it.
 

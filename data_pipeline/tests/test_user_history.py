@@ -3,7 +3,7 @@
 Every test here exists because the failure it describes is **silent**. A history
 that contains the impression's own click produces no error, no null, and no
 schema change -- it produces a two-tower that looks extraordinary offline and
-collapses the moment it is served, which is the exact failure mode Part D says
+collapses the moment it is served, which is the exact failure mode
 point-in-time correctness exists to prevent.
 
 The central case is two impressions at the same second. That is not
@@ -13,7 +13,7 @@ have leaked across precisely those 44 impressions -- far too few to move a
 metric, which is what would have made it permanent.
 
 Timestamps here are naive and read as UTC because the root ``conftest.py`` sets
-``TZ=UTC`` and calls ``time.tzset()`` before Spark starts (B4).
+``TZ=UTC`` and calls ``time.tzset()`` before Spark starts.
 """
 
 from __future__ import annotations
@@ -140,7 +140,7 @@ class TestSnapshot:
     def test_it_collapses_to_one_row_per_user(
         self, spark: SparkSession, item_map: DataFrame
     ) -> None:
-        """bronze/history is one row per impression and C4 measured the string
+        """bronze/history is one row per impression and the string was measured
         as constant per user, so this must not fan out -- a duplicated snapshot
         would multiply every downstream join."""
         history = self._history(spark, [(1, "U1", "N1 N2"), (2, "U1", "N1 N2"), (3, "U1", "N1 N2")])
@@ -187,7 +187,7 @@ class TestAssembly:
     def test_in_window_clicks_lead_the_snapshot(
         self, parts: tuple[DataFrame, DataFrame, DataFrame]
     ) -> None:
-        """C4 measured the snapshot as predating the log window, so anything
+        """The snapshot was measured as predating the log window, so anything
         in-window is newer than all of it. Ordering them the other way would
         make the cap discard the freshest signal first."""
         got = {

@@ -122,8 +122,8 @@ def bin_edges(
     calibrated score is almost always a small number. Equal-width buckets put
     99.99% of rows in ``[0.0, 0.1)`` and the diagram becomes a single point --
     which is what the first version of this printed, and it looked like perfect
-    calibration rather than like no resolution. The manual asks for the rate
-    "by decile", which is this.
+    calibration rather than like no resolution. We want the rate "by decile",
+    which is this.
 
     Duplicate edges are collapsed, so a step-function calibrator with few
     distinct outputs yields fewer buckets than requested. That is not a

@@ -9,8 +9,9 @@ is the reason that mistake is detectable at all: it establishes that a per-row
 shift changes nothing, so a correction that changes nothing is a per-row shift.
 
 The second is the positive column. ``arange(B)`` is correct in one process and
-on rank 0, and wrong on every other rank once G5 gathers item embeddings across
-workers -- each row then trains against another rank's item as its positive.
+on rank 0, and wrong on every other rank once distributed training gathers item
+embeddings across workers -- each row then trains against another rank's item as
+its positive.
 Single-GPU development never sees it.
 
 The third is the duplicate mask. Once the positive can sit off-diagonal, "the
@@ -115,7 +116,7 @@ class TestThePositiveColumn:
     def test_an_offset_positive_is_honoured(
         self, pair: tuple[torch.Tensor, torch.Tensor], other_items: torch.Tensor
     ) -> None:
-        """G5's gathered case, reproduced in one process.
+        """The distributed gathered case, reproduced in one process.
 
         An all-gather concatenates every worker's items, so rank 1's positives
         land at columns 3..5 while rank 0's occupy 0..2. Softmax does not care

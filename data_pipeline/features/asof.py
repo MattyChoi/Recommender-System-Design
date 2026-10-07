@@ -69,7 +69,8 @@ def asof_join(
     Args:
         labels: Rows to enrich; must contain ``join_key`` and ``label_ts``, and
             must NOT already carry any of the feature columns.
-        features: Time series from D1; must contain ``join_key`` and ``feat_ts``.
+        features: Time series from the feature groups; must contain ``join_key``
+            and ``feat_ts``.
         join_key: Join key, or several. ``"item_id"``, ``"user_id"``, and
             ``["user_id", "category"]``
 

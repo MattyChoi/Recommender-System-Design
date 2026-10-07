@@ -8,7 +8,7 @@ a renamed column, a narrowed type, a window that wrote nothing.
 Skew is the gap between what a SERVING system computed and what training would
 have computed for the same entity at the same instant. It lives in the serving
 implementation's clock, its timezone handling and its fallbacks, none of which
-exist yet. That report is M5, and it reads docs/skew_report.md. This one writes
+exist yet. That report reads docs/skew_report.md. This one writes
 docs/materialization_parity.md and must never be confused for it.
 
 Usage:
@@ -199,7 +199,7 @@ def _render(results: list[dict[str, Any]], start: datetime, end: datetime) -> st
         "**This is not the skew report.** Both sides below are offline reads: the gold",
         "series, and what Feast materialised from it. It tests Feast, the TTLs and the",
         "entity-key encoding. The online/offline skew report needs a serving layer and",
-        "its impression log; it is M5 and it writes `docs/skew_report.md`.",
+        "its impression log; it writes `docs/skew_report.md`.",
         "",
         f"Window: `{start.isoformat()}` to `{end.isoformat()}` · "
         f"float tolerance: rel_tol={_REL_TOL:g}",

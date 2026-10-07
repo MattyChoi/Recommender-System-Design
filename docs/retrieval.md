@@ -49,7 +49,7 @@ right one. The ~0.32 gap to the oracle is almost entirely "what is popular right
 now", which the item tower **deliberately cannot see** -- no `item_ctr_smoothed`,
 no `item_age_hours`, because an embedding that moves hourly is an ANN index that
 must be rebuilt hourly. **That gap is the measured price of a static index**, and
-it is the argument for Part I's blending.
+it is the argument for multi-source blending.
 
 Note also that "65,238 candidates" overstates the task by ~54x: only **1,205
 distinct articles are clicked in the window at all**, and 98.9% of clicks fall in
@@ -80,11 +80,11 @@ represent a brand-new article.
 `both - ID only`: **+0.0290** [+0.0232, +0.0322].
 `both - content only`: **+0.0049** [+0.0008, +0.0092].
 
-> ⚠️ **The second of those two deltas does not survive reseeding.** Part H
-> measured run-to-run variance for the first time: sigma = 0.0073 across four
-> seeds of the `both` arm, so a difference between two independently trained
-> models carries sd ~ 0.0103. +0.0049 is half of one sigma, and the arm means
-> over seeds put content-only *ahead*. See
+> ⚠️ **The second of those two deltas does not survive reseeding.** We measured
+> run-to-run variance for the first time during the sequence work:
+> sigma = 0.0073 across four seeds of the `both` arm, so a difference between
+> two independently trained models carries sd ~ 0.0103. +0.0049 is half of one
+> sigma, and the arm means over seeds put content-only *ahead*. See
 > [Seed variance](#seed-variance-and-what-it-costs-this-page) at the foot of this
 > page. The `both - ID only` delta at +0.0290 is ~2.8x that sd and stands.
 
@@ -117,8 +117,8 @@ and the sign flips between them are not interpretable.
 
 **A confound, stated rather than corrected.** The content-only arm carries an
 extra `history_proj` (768x64, bias-free) that the others do not -- the deliberate
-capacity-parity choice from G1b, so every arm feeds the user tower the same
-width.
+capacity-parity choice made for this ablation, so every arm feeds the user tower
+the same width.
 
 **This is a measured challenge to ADR 0005** ("embed the full catalogue, accept
 that ~63% of rows never train"). Those rows are not merely idle; they are harmful
@@ -151,10 +151,9 @@ claimed the three thinnest bands were better without it; all three intervals
 contain zero. Do not quote a per-slice delta before its interval.
 
 **The effect grows monotonically with popularity, to a 3x gap at 501+.** This is
-the manual's own mechanism landing where the mechanism points: SS9.4's stated
-reason for the correction is that in-batch negatives are drawn proportional to
-popularity, so uncorrected the model under-ranks popular items. **0.3187 at 501+
-is that sentence, measured.**
+the mechanism landing where it points: the reason for the correction is that
+in-batch negatives are drawn proportional to popularity, so uncorrected the
+model under-ranks popular items. **0.3187 at 501+ is that sentence, measured.**
 
 **Below 6 clicks -- 7,320 rows, 38.5% of validation -- this configuration shows
 no effect in either direction.** That is a statement about this pool width, not
@@ -166,7 +165,7 @@ Eight of the nine significant results are enormous relative to their width. The
 6-10 band is the marginal one (lower bound +0.0014), so the honest phrasing is
 "the effect begins somewhere around ten clicks".
 
-**The correction also protects the geometry**, which the manual does not claim:
+**The correction also protects the geometry**, which is not usually claimed:
 the uncorrected arm's item effective rank troughs at **2.7** against the
 corrected arm's **5.2**, and it early-stopped at 6 epochs instead of 10.
 
@@ -174,7 +173,7 @@ corrected arm's **5.2**, and it early-stopped at 6 epochs instead of 10.
 
 ## The negative-source table
 
-Four of the manual's five rows, same settings throughout. Row 4 (mined hard
+Four of the five standard rows, same settings throughout. Row 4 (mined hard
 negatives from ranks 50-500) is **deferred with a reason**: mining from a
 retriever whose served universe is ~900 items would sample ranks 50-500 from that
 same narrow set.
@@ -230,7 +229,7 @@ Slate against uniform, both at 40,960 columns, paired per user:
 > [Seed variance](#seed-variance-and-what-it-costs-this-page).
 
 **The gift is worth more in the tail than in aggregate** -- the one place it was
-supposed to be worth something. SS9.4 offers slate negatives as free hard
+supposed to be worth something. Slate negatives are pitched as free hard
 negatives; the measurement says they are also a **support** correction, because a
 slate samples what was plausible *for that request* rather than the catalogue. It
 loses in 101-500, where uniform's catalogue-wide support is the better teacher.
@@ -240,7 +239,7 @@ trained model, a stale index and a rank floor to dodge unlabelled positives. MIN
 logs impressions, so the non-clicked items of each slate were **actually seen and
 actually declined**.
 
-### The interaction -- the strongest result Part G produced
+### The interaction -- the strongest result the two-tower work produced
 
 **The logQ ablation reverses sign in the long tail when the negatives change.**
 
@@ -262,7 +261,7 @@ between 26 and 50 clicks.
 hardest, so the model must work harder on exactly the rows whose answer is
 popular -- and it pays for that out of the rare rows. **logQ reallocates capacity
 from rare items to popular ones.** It is not a tail-fairness correction, and
-SS9.4's prediction that it "should measurably help the long tail" has it
+the common prediction that it "should measurably help the long tail" has it
 backwards.
 
 **Why the effect hides at K=4.** With 32,768 real impression negatives in the
@@ -274,21 +273,21 @@ null.
 -0.0831 and +0.7642 are 8x and 74x the between-run sd. Sign reversals of that
 size are not a seed.
 
-### Row 1 is a Part I candidate, not a loser
+### Row 1 is a blending candidate, not a loser
 
 `both-nologq-n0u0-b8192e10lr0.001-c7ba57fa88a70bd7` posts the **worst overall
 recall in the table (0.1931) and the best long-tail recall in the project
-(0.0875, 2x the next best)**. Every other arm is a popularity machine. Part I
-blends retrievers, and this is the one with something different to contribute --
-it would never have been kept on its headline number.
+(0.0875, 2x the next best)**. Every other arm is a popularity machine. The
+blend combines retrievers, and this is the one with something different to
+contribute -- it would never have been kept on its headline number.
 
 ---
 
-## Sequence pooling (Part H)
+## Sequence pooling
 
-The user tower reduces a click history to one vector. Until Part H it did that by
-**mean-pooling** the history's item vectors. H replaces the reduction with
-**SASRec** -- causal self-attention over the sequence, read out at the newest
+The user tower reduces a click history to one vector. Until the sequence work it
+did that by **mean-pooling** the history's item vectors. **SASRec** replaces the
+reduction -- causal self-attention over the sequence, read out at the newest
 position -- and changes nothing else. Same item tower, same loss, same negatives,
 same split, same metric. `use_sequence` is the only flag that moves, so the
 head-to-head differs **only in how the history is reduced**.
@@ -311,8 +310,8 @@ under every condition tried.
 | content | SASRec 8x6 | 100 | 27 | 0.1219 |
 
 **Every mean-pooled run is above 0.36. Every attended run is below 0.13.** The
-seed spread that undoes two Part G gates is an order of magnitude too small to
-be in play here; `--` marks a run whose epoch count was not recorded.
+seed spread that undoes two of the two-tower gates is an order of magnitude too
+small to be in play here; `--` marks a run whose epoch count was not recorded.
 
 ### Three things it is not
 
@@ -356,7 +355,7 @@ window.
 ### The cost of losing
 
 Measured on the `both` arm, RTX 4090 -- see
-[benchmarks.md](benchmarks.md#sequence-pooling-part-h3) for the method:
+[benchmarks.md](benchmarks.md#sequence-pooling) for the method:
 
 | | mean pool | SASRec | ratio |
 | --- | ---: | ---: | ---: |
@@ -375,8 +374,8 @@ corpora with genuine session structure, where the premise above holds. Nothing
 here licenses the claim that sequence models are weak; it says this corpus does
 not contain what one needs.
 
-**It is a refutation of the manual's H3 prediction** that a sequence pooler
-improves over a mean pooler, on this corpus, at this history length, with this
+**It is a refutation of the common prediction** that a sequence pooler improves
+over a mean pooler, on this corpus, at this history length, with this
 inter-event gap.
 
 **The implementation is stock.** `nn.TransformerEncoderLayer(norm_first=True)`,
@@ -391,13 +390,13 @@ positional embedding initialised at `N(0, 1)` against item vectors at 0.125 --
 the third instance of this class of bug in the project. Normalising both blocks
 moved recall from **0.1081 to 0.1126**. Real, and nowhere near the gap.
 
-**SASRec stays in the tree, off by default.** `use_sequence=False`. Part I blends
-retrievers, and an arm that fails this differently from the others is worth
-having on hand -- the same argument that kept the no-logQ arm.
+**SASRec stays in the tree, off by default.** `use_sequence=False`. The blend
+combines retrievers, and an arm that fails this differently from the others is
+worth having on hand -- the same argument that kept the no-logQ arm.
 
 ---
 
-## Multi-source blending (Part I)
+## Multi-source blending
 
 Five sources, each meant to cover a failure mode the others miss. Every one of
 them already existed as a **ranker** -- something that reorders the ~37 items MSN
@@ -420,10 +419,10 @@ a story about a source that is better somewhere; whatever blending is worth has
 to come from candidates the others find *and it does not*.
 
 Three of these are controls that came back exactly where they were predicted,
-which is how we know the plumbing is right: `trending` reproduces Part G's
-`pop@100` to four decimals, `two_tower` reproduces its own checkpoint, and
-`recent` recovered **199.6 of the 200 re-clicks** the Part G leak check counted
--- its theoretical maximum, and still worthless.
+which is how we know the plumbing is right: `trending` reproduces the two-tower
+run's `pop@100` to four decimals, `two_tower` reproduces its own checkpoint, and
+`recent` recovered **199.6 of the 200 re-clicks** the two-tower leak check
+counted -- its theoretical maximum, and still worthless.
 
 **`reach` and `mean pool` are reported because four of the five run short.** A
 source with no edge for this user considered the whole catalogue and had nothing
@@ -451,7 +450,7 @@ training buys is not the features, it is the mapping -- the nearest article by
 content is not the article you read next. This is the cleanest measurement in
 the project of what the towers actually learn.
 
-### The contribution table -- Part I's gate
+### The contribution table -- the blending gate
 
 Over all five sources, full top-100 each:
 
@@ -511,22 +510,22 @@ even five-way split (0.2589), not two sources at 50/50 (0.3569), not 80/20
 > dropped: together they add 0.012 recall for 191 extra candidates, and at any
 > fixed slot budget they are net negative.
 
-Which removes three of the manual's five sources, with a measurement for each.
+Which removes three of the five candidate sources, with a measurement for each.
 
-**What this is not.** The manual's I3 measures the end-to-end **NDCG@10** loss
-per removed source. That needs the ranker, so this is Recall@100 throughout --
-the retrieval-side substitute. A source that contributes poor candidates cheaply
-could still earn its place once a ranker can discard them, and nothing here
-rules that out. Revisit after Part K.
+**What this is not.** The measurement that settles this is the end-to-end
+**NDCG@10** loss per removed source. That needs the ranker, so this is
+Recall@100 throughout -- the retrieval-side substitute. A source that contributes
+poor candidates cheaply could still earn its place once a ranker can discard
+them, and nothing here rules that out. Revisit once the ranker is fitted.
 
 ---
 
-## The ANN index (Part J)
+## The ANN index
 
 Three index types over the item tower's 65,238 x 128 output: exact
 (`IndexFlatIP`), a navigable graph (`IndexHNSWFlat`) and a clustered, compressed
 index (`IndexIVFPQ`). Full sweep, latency and memory in
-[benchmarks.md](benchmarks.md#the-ann-index-part-j); this page is what it cost
+[benchmarks.md](benchmarks.md#the-ann-index); this page is what it cost
 in clicks.
 
 ### Two different things are called Recall@100
@@ -622,7 +621,8 @@ long way below it.
 
 ## Seed variance, and what it costs this page
 
-Measured in Part H, and it should have been measured in Part G.
+We measured this during the sequence work, and it should have been measured
+during the two-tower work.
 
 | arm | seeds | mean |
 | --- | --- | ---: |

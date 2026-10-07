@@ -98,7 +98,7 @@ def band_of(
 def long_tail_mask(
     band: npt.NDArray[np.int64], edges: Sequence[int] = BAND_EDGES
 ) -> npt.NDArray[np.bool_]:
-    """The rows no counting retriever can reach -- G3's second column.
+    """The rows no counting retriever can reach -- the long-tail column.
 
     One definition, used by the per-arm table AND by the paired comparison. A
     column reported in two places from two expressions is a column that will
@@ -135,9 +135,8 @@ def summarise(
     training loop reported, and if it does not, the bands are being computed
     over a different row set than the model was scored on.
 
-    The long-tail row is G3's second column. It is pooled over rows, not
-    averaged over bands, so a 5,409-row band cannot weigh the same as a 525-row
-    one.
+    The long-tail row is pooled over rows, not averaged over bands, so a
+    5,409-row band cannot weigh the same as a 525-row one.
     """
     hit = hits.hit.numpy()
     items = hits.item_ids.numpy()

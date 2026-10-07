@@ -4,7 +4,7 @@
 let model variation leak into a table that claims to measure policy, and this
 project has already measured the size of that leak -- two runs of one neural
 config differ by up to 0.0010 NDCG, which is a quarter of the largest effect
-Part K found. A booster read from a file cannot drift between rows.
+we measured. A booster read from a file cannot drift between rows.
 
 Four columns, because a diversity claim needs all four to mean anything:
 

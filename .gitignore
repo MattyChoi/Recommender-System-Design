@@ -42,6 +42,7 @@ evaluation/results/ranking
 
 # Scratch that is genuinely personal and should not ship
 outline.md
+commands.md
 logs.txt
 notebooks/*
 .ipynb_checkpoints/

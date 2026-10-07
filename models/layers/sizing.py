@@ -8,8 +8,8 @@ that two modules need is declared once or it eventually means two things.
 
 from __future__ import annotations
 
-#: The manual's stated design target for G4. The corpus is 65,238; the gap is
-#: the point, and G4's own text ("160K MIND articles") has the corpus wrong.
+#: The design target this sizing math assumes. The corpus is 65,238; the gap is
+#: the point, and the oft-quoted "160K MIND articles" has the corpus wrong.
 DESIGN_TARGET_ITEMS = 2_000_000
 
 #: MEASURED by ``make shard-plan``: the catalogue size at which an 8 x 24 GB pod

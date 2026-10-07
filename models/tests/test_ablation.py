@@ -129,8 +129,8 @@ class TestTheComparison:
 
     def test_the_long_tail_row_matches_the_per_arm_table(self) -> None:
         """`evaluate.summarise` and `ablation.compare` both report a `<26`
-        column. They take it from one `long_tail_mask`, so the G3 table's second
-        column cannot mean one thing per arm and another in the comparison."""
+        column. They take it from one `long_tail_mask`, so the long-tail column
+        cannot mean one thing per arm and another in the comparison."""
         arm = _arm("a", [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0])
         hits = Hits(
             hit=torch.from_numpy(arm.hit),
@@ -207,9 +207,9 @@ class TestTheRoundTrip:
 
 class TestThePlotPath:
     def test_two_comparisons_do_not_collide(self) -> None:
-        """A fixed default overwrote G2's plot the first time two comparisons ran
-        back to back. The second reported success and the first deliverable was
-        gone, with nothing saying so."""
+        """A fixed default overwrote the logQ comparison plot the first time two
+        comparisons ran back to back. The second reported success and the first
+        deliverable was gone, with nothing saying so."""
         both = _arm("both-logq-n4u0-b8192e10lr0.001-ab7e1d50", [1] * ROWS)
         ident = _arm("id-logq-n4u0-b8192e10lr0.001-e077530a", [0] * ROWS)
         content = _arm("content-logq-n4u0-b8192e10lr0.001-57101852", [0] * ROWS)

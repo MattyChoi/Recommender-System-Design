@@ -7,7 +7,7 @@ the ranker, which sees the user and the item together anyway. The USER tower is
 different -- it is encoded at request time, so dynamic user features are free
 there.
 
-Index 0 is ``OOV_IDX`` and every table is sized ``n_items + 1`` (B2). It is also
+Index 0 is ``OOV_IDX`` and every table is sized ``n_items + 1``. It is also
 ``padding_idx`` on the learned tables, so a padded history slot holds a vector
 that is zero and stays zero.
 

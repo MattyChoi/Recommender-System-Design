@@ -3,7 +3,7 @@
 **This is not the skew report.** Both sides below are offline reads: the gold
 series, and what Feast materialised from it. It tests Feast, the TTLs and the
 entity-key encoding. The online/offline skew report needs a serving layer and
-its impression log; it is M5 and it writes `docs/skew_report.md`.
+its impression log; it writes `docs/skew_report.md`.
 
 Window: `2019-11-09T00:00:00` to `2019-11-16T00:00:00` · float tolerance: rel_tol=1e-09
 

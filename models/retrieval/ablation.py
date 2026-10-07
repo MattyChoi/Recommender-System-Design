@@ -323,9 +323,9 @@ def _slug(name: str) -> str:
 def default_plot(baseline: Arm, candidate: Arm) -> Path:
     """A plot path derived from the arms.
 
-    A fixed default silently overwrote G2's plot the first time two comparisons
-    were run in a row -- the second finished, said "plot -> ...", and the first
-    deliverable was gone with nothing reporting it.
+    A fixed default silently overwrote the logQ comparison plot the first time
+    two comparisons were run in a row -- the second finished, said
+    "plot -> ...", and the first deliverable was gone with nothing reporting it.
     """
     return Path("docs/img") / f"{_slug(candidate.name)}-vs-{_slug(baseline.name)}.png"
 

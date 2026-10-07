@@ -4,7 +4,7 @@
 
 ## Context
 
-F2 specifies item-item co-visitation, with a signature that takes sessions:
+Item-item co-visitation is conventionally specified with a signature that takes sessions:
 
 > `def build_covisitation(sessions, max_gap_seconds=3600, top_k=50):`
 > `    for events in sessions:                        # sorted by ts`
@@ -26,9 +26,9 @@ parquet footers, it is column four of both splits:
 impression_id  user_id  user_idx  session_id  item_id  item_idx  clicked  slot  ts  ...
 ```
 
-So anyone building F2 from gold — the source every other model in the harness is fitted on —
-finds `session_id` already in the frame they are holding. Using it looks free, and it is the
-obvious move twice over.
+So anyone building co-visitation from gold — the source every other model in the harness
+is fitted on — finds `session_id` already in the frame they are holding. Using it looks
+free, and it is the obvious move twice over.
 
 **Measuring the corpus showed it is not free, and that the session is the wrong unit here.**
 `make gap` over train's 106,965 inter-impression transitions (33,617 users with two or more
@@ -56,9 +56,9 @@ is smooth, so any threshold is arbitrary.
 **Do not partition co-visitation by `session_id`.** `build_covisitation` windows by
 `user_id` ordered by `ts`, and bounds pairs with two explicit caps of its own:
 
-- `max_gap_seconds` — the real elapsed time between two clicks, which the manual's decay term
-  already uses, now also doing the work of the boundary.
-- a **rank-distance cap** — the Spark equivalent of the manual's `events[i + 1 : i + 30]`
+- `max_gap_seconds` — the real elapsed time between two clicks, which the conventional
+  decay term already uses, now also doing the work of the boundary.
+- a **rank-distance cap** — the Spark equivalent of the usual `events[i + 1 : i + 30]`
   slice, without which one heavy user's click run explodes into O(n²) pairs.
 
 Pairs are formed **across impressions only**. Within one impression this is forced as well as
@@ -68,7 +68,7 @@ zero, and the decay weight and the forward/backward asymmetry both degenerate.
 
 `session.gap_minutes` stays at 30 for its other consumers, now documented with this
 measurement rather than a TODO. The `session_id` column stays in gold: it is cheap, it is
-correct for what it claims to be, and Part H's sequence features may yet want it. It is
+correct for what it claims to be, and the sequence features may yet want it. It is
 simply not what co-visitation windows on.
 
 **The matrix is fitted on `gold/training_examples/train`**, not on silver, so every model in
@@ -86,11 +86,12 @@ different row set than the rest of the table.
 
 ## Consequences — accepted downsides
 
-1. **A visible departure from F2's signature.** The `sessions` argument is gone. Anyone
-   diffing against the guide will notice; that is what this ADR is for.
+1. **A visible departure from the usual signature.** The `sessions` argument is gone.
+   Anyone expecting the conventional form will notice; that is what this ADR is for.
 2. **`max_gap_seconds` is now a hyperparameter with no default from the data.** The gap
    distribution has no knee to read one off. It must be swept and reported as a curve, the
-   way F1 swept the half-life — a lone tuned value here would be a number someone picked.
+   way ADR 0011 swept the half-life — a lone tuned value here would be a number someone
+   picked.
 3. **The window can now cross a session boundary**, by construction. Two clicks 40 minutes
    apart are a pair under a 1-hour cap even though `sessionize` calls them separate sessions.
    Given the measured distribution this is the point rather than a defect, but it does mean
@@ -98,7 +99,7 @@ different row set than the rest of the table.
    two must not be described as using "the same sessions".
 4. **The rank-distance cap makes the matrix order-dependent at the tail.** A user with a long
    run of clicks contributes only pairs within the cap, so the pairs that survive depend on
-   where the run is truncated. This is the same trade the manual's slice makes; it is
+   where the run is truncated. This is the same trade that slice makes; it is
    recorded here so it is not rediscovered as a bug.
 
 ## Alternatives considered
@@ -119,5 +120,5 @@ different row set than the rest of the table.
   nothing a direct gap cap does not already do.
 - **Use MIND's `history` column for pairs.** Rejected under ADR 0008: it is an unordered,
   untimestamped snapshot whose cut-off is not stated, so pairs drawn from it may encode
-  dev-week clicks. That is exactly the leak F2's gate warns about, in the one place no split
+  dev-week clicks. That is exactly the leak the gate warns about, in the one place no split
   test would catch it.

@@ -1,11 +1,11 @@
-"""Slate negatives, and the property §9.4's sketch does not have.
+"""Slate negatives, and the property the obvious sketch does not have.
 
 The one that matters is determinism. ``F.shuffle(F.collect_list(...))`` is
 non-reproducible twice over -- ``shuffle`` takes no seed, and ``collect_list``
 returns whatever order the partitions produced -- and these rows are TRAINING
 input, so two runs of the same configuration would disagree by more than noise
-and G3's bottom table row could not be cited. The hash order is what makes
-``test_the_order_survives_a_reshuffle`` possible at all.
+and the bottom row of the retrieval results table could not be cited. The hash
+order is what makes ``test_the_order_survives_a_reshuffle`` possible at all.
 
 The second is that a slate with no unclicked item produces no row rather than
 an empty one. The loader's left join is what turns that into an all-padding
@@ -128,8 +128,8 @@ class TestTheFalseNegativeCase:
         collision from entirely valid rows.
 
         It also cannot arise from this corpus. MIND lists each article once per
-        impression, and C2 measured zero OOV across 8,584,442 silver rows, so
-        nothing collapses two articles onto one index.
+        impression, and the ID-mapping contracts measured zero OOV across
+        8,584,442 silver rows, so nothing collapses two articles onto one index.
         """
         got = _negatives(slate_negatives(_slate(spark, [(1, 10, True), (1, 10, False)])))
 

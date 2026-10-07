@@ -1,7 +1,7 @@
 """Assembling the model's inputs, and the two mistakes that would be silent.
 
-The first is alignment. ``content[k]`` must be item ``k``'s vector, and B2 is
-explicit about the cost of getting it wrong: one direction is an ``IndexError``
+The first is alignment. ``content[k]`` must be item ``k``'s vector, and the
+cost of getting it wrong is explicit: one direction is an ``IndexError``
 on the highest-numbered item, which is the last one anybody tests by hand; the
 other is no error at all, just every item reading its neighbour's vector
 forever. The loader defends against it structurally -- index assignment rather
@@ -134,7 +134,7 @@ class TestAlignment:
 
     def test_both_variants_are_readable(self, spark: SparkSession, settings: Settings) -> None:
         """vec_title exists so the neural content tower can be compared against
-        F3's baseline with the input held fixed."""
+        the content baseline with the input held fixed."""
         _write_cache(Path(settings.paths.gold) / "item_content", [1, 2, 3, 4])
 
         for variant in ("vec_title", "vec_title_abstract"):
@@ -187,8 +187,8 @@ class TestTheValidationCarve:
 
     Early-stopping on dev would pick the checkpoint that scores best on the test
     set. A random carve inside train would let the model see later impressions
-    to predict earlier ones, which is C5's argument one level in. Neither
-    failure reports anything.
+    to predict earlier ones, which is the temporal-split argument one level in.
+    Neither failure reports anything.
     """
 
     def test_it_cuts_on_time_not_at_random(self, spark: SparkSession, settings: Settings) -> None:
@@ -263,7 +263,7 @@ class TestTheValidationCarve:
 
 
 class TestRaggedPadding:
-    """Shared by the click history and G3's slate negatives -- both are ragged
+    """Shared by the click history and the slate negatives -- both are ragged
     per-request item indices needing the same two guarantees."""
 
     def test_shorter_histories_are_padded_in_ids_and_mask(self) -> None:
@@ -339,8 +339,8 @@ class TestTheUserTowerSeesNoCrossFeatures:
         and ``cat_*`` are candidate columns outright. Any of them in the user
         tower makes the user embedding a function of the item, so one user
         vector can no longer be ANN-searched against a precomputed index -- the
-        precomputation the two-tower exists for. They belong to Part K's
-        ranker, which sees both sides anyway.
+        precomputation the two-tower exists for. They belong to the ranking
+        stage's ranker, which sees both sides anyway.
         """
         forbidden = ("user_cat_", "item_", "cat_")
         offenders = [name for name in (*USER_FEATURES, *USER_FLAGS) if name.startswith(forbidden)]

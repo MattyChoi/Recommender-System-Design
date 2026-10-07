@@ -5,11 +5,12 @@ that A and B *can* differ. A diversity policy reorders the ranker's candidates;
 it cannot serve an item the retriever never proposed. So the coverage any policy
 could possibly reach is bounded by the union of the candidate pools, and the
 distance between that bound and what the ranker already serves is the entire
-budget the rest of Part L is spending.
+budget the rest of the re-ranking policy is spending.
 
 If that budget is small, the trade-off table is four near-identical rows and
-reads as a finding. Part J built a sweep on an assumption that the planner's
-decision could move, and had to test it first; this is the same shape.
+reads as a finding. The sharding sweep was built on an assumption that the
+planner's decision could move, and had to test it first; this is the same
+shape.
 
 Three ceilings, each a different denominator, and they are not interchangeable:
 

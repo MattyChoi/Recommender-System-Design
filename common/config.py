@@ -149,12 +149,12 @@ class SessionConfig(BaseModel):
     one sitting.
 
     Nothing in the batch pipeline needs sessions; they exist for the streaming
-    session-window aggregates in Part Q and the recently-viewed retriever in
-    Part I.
+    session-window aggregates in the streaming layer and the recently-viewed
+    retriever.
 
     Attributes:
-        gap_minutes: Inactivity gap that ends a session. Guide 5.2 suggests 30,
-            which is a web-analytics convention rather than a measurement --
+        gap_minutes: Inactivity gap that ends a session. The usual default is
+            30, which is a web-analytics convention rather than a measurement --
             and arguably long for news, where reading is short and bursty.
             Measure the inter-impression gap distribution and set this from the
             elbow rather than inheriting the default.
@@ -227,7 +227,7 @@ class MLflowConfig(BaseModel):
             turns it off rather than depending on Docker.
         tracking_uri: The server's host-visible address. A process inside the
             compose network would use ``http://mlflow:9001``.
-        experiment: Experiment name. The manual's verify step is
+        experiment: Experiment name. The verify step is
             ``mlflow runs list --experiment-name two_tower``.
     """
 

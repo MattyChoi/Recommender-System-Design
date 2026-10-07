@@ -53,8 +53,8 @@ should not force a retrain.
   Also makes ~40,600 articles permanently unrecommendable through any ID path.
 - **Frequency threshold (index items with ≥ k impressions).** Targets the sharper problem —
   an item seen three times has an embedding trained on three examples, which is noise
-  wearing a trained coat. Rejected for now: k has no principled value, and C6 already
-  measured and *rejected* min-impression filtering elsewhere in the pipeline. Applying one
+  wearing a trained coat. Rejected for now: k has no principled value, and min-impression
+  filtering was already measured and *rejected* elsewhere in the pipeline. Applying one
   here after declining it there needs a justification this project does not yet have.
 - **Drop item ID embeddings entirely; go content-only.** MIND ships title, abstract,
   category and subcategory for every article, and news items live for hours — rarely long
@@ -64,7 +64,7 @@ should not force a retrain.
 
 ## Revisit when
 
-**Part G, at the two-tower ablation.** The tower is already content-weighted, so run it with
+**At the two-tower ablation.** The tower is already content-weighted, so run it with
 and without the item ID embedding and read the difference in recall@k. Three outcomes:
 
 - ID embedding earns little → adopt the content-only alternative, and this ADR is superseded

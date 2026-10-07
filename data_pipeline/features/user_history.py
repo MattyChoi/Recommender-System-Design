@@ -1,8 +1,8 @@
 """Point-in-time user click history, for the retrieval user tower.
 
-D1 defers "user sequence" to Part H because MIND's ``history`` is a constant
-per-user snapshot (C4: 0 of 100,000 users have it vary) that predates the log
-window, so used raw it is stale by up to six days. The two-tower's user tower
+"user sequence" is deferred to the sequence model because MIND's ``history``
+is a constant per-user snapshot (0 of 100,000 users have it vary) that predates
+the log window, so used raw it is stale by up to six days. The two-tower's user tower
 needs a sequence anyway -- mean-pooling item embeddings over it is half of what
 the tower is -- so this builds the honest version: the snapshot, topped up with
 the clicks the user actually made **earlier in the window than this request**.
@@ -45,7 +45,7 @@ def snapshot_history(history: DataFrame, item_map: DataFrame) -> DataFrame:
     """The per-user pre-window click snapshot, as item indices.
 
     ``bronze/history`` is one row per impression, but the string is constant
-    per user (C4), so this collapses to one row per user. Any variation would be
+    per user, so this collapses to one row per user. Any variation would be
     silently dropped, which is why ``test_user_history.py`` asserts the
     invariant rather than trusting the measurement to stay true.
 

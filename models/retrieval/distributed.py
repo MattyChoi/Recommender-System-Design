@@ -115,9 +115,9 @@ def all_gather_detached(tensor: torch.Tensor) -> torch.Tensor:
     """Every rank's ``tensor``, concatenated, with no gradient path.
 
     For the things that carry no gradient and never should -- ``item_ids`` and
-    ``log_q``. §9's G5 sketch wraps both in the grad-carrying gather, which is
-    harmless (an integer tensor has no grad, and ``log_q`` is a constant) but
-    says something untrue about where gradients go.
+    ``log_q``. The obvious sketch wraps both in the grad-carrying gather,
+    which is harmless (an integer tensor has no grad, and ``log_q`` is a
+    constant) but says something untrue about where gradients go.
     """
     if not is_distributed():
         return tensor

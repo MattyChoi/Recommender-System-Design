@@ -62,7 +62,7 @@ def test_training_examples_stays_local_even_on_s3(s3_settings: Settings) -> None
 
 
 def test_user_history_stays_local_even_on_s3(s3_settings: Settings) -> None:
-    """Part G's click sequence is a training-side table, not a store source.
+    """The click sequence is a training-side table, not a store source.
 
     Same reasoning as ``training_examples``: the trainer reads it on the machine
     that wrote it, and nothing outside this repo consumes it. Pinned separately

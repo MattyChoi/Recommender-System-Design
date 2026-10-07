@@ -1,8 +1,8 @@
 """The loop, on a synthetic corpus small enough to run 100 steps in a test.
 
-§15's list for model tests: loss decreases, shapes and ranges hold, determinism
-given a seed, no NaNs. Three additions that are specific to this design and
-would each be silent:
+The standard list for model tests: loss decreases, shapes and ranges hold,
+determinism given a seed, no NaNs. Three additions that are specific to this
+design and would each be silent:
 
 ``set_epoch`` -- without it ``DistributedSampler`` draws the identical
 permutation every epoch, so the in-batch negatives never change composition and
@@ -62,9 +62,9 @@ def _split(negs: int = NEGS) -> SplitTensors:
     Learnable on purpose: a loss that fails to fall on random noise says nothing
     about whether the loop works.
 
-    ``negs=0`` is G3's first three table rows -- in-batch negatives only, no
-    slate. It is a real configuration, not a degenerate one, and the tensors are
-    ``[R, 0]`` rather than absent.
+    ``negs=0`` is the first three rows of the negatives table -- in-batch
+    negatives only, no slate. It is a real configuration, not a degenerate one,
+    and the tensors are ``[R, 0]`` rather than absent.
     """
     generator = torch.Generator().manual_seed(7)
     history = torch.randint(1, N_ITEMS + 1, (ROWS, HISTORY), generator=generator)
@@ -124,7 +124,7 @@ class TestTheStep:
     def test_a_hundred_steps_reduce_the_loss(
         self, split: SplitTensors, device: torch.device
     ) -> None:
-        """§15's headline check. Compared over windows rather than first against
+        """The headline check. Compared over windows rather than first against
         last, so one lucky batch cannot decide it."""
         with deterministic(0):
             model, counters = _model(), _counters()
@@ -199,7 +199,7 @@ class TestTheStep:
 
 
 class TestInBatchNegativesOnly:
-    """`--max-negs 0`, which three of G3's five table rows need.
+    """`--max-negs 0`, which three of the negatives table's five rows need.
 
     Reading the path it looks safe -- `_pad_ragged` returns `[R, 0]`,
     `assemble_pool` concatenates a `[0, D]` block, and the candidate pool
@@ -249,9 +249,9 @@ class TestInBatchNegativesOnly:
         assert sum(losses[:10]) / 10 > sum(losses[-10:]) / 10
 
     def test_uniform_draws_still_top_the_pool_up(self, device: torch.device) -> None:
-        """G3's third row: no slate, four uniform draws. The matched-count
-        comparison against row five, and the only pair in that table varying
-        one thing."""
+        """The negatives table's third row: no slate, four uniform draws. The
+        matched-count comparison against row five, and the only pair in that
+        table varying one thing."""
         loader = make_loader(
             _split(negs=0),
             N_ITEMS,
@@ -361,7 +361,7 @@ class TestValidation:
 
 
 class TestTheLogQAblation:
-    """G2's gate is "with and without the correction", so "without" has to be
+    """The gate is "with and without the correction", so "without" has to be
     reachable and has to mean exactly zero."""
 
     def test_disabling_it_gives_every_column_zero(self, device: torch.device) -> None:
@@ -406,8 +406,8 @@ class TestTheLogQAblation:
 
 
 class TestTheCommandLine:
-    """Every remaining Part G deliverable is one invocation with different flags,
-    so the flags reaching the right place is worth a test of its own."""
+    """Every remaining two-tower deliverable is one invocation with different
+    flags, so the flags reaching the right place is worth a test of its own."""
 
     def test_the_defaults_are_the_full_model_with_the_correction(self) -> None:
         args = _parser().parse_args([])

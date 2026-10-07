@@ -56,8 +56,9 @@ make baselines  # re-score every baseline on one commit, then the above
 - **Slate reordering** -- complete for the counting and content baselines. See
   `baselines.md`, and ADRs [0010](adr/0010-covisitation-is-near-uninformative-on-mind.md)
   and [0011](adr/0011-the-decay-optimum-is-29-minutes.md).
-- **Retrieval** -- two-tower, Parts G and H. `evaluate_retrieval` has not yet
-  been run against the ranking baselines, so no model appears in both documents.
+- **Retrieval** -- two-tower and sequence pooling. `evaluate_retrieval` has not
+  yet been run against the ranking baselines, so no model appears in both
+  documents.
 - **Ranking over retrieved candidates** -- complete. LightGBM `lambdarank` beats
   both neural arms significantly; see `ranking.md` and
   [ADR 0003](adr/0003-lightgbm-baseline-before-dcnv2.md). Position debiasing is
@@ -67,7 +68,7 @@ make baselines  # re-score every baseline on one commit, then the above
   catalogue coverage for -0.0005 NDCG; MMR is a null because the ranker's top 10
   is already diverse. See `ranking.md` and
   [ADR 0012](adr/0012-exploration-over-designed-diversity.md).
-- **The ANN index** -- measured in Part J, decided in
+- **The ANN index** -- measured in the index benchmark, decided in
   [ADR 0002](adr/0002-hnsw-over-ivfpq.md): HNSW at `efSearch=512` serves,
   exact search remains the offline reference every quality number is measured
   against.
