@@ -132,9 +132,9 @@ def bin_edges(
     """
     if strategy == "uniform":
         return np.linspace(0.0, 1.0, bins + 1)
-    if strategy != "quantile":
-        raise ValueError(f"unknown binning strategy {strategy!r}")
-    return np.unique(np.quantile(probabilities, np.linspace(0.0, 1.0, bins + 1)))
+    if strategy == "quantile":
+        return np.unique(np.quantile(probabilities, np.linspace(0.0, 1.0, bins + 1)))
+    raise ValueError(f"unknown binning strategy {strategy!r}")
 
 
 def reliability(

@@ -15,13 +15,13 @@ FITTING rows alone.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import nn
 
+from models.classes.ranking import Preparation, Standardiser
 from models.ranking.dataset import CATEGORICAL, RankingRows
 
 # Rank columns are unbounded with a large sentinel for "absent". A reciprocal
@@ -32,30 +32,16 @@ RANK_COLUMNS = ("two_tower_rank", "trending_rank")
 COUNT_COLUMNS = ("prior_clicks", "train_clicks", "history_length")
 
 
-@dataclass(frozen=True)
-class Standardiser:
-    """Per-column mean and scale, fitted once on the fitting rows.
+def unwrap(model: nn.Module) -> nn.Module:
+    """The inner model, whether or not DDP is wrapping it."""
+    return getattr(model, "module", model)
 
-    Fitted on the fitting split and applied to both. Statistics taken over the
-    held-out rows as well would let the model see their distribution -- a small
-    leak that flatters every neural baseline and is almost never checked.
-    """
 
-    mean: npt.NDArray[np.float32]
-    scale: npt.NDArray[np.float32]
-
-    @classmethod
-    def fit(cls, matrix: npt.NDArray[np.float32]) -> Standardiser:
-        scale = matrix.std(axis=0)
-        # A constant column has zero spread; dividing by it gives NaN and the
-        # whole forward pass goes NaN without raising.
-        return cls(
-            mean=matrix.mean(axis=0),
-            scale=np.where(scale > 1e-6, scale, 1.0).astype(np.float32),
-        )
-
-    def apply(self, matrix: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
-        return ((matrix - self.mean) / self.scale).astype(np.float32)
+def split_columns(rows: RankingRows) -> tuple[list[int], list[int]]:
+    """Indices of the dense and the categorical columns, in matrix order."""
+    sparse = [rows.names.index(name) for name in CATEGORICAL if name in rows.names]
+    dense = [index for index in range(len(rows.names)) if index not in set(sparse)]
+    return dense, sparse
 
 
 def transform(rows: RankingRows) -> npt.NDArray[np.float32]:
@@ -72,11 +58,16 @@ def transform(rows: RankingRows) -> npt.NDArray[np.float32]:
     return out
 
 
-def split_columns(rows: RankingRows) -> tuple[list[int], list[int]]:
-    """Indices of the dense and the categorical columns, in matrix order."""
-    sparse = [rows.names.index(name) for name in CATEGORICAL if name in rows.names]
-    dense = [index for index in range(len(rows.names)) if index not in set(sparse)]
-    return dense, sparse
+def prepare(rows: RankingRows) -> Preparation:
+    """Fit the rank-invariant quantities on ``rows``."""
+    dense_columns, sparse_columns = split_columns(rows)
+    prepared = transform(rows)
+    sparse = prepared[:, sparse_columns].astype(np.int64)
+    return Preparation(
+        scaler=Standardiser.fit(prepared[:, dense_columns]),
+        cardinalities=tuple(int(sparse[:, index].max()) for index in range(sparse.shape[1])),
+        positive_rate=float(rows.labels.mean()),
+    )
 
 
 class FeatureEmbedding(nn.Module):
@@ -122,53 +113,6 @@ Factory = Callable[[int, tuple[int, ...]], nn.Module]
 #: rankers take one, so the TorchRec backend is a constructor argument rather
 #: than a branch inside either model.
 Block = Callable[[int, Sequence[int], int], "FeatureEmbedding"]
-
-
-def unwrap(model: nn.Module) -> nn.Module:
-    """The inner model, whether or not DDP is wrapping it."""
-    return getattr(model, "module", model)
-
-
-@dataclass(frozen=True)
-class Preparation:
-    """The quantities every rank must agree on, fitted over the whole table.
-
-    In one process each of these is read off the fitting rows, which is correct
-    there and wrong the moment the rows are sharded.
-
-    *The standardiser* fitted on a shard scales that rank's inputs differently
-    from its peers', so the gradients DDP averages are gradients of a different
-    objective per rank -- and the statistics rank 0 saves next to the weights
-    then describe one shard rather than the data.
-
-    *The cardinalities* read off a shard can be SMALLER than rank 0's, because a
-    rare category may be absent from that slice. Two ranks then build embedding
-    tables of different shapes and DDP's opening broadcast fails, which is the
-    good case; a one-worker rerun that happens to see every category makes it
-    disappear again, which is the bad one.
-
-    *The positive rate* sets the loss weight, so a per-shard estimate hands each
-    rank a slightly different loss surface for nothing.
-
-    So the driver fits this once, over the unsharded rows, and gives every
-    worker the same object.
-    """
-
-    scaler: Standardiser
-    cardinalities: tuple[int, ...]
-    positive_rate: float
-
-
-def prepare(rows: RankingRows) -> Preparation:
-    """Fit the rank-invariant quantities on ``rows``."""
-    dense_columns, sparse_columns = split_columns(rows)
-    prepared = transform(rows)
-    sparse = prepared[:, sparse_columns].astype(np.int64)
-    return Preparation(
-        scaler=Standardiser.fit(prepared[:, dense_columns]),
-        cardinalities=tuple(int(sparse[:, index].max()) for index in range(sparse.shape[1])),
-        positive_rate=float(rows.labels.mean()),
-    )
 
 
 def fit(

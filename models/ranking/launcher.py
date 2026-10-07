@@ -35,11 +35,10 @@ from ray.train.torch import TorchConfig, TorchTrainer
 from torch import nn
 
 from common.torch_env import backend_for_accelerator, set_seed
+from models.classes.ranking import Preparation, Standardiser
 from models.ranking.dataset import RankingRows, shard_by_request
 from models.ranking.torch_fit import (
     Factory,
-    Preparation,
-    Standardiser,
     fit,
     prepare,
     split_columns,

@@ -224,7 +224,6 @@ torch-env:  ## Report the torch device this machine will train on
 #   make retrieval TRAIN_ARGS="--no-logq"              # G2's gate
 #   make retrieval TRAIN_ARGS="--no-use-content"       # ID only
 #   make retrieval TRAIN_ARGS="--no-use-id"            # content only
-# G3's five-row table, rows 1-3 and 5 (row 4 is deferred -- see the notes):
 #   make retrieval TRAIN_ARGS="--max-negs 0 --uniform-negs 0 --no-logq"   # in-batch only
 #   make retrieval TRAIN_ARGS="--max-negs 0 --uniform-negs 0"             # + logQ
 #   make retrieval TRAIN_ARGS="--max-negs 0 --uniform-negs 4"             # + uniform
