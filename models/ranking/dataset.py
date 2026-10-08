@@ -20,8 +20,9 @@ already solved.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -196,6 +197,67 @@ def shard_by_request(rows: RankingRows, rank: int, world: int) -> RankingRows:
     return rows.select(mask)
 
 
+def blend_one(
+    tops: dict[str, Sequence[int]], max_candidates: int, quotas: Sequence[int]
+) -> tuple[list[int], dict[str, list[int]]]:
+    """Blend ONE request's per-source lists into a candidate set with rank tags.
+
+    Extracted from :func:`candidate_lists` so that the serving path has
+    something to be equal TO. The Go orchestrator reimplements exactly this
+    function, and `serving/go/internal/retrieval/blend_test.go` asserts the two
+    agree on fixtures generated from this one -- which is only expressible if
+    the behaviour lives in a function rather than inside a loop over requests.
+
+    Three things here are behaviour, not detail, and each is a way the Go port
+    could differ while looking right:
+
+    1. **Insertion order is the output order.** ``seen`` is a dict and Python
+       dicts keep insertion order, so the candidate list is ordered by the
+       quota pass, then by the top-up pass. Go maps do NOT, so the port must
+       carry an explicit slice.
+    2. **Item 0 is the reserved OOV row and is never a candidate.** A source
+       that returns a short list pads with 0, and serving a padded slot would
+       put the reserved row in front of a user.
+    3. **The top-up runs in source order after every quota**, so an
+       under-filled quota is spent rather than lost.
+
+    Args:
+        tops: Source name to that source's ranked item ids, best first.
+        max_candidates: Total slots.
+        quotas: Slots per source, in ``tops`` order.
+
+    Returns:
+        ``(chosen, ranks)``. ``ranks[name][i]`` is that source's position for
+        ``chosen[i]``, or :data:`ABSENT`.
+    """
+    names = list(tops)
+    seen: dict[int, int] = {}
+    for name, slots in zip(names, quotas, strict=True):
+        taken = 0
+        for item in tops[name]:
+            if taken >= slots or len(seen) >= max_candidates:
+                break
+            if item > 0 and int(item) not in seen:
+                seen[int(item)] = len(seen)
+                taken += 1
+
+    # Top up from whatever is left, in source order, so an under-filled quota
+    # is spent rather than lost.
+    for name in names:
+        for item in tops[name]:
+            if len(seen) >= max_candidates:
+                break
+            if item > 0:
+                seen.setdefault(int(item), len(seen))
+
+    chosen = list(seen)[:max_candidates]
+    ranks: dict[str, list[int]] = {}
+    for name in names:
+        place = {int(item): position for position, item in enumerate(tops[name]) if item > 0}
+        ranks[name] = [place.get(int(item), ABSENT) for item in chosen]
+    return chosen, ranks
+
+
 def candidate_lists(
     sources: dict[str, Retrieved], max_candidates: int, quotas: Sequence[int] | None = None
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], dict[str, npt.NDArray[np.int64]]]:
@@ -241,40 +303,15 @@ def candidate_lists(
     ranks: dict[str, list[npt.NDArray[np.int64]]] = {name: [] for name in names}
 
     for request in range(rows):
-        tops = {name: sources[name].top[request].numpy() for name in names}
+        tops = {name: sources[name].top[request].numpy().tolist() for name in names}
 
-        seen: dict[int, int] = {}
-        for name, slots in zip(names, quotas, strict=True):
-            taken = 0
-            for item in tops[name]:
-                if taken >= slots or len(seen) >= max_candidates:
-                    break
-                if item > 0 and int(item) not in seen:
-                    seen[int(item)] = len(seen)
-                    taken += 1
+        picked, per_source = blend_one(tops, max_candidates, quotas)
 
-        # Top up from whatever is left, in source order, so an under-filled
-        # quota is spent rather than lost.
-        for name in names:
-            for item in tops[name]:
-                if len(seen) >= max_candidates:
-                    break
-                if item > 0:
-                    seen.setdefault(int(item), len(seen))
-
-        chosen = np.fromiter(seen, dtype=np.int64, count=len(seen))[:max_candidates]
+        chosen = np.asarray(picked, dtype=np.int64)
         items.append(chosen)
         owners.append(np.full(len(chosen), request, dtype=np.int64))
         for name in names:
-            top = sources[name].top[request].numpy()
-            place = {int(item): position for position, item in enumerate(top) if item > 0}
-            ranks[name].append(
-                np.fromiter(
-                    (place.get(int(item), ABSENT) for item in chosen),
-                    dtype=np.int64,
-                    count=len(chosen),
-                )
-            )
+            ranks[name].append(np.asarray(per_source[name], dtype=np.int64))
 
     return (
         np.concatenate(items),
@@ -306,6 +343,84 @@ def slate_membership(
         dtype=bool,
         count=len(items),
     )
+
+
+def feature_columns(
+    *,
+    retrieval_score: npt.NDArray[Any],
+    ranks: Mapping[str, npt.NDArray[Any]],
+    prior_clicks: npt.NDArray[Any],
+    train_clicks: npt.NDArray[Any],
+    content_similarity: npt.NDArray[Any],
+    history_length: npt.NDArray[Any],
+    category: npt.NDArray[Any],
+    subcategory: npt.NDArray[Any],
+) -> dict[str, npt.NDArray[Any]]:
+    """The ranker's named columns, one value per candidate.
+
+    Separated from :func:`build` so that the arithmetic which DEFINES each
+    column can be called without a tower, a Spark split or a checkpoint --
+    which is what lets ``scripts/dump_parity_fixtures.py`` record it, and so
+    what lets the Go serving implementation be checked against it rather than
+    against someone's reading of it. Everything above this line in ``build``
+    is data assembly; everything this function does is the feature definition.
+
+    Every argument is already indexed per candidate. Keyword-only, because
+    eight same-shaped integer arrays in a row is an argument list where a
+    transposition type-checks, runs, and trains a different model.
+
+    Args:
+        retrieval_score: Tower dot product per candidate.
+        ranks: Per-source rank arrays, each aligned with the candidates.
+            ``ABSENT`` where a source did not propose the item.
+        prior_clicks: Cumulative clicks before the counting boundary.
+        train_clicks: Cumulative clicks within it.
+        content_similarity: Pooled-history content vector against the
+            candidate's, the pooled side normalised and the candidate's not.
+        history_length: Real history entries for the candidate's request.
+        category: Category index per candidate.
+        subcategory: Subcategory index per candidate.
+
+    Returns:
+        Column name to per-candidate values.
+    """
+    width = len(retrieval_score)
+
+    # Summed over the sources RETRIEVAL ACTUALLY RAN, not over a configured
+    # list: a build with one source makes this column constant, which is
+    # correct and is what a ranker trained on that configuration saw. Started
+    # from an explicit zero array so an empty `ranks` yields a column rather
+    # than the integer 0, which would broadcast and silently produce a matrix
+    # of the right shape.
+    present = np.zeros(width, dtype=np.int64)
+    for name in ranks:
+        present = present + (ranks[name] < ABSENT).astype(np.int64)
+
+    return {
+        "retrieval_score": retrieval_score,
+        "two_tower_rank": ranks.get("two_tower", np.full(width, ABSENT)),
+        "trending_rank": ranks.get("trending", np.full(width, ABSENT)),
+        "n_sources": present,
+        "prior_clicks": prior_clicks,
+        "train_clicks": train_clicks,
+        "content_similarity": content_similarity,
+        "history_length": history_length,
+        # Derived, never fetched. A stored copy of this flag could disagree
+        # with the count sitting next to it in the same row.
+        "is_cold_item": (train_clicks == 0).astype(np.int64),
+        "category_idx": category,
+        "subcategory_idx": subcategory,
+    }
+
+
+def stack_features(
+    columns: Mapping[str, npt.NDArray[Any]], names: Sequence[str]
+) -> npt.NDArray[np.float32]:
+    """Columns to a ``[N, len(names)]`` matrix, in ``names`` order."""
+    unknown = set(names) - set(columns)
+    if unknown:
+        raise ValueError(f"no such feature(s): {sorted(unknown)}")
+    return np.stack([columns[name] for name in names], axis=1).astype(np.float32)
 
 
 def build(
@@ -350,30 +465,22 @@ def build(
         )
 
     lengths = split.history_mask.sum(dim=1).numpy()
-    present = sum((ranks[name] < ABSENT).astype(np.int64) for name in ranks)
 
-    columns = {
-        "retrieval_score": scores,
-        "two_tower_rank": ranks.get("two_tower", np.full(len(candidates), ABSENT)),
-        "trending_rank": ranks.get("trending", np.full(len(candidates), ABSENT)),
-        "n_sources": present,
-        "prior_clicks": prior_clicks[candidates],
-        "train_clicks": train_clicks[candidates],
-        "content_similarity": similarity,
-        "history_length": lengths[request],
-        "is_cold_item": (train_clicks[candidates] == 0).astype(np.int64),
-        "category_idx": items_table.category.numpy()[candidates],
-        "subcategory_idx": items_table.subcategory.numpy()[candidates],
-    }
+    columns = feature_columns(
+        retrieval_score=scores,
+        ranks=ranks,
+        prior_clicks=prior_clicks[candidates],
+        train_clicks=train_clicks[candidates],
+        content_similarity=similarity,
+        history_length=lengths[request],
+        category=items_table.category.numpy()[candidates],
+        subcategory=items_table.subcategory.numpy()[candidates],
+    )
 
     chosen_features = tuple(FEATURES if features is None else features)
-    unknown = set(chosen_features) - set(columns)
-    if unknown:
-        raise ValueError(f"no such feature(s): {sorted(unknown)}")
-
     return RankingRows(
         names=chosen_features,
-        features=np.stack([columns[name] for name in chosen_features], axis=1).astype(np.float32),
+        features=stack_features(columns, chosen_features),
         labels=labels,
         groups=np.bincount(request, minlength=len(clicked)).astype(np.int64),
         items=candidates,

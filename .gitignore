@@ -46,7 +46,8 @@ commands.md
 logs.txt
 notebooks/*
 .ipynb_checkpoints/
-scripts/
+scripts/*
+!scripts/artifacts/
 
 # defer tracking for now
 personal_README.md
