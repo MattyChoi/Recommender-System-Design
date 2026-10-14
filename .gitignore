@@ -48,6 +48,7 @@ notebooks/*
 .ipynb_checkpoints/
 scripts/*
 !scripts/artifacts/
+/tmp
 
 # defer tracking for now
 personal_README.md

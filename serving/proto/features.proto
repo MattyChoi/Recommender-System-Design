@@ -1,0 +1,66 @@
+// Feature gateway contract
+//
+// Fetch the embeddings for the users and items
+
+syntax = "proto3";
+package recsys.v1;
+option go_package = "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb";
+
+service Features {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc GetItems(GetItemsRequest) returns (GetItemsResponse);
+  rpc Health(FeaturesHealthRequest) returns (FeaturesHealthResponse);
+}
+
+message GetUserRequest {
+  string user_id = 1;
+  int32 max_history = 2;
+}
+
+message GetUserResponse {
+  repeated float values = 1;
+  repeated string names = 2;
+
+  // Recent history as internal item indices, most recent first.
+  repeated int32 history = 3;
+
+  // Items in last_50_items the item_map did not know. For quality checks
+  int32 unmapped_history = 4;
+  bool found = 5;
+
+}
+
+message GetItemsRequest {
+  repeated int32 items = 1;
+}
+
+message GetItemsResponse {
+  // One row per requested item, in REQUEST order, FLATTENED ROW-MAJOR.
+  //
+  // Flat rather than repeated-message: the orchestrator reshapes it into the
+  // ranker's matrix, and a message per candidate would allocate ~400 objects
+  // per request to carry ~11 floats each.
+  repeated float values = 1;
+
+  repeated string names = 2;
+
+  // Per-item: false where the store had no row. A cold article is normal on a
+  // news corpus; ALL of them being cold is a broken materialisation.
+  repeated bool found = 3;
+
+  // How many rows came from the gateway's in-process cache. 
+  int32 cached = 4;
+}
+
+message FeaturesHealthRequest {}
+
+message FeaturesHealthResponse {
+  bool ready = 1;
+  string detail = 2;
+
+  // How stale the online store is, by its own event timestamps. An alert on
+  // freshness lag is meaningless without a number to alert on.
+  int64 oldest_feature_age_seconds = 3;
+
+  string item_map_version = 4;
+}

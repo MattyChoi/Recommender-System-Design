@@ -1,0 +1,61 @@
+// Retrieval sidecar contract
+//
+// Embed the user and look up neighbors on FAISS
+
+syntax = "proto3";
+package recsys.v1;
+option go_package = "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb";
+
+service Retrieval {
+    rpc Retrieve(RetrieveRequest) returns (RetrieveResponse);
+    rpc Health(RetrievalHealthRequest) returns (RetrievalHealthResponse);
+}
+
+message RetrieveRequest {
+    string user_id = 1;
+    int32 k = 2;
+
+    // Recent history as internal item indices, most recent first.
+    repeated int32 history = 3;
+
+    // efSearch for this request, 0 for the server's default.
+    int32 ef_search = 4;
+
+    // The RAW static user block, in serving/features/columns.py's USER_COLUMNS
+    // order: user_impressions_24h, user_clicks_24h, user_ctr_smoothed,
+    // user_tenure_hours.
+    repeated float user_feats = 5;
+
+    // GetUserResponse.found, forwarded
+    bool has_user_features = 6;
+}
+
+message RetrieveResponse {
+    // Item indices, best first. NEVER contains 0: that is the reserved
+    // out-of-vocabulary row, which is not an article and must not take a slot.
+    repeated int32 items = 1;
+
+    repeated float scores = 2;
+
+    bool embedding_cached = 3;
+
+    // "hnsw" or "flat".
+    string index_kind = 4;
+    string index_version = 5;
+
+    repeated float content_similarity = 6;
+}
+
+message RetrievalHealthRequest {}
+
+message RetrievalHealthResponse {
+    bool ready = 1;
+    string detail = 2;
+    string index_kind = 3;
+    string index_version = 4;
+    int32 index_ef_search = 5;
+
+    // Items actually in the loaded index. A rebuild that silently shipped a
+    // fraction of the catalogue passes every other check here.
+    int32 item_count = 6;
+}
