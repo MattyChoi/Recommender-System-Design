@@ -27,6 +27,9 @@ message GetUserResponse {
   // Items in last_50_items the item_map did not know. For quality checks
   int32 unmapped_history = 4;
   bool found = 5;
+  
+  // The user's affinity for EVERY category, indexed by category index.
+  repeated float cat_affinity = 6;
 
 }
 
