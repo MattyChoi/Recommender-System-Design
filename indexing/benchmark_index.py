@@ -27,6 +27,7 @@ import numpy as np
 import numpy.typing as npt
 
 from common.config import load_settings
+from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
 from data_pipeline.features.user_history import MAX_HISTORY
@@ -40,11 +41,7 @@ from indexing.build_index import (
     recommended_nlist,
     search,
 )
-from models.retrieval.dataloader.dataset import (
-    CONTENT_VARIANTS,
-    load_item_tables,
-    load_train_and_validation,
-)
+from models.retrieval.dataloader.dataset import load_item_tables, load_train_and_validation
 from models.retrieval.evaluate import load_tower
 from models.retrieval.sources import encode_users
 

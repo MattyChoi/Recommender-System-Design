@@ -11,6 +11,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
 from common.config import Settings, load_settings
+from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import (
     autocast_for,
@@ -30,11 +31,7 @@ from models.retrieval.dataloader.batching import (
     assemble_pool,
     make_loader,
 )
-from models.retrieval.dataloader.dataset import (
-    CONTENT_VARIANTS,
-    load_item_tables,
-    load_train_and_validation,
-)
+from models.retrieval.dataloader.dataset import load_item_tables, load_train_and_validation
 from models.retrieval.losses import sampled_softmax_loss
 from models.retrieval.sampling import StreamingLogQ
 from models.retrieval.two_tower import TwoTower

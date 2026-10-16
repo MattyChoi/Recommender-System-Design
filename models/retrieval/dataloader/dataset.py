@@ -22,23 +22,9 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
 from common.config import Settings
+from common.features import CONTENT_VARIANTS, LOG1P_USER_FEATURES, USER_FEATURES, USER_FLAGS
 from common.utils import read_gold
 from models.classes.dataset import ItemTables, SplitTensors
-
-# Static user features, in a fixed order. NOT a set: the order is the column
-# order of the tensor the model sees..
-USER_FEATURES = (
-    "user_impressions_24h",
-    "user_clicks_24h",
-    "user_ctr_smoothed",
-    "user_tenure_hours",
-)
-# Unbounded counts and durations. log1p before the tower's LayerNorm, or the
-# first Linear sees a column ranging over four orders of magnitude next to one
-# bounded in [0, 1].
-LOG1P_FEATURES = frozenset({"user_impressions_24h", "user_clicks_24h", "user_tenure_hours"})
-USER_FLAGS = ("has_user_features",)
-CONTENT_VARIANTS = ("vec_title_abstract", "vec_title")
 
 
 def _cyclic(values: np.ndarray, period: int) -> tuple[np.ndarray, np.ndarray]:
@@ -140,7 +126,7 @@ def _tensors_from(
     numeric = []
     for name in USER_FEATURES:
         column = rows[name].fillna(0.0).to_numpy(dtype="float32")
-        numeric.append(np.log1p(column) if name in LOG1P_FEATURES else column)
+        numeric.append(np.log1p(column) if name in LOG1P_USER_FEATURES else column)
     for name in USER_FLAGS:
         numeric.append(rows[name].fillna(False).to_numpy(dtype="float32"))
     # Spark's dayofweek is 1..7, hour is 0..23; both wrap, so both get sin/cos.

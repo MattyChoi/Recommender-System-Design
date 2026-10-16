@@ -18,6 +18,7 @@ import numpy.typing as npt
 import torch
 
 from common.config import load_settings
+from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
 from data_pipeline.features.user_history import MAX_HISTORY
@@ -25,7 +26,6 @@ from models.classes.dataset import ItemTables
 from models.classes.train import Hits
 from models.retrieval.dataloader.batching import make_loader
 from models.retrieval.dataloader.dataset import (
-    CONTENT_VARIANTS,
     load_item_tables,
     load_train_and_validation,
     prior_window_counts,

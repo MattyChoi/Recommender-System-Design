@@ -1,7 +1,7 @@
 """``make catalogue`` -- dump the static per-item attributes for the Go server.
 
 Category and subcategory are the ranker's last two columns and back the
-per-category cap in the re-ranker. 
+per-category cap in the re-ranker.
 
 Indexed by `item_idx`, position 0 reserved for OOV -- the same layout every other
 artifact in this project uses.
@@ -15,8 +15,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from common.config import load_settings
+from common.features import CONTENT_VARIANTS
 from common.tracking import git_revision
-from models.retrieval.dataloader.dataset import CONTENT_VARIANTS, load_item_tables
+from models.retrieval.dataloader.dataset import load_item_tables
 
 
 def main(argv: Sequence[str] | None = None) -> int:

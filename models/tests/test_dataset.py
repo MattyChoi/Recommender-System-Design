@@ -29,11 +29,9 @@ import torch
 from pyspark.sql import SparkSession
 
 from common.config import Settings, load_settings
+from common.features import LOG1P_USER_FEATURES, USER_FEATURES, USER_FLAGS
 from models.classes.dataset import ItemTables
 from models.retrieval.dataloader.dataset import (
-    LOG1P_FEATURES,
-    USER_FEATURES,
-    USER_FLAGS,
     _cyclic,
     _pad_ragged,
     load_item_tables,
@@ -353,7 +351,7 @@ class TestTheUserTowerSeesNoCrossFeatures:
     def test_every_log1p_feature_is_actually_a_user_feature(self) -> None:
         """A typo here would silently skip the transform, leaving an unbounded
         count next to a rate in [0, 1]."""
-        assert set(USER_FEATURES) >= LOG1P_FEATURES
+        assert set(USER_FEATURES) >= LOG1P_USER_FEATURES
 
     def test_the_feature_order_is_a_tuple(self) -> None:
         """Order is the column order of the tensor the model sees, so it is

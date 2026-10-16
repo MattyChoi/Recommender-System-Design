@@ -24,6 +24,7 @@ import numpy.typing as npt
 import torch
 
 from common.config import Settings, load_settings
+from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
 from common.tracking import provenance, require_reachable, run_label, track
@@ -43,7 +44,6 @@ from models.ranking.dataset import (
 )
 from models.ranking.evaluate import evaluate_scores, per_request_ndcg, render
 from models.retrieval.dataloader.dataset import (
-    CONTENT_VARIANTS,
     load_item_tables,
     load_train_and_validation,
     prior_window_counts,

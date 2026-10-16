@@ -101,6 +101,10 @@ module = ["hourly_index"]
 disallow_untyped_decorators = false
 warn_unused_ignores = false
 
+[[tool.mypy.overrides]]
+module = ["common.pb.*"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "data_pipeline/tests", "evaluation/tests", "models/tests", "indexing/tests"]
 addopts = "-q --strict-markers"

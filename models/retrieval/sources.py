@@ -25,6 +25,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as f
 
 from common.config import load_settings
+from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
 from common.utils import read_gold
@@ -33,7 +34,6 @@ from models.classes.dataset import SplitTensors
 from models.classes.sources import RESULTS, Retrieved
 from models.retrieval.baselines.covisit import build_covisitation
 from models.retrieval.dataloader.dataset import (
-    CONTENT_VARIANTS,
     _boundary,
     _clicked_rows,
     load_item_tables,

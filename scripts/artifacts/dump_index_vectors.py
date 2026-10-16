@@ -29,9 +29,10 @@ import numpy as np
 import torch
 
 from common.config import load_settings
+from common.features import CONTENT_VARIANTS
 from common.tracking import git_revision
 from indexing.build_index import assert_unit_norm, item_vectors
-from models.retrieval.dataloader.dataset import CONTENT_VARIANTS, load_item_tables
+from models.retrieval.dataloader.dataset import load_item_tables
 from models.retrieval.evaluate import load_tower
 
 
