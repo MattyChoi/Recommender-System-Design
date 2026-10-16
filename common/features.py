@@ -25,8 +25,19 @@ ITEM_COLUMNS: tuple[str, ...] = (
     "item_age_hours",
     "item_ctr_effective",
     "has_item_features",
-    "user_cat_affinity",
 )
 
 # Counts are log1p'd
 LOG1P_ITEM_COLUMNS = frozenset({"item_impressions_24h", "item_clicks_24h"})
+
+
+def effective_item_ctr(
+    item_ctr_smoothed: float | None, cat_expanding_ctr: float | None
+) -> float | None:
+    """``item_ctr_effective``: an item's own smoothed CTR, else its category prior."""
+    return item_ctr_smoothed if item_ctr_smoothed is not None else cat_expanding_ctr
+
+
+def item_has_own_history(item_ctr_smoothed: float | None) -> bool:
+    """``has_item_features``: whether the item had a rate before the fallback."""
+    return item_ctr_smoothed is not None

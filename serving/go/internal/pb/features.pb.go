@@ -86,8 +86,10 @@ type GetUserResponse struct {
 	// Items in last_50_items the item_map did not know. For quality checks
 	UnmappedHistory int32 `protobuf:"varint,4,opt,name=unmapped_history,json=unmappedHistory,proto3" json:"unmapped_history,omitempty"`
 	Found           bool  `protobuf:"varint,5,opt,name=found,proto3" json:"found,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The user's affinity for EVERY category, indexed by category index.
+	CatAffinity   []float32 `protobuf:"fixed32,6,rep,packed,name=cat_affinity,json=catAffinity,proto3" json:"cat_affinity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetUserResponse) Reset() {
@@ -153,6 +155,13 @@ func (x *GetUserResponse) GetFound() bool {
 		return x.Found
 	}
 	return false
+}
+
+func (x *GetUserResponse) GetCatAffinity() []float32 {
+	if x != nil {
+		return x.CatAffinity
+	}
+	return nil
 }
 
 type GetItemsRequest struct {
@@ -389,13 +398,14 @@ const file_features_proto_rawDesc = "" +
 	"\x0eGetUserRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1f\n" +
 	"\vmax_history\x18\x02 \x01(\x05R\n" +
-	"maxHistory\"\x9a\x01\n" +
+	"maxHistory\"\xbd\x01\n" +
 	"\x0fGetUserResponse\x12\x16\n" +
 	"\x06values\x18\x01 \x03(\x02R\x06values\x12\x14\n" +
 	"\x05names\x18\x02 \x03(\tR\x05names\x12\x18\n" +
 	"\ahistory\x18\x03 \x03(\x05R\ahistory\x12)\n" +
 	"\x10unmapped_history\x18\x04 \x01(\x05R\x0funmappedHistory\x12\x14\n" +
-	"\x05found\x18\x05 \x01(\bR\x05found\"'\n" +
+	"\x05found\x18\x05 \x01(\bR\x05found\x12!\n" +
+	"\fcat_affinity\x18\x06 \x03(\x02R\vcatAffinity\"'\n" +
 	"\x0fGetItemsRequest\x12\x14\n" +
 	"\x05items\x18\x01 \x03(\x05R\x05items\"n\n" +
 	"\x10GetItemsResponse\x12\x16\n" +

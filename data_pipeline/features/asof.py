@@ -16,6 +16,8 @@ from pyspark.sql import functions as f
 _ITEM_FEATURES = (
     "item_impressions_24h",
     "item_clicks_24h",
+    "item_impressions_cum",
+    "item_clicks_cum",
     "item_ctr_smoothed",
     "item_age_hours",
 )
@@ -43,6 +45,8 @@ _CATEGORY_FEATURES = ("cat_expanding_ctr",)
 ZERO_FILLED = (
     "item_impressions_24h",
     "item_clicks_24h",
+    "item_impressions_cum",
+    "item_clicks_cum",
     "item_age_hours",
     "user_impressions_24h",
     "user_clicks_24h",

@@ -3225,6 +3225,19 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-protobuf"
+version = "5.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+    { name = "types-protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/07/7ffb897eee5c01e816e037f51a6720bf1a0a8c17cca1a2382ae554f43044/mypy_protobuf-5.1.0.tar.gz", hash = "sha256:8493758852a9cdc075a11dbe96c6e37ea2feba5fd5f33ef7442b9a275322a94c", size = 37529, upload-time = "2026-04-28T15:56:40.356Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/ec/5ffcf8f5f53757e01afdece10c664e694ac60d2f17c2036811b85b842a5b/mypy_protobuf-5.1.0-py3-none-any.whl", hash = "sha256:d7031f563f806b8bcd448a3e86768bf0994c0af5b0017b344a4fbbba4191f43c", size = 26313, upload-time = "2026-04-28T15:56:39.096Z" },
+]
+
+[[package]]
 name = "narwhals"
 version = "2.26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4648,6 +4661,7 @@ dev = [
     { name = "grpcio-tools" },
     { name = "matplotlib" },
     { name = "mypy" },
+    { name = "mypy-protobuf" },
     { name = "pandas-stubs" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -4693,6 +4707,7 @@ dev = [
     { name = "grpcio-tools", specifier = ">=1.83.1" },
     { name = "matplotlib", specifier = ">=3.10" },
     { name = "mypy", specifier = ">=2.3.1" },
+    { name = "mypy-protobuf", specifier = ">=5.1.0" },
     { name = "pandas-stubs", specifier = ">=3.0.5.260730" },
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pytest", specifier = ">=9.1.1" },

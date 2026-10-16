@@ -1,6 +1,6 @@
 # All artifacts that are dumped to disk for the Go server to load at startup.
 
-.PHONY: catalogue item-map popular index-vectors artifacts onnx
+.PHONY: catalogue category-map item-map popular index-vectors artifacts onnx
 
 ITEM_MAP ?= serving/artifacts/item_map.json
 
@@ -14,6 +14,9 @@ ONNX_OUT ?= serving/triton/ranker/1/model.onnx
 
 catalogue:  ## Dump per-item category indices for the Go server
 	uv run python -m scripts.artifacts.dump_catalogue --out serving/artifacts/catalogue.json
+
+category-map:  ## Dump the category vocabulary for the Feast gateway
+	uv run python -m scripts.artifacts.dump_category_map --out serving/artifacts/category_map.json
 
 item-map:  ## Dump bronze item_map to JSON for the Go server
 	uv run python -m scripts.artifacts.dump_item_map --out $(ITEM_MAP)
@@ -35,4 +38,4 @@ onnx:  ## Export the serving ranker to ONNX, preprocessing baked into the graph
 	uv run --extra serving --extra sharded --extra orchestration \
 	    python -m models.export.ranker_onnx $(RANKER_CHECKPOINT) --out $(ONNX_OUT)
 
-artifacts: catalogue item-map popular index-vectors onnx  ## Dump all artifacts for the Go server
+artifacts: catalogue category-map item-map popular index-vectors onnx  ## Dump all artifacts for the Go server

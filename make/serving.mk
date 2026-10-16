@@ -3,6 +3,13 @@
 
 .PHONY: serve bench demo
 
+FEATURES_PORT ?= $(FEATURES_REDIS_PORT)
+FEATURES_ARGS ?=
+
+features-serve:  ## Run the Feast gateway sidecar on :50053
+	uv run --extra serving python -m serving.features \
+	    --port $(FEATURES_PORT) $(FEATURES_ARGS)
+
 serve:  ## Run the gRPC orchestrator
 	@echo "TODO: serving"; exit 1
 
