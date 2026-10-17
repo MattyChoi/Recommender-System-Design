@@ -3,10 +3,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from functools import reduce
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pyspark.sql import DataFrame, SparkSession
 
 from common.config import Settings
+
+if TYPE_CHECKING:
+    import torch
+
+    from models.classes.dataset import ItemTables
+    from models.retrieval.two_tower import TwoTower
 
 SPLITS = ("train", "dev", "test")
 BRONZE_TABLES = ("events", "history", "news")
@@ -154,3 +161,38 @@ def read_silver(spark: SparkSession, settings: Settings, splits: Sequence[str]) 
 def read_gold(spark: SparkSession, settings: Settings, name: str) -> DataFrame:
     """Read a gold table by name, from wherever that table lives."""
     return spark.read.parquet(gold_location(settings, name))
+
+
+def load_tower(path: Path, items: ItemTables, n_user_feats: int, device: torch.device) -> TwoTower:
+    """Rebuild the tower a checkpoint was saved from.
+
+    ``use_id``, ``use_content`` and ``use_sequence`` are READ OFF the state dict
+    rather than passed in. They are the ablation axes, so a mismatched flag would
+    score one arm's rows through the other arm's architecture -- and the run name
+    on the output would still look right. Every other dimension is left at its
+    default and guarded by ``strict=True``, which raises on any shape it did not
+    expect.
+
+    torch and the model are imported here rather than at module scope for the
+    same reason s3fs is in ``_remote_is_built``: ``common.utils`` is imported by
+    nearly everything, and most of it has no use for torch.
+    """
+    import torch
+
+    from models.retrieval.two_tower import TwoTower
+
+    state = torch.load(path, map_location=device, weights_only=True)["model"]
+    model = TwoTower(
+        content=items.content,
+        item_category=items.category,
+        item_subcategory=items.subcategory,
+        n_user_feats=n_user_feats,
+        n_categories=items.n_categories,
+        n_subcategories=items.n_subcategories,
+        use_id="item_id_emb.weight" in state,
+        use_content="content.weight" in state,
+        use_sequence="sequence.pos_emb.weight" in state,
+    ).to(device)
+    model.load_state_dict(state)
+    model.eval()
+    return model

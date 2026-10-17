@@ -59,18 +59,28 @@ class TestItParses:
         assert dag is not None
 
     def test_every_task_is_present(self, dag: Any) -> None:
-        assert {task.task_id for task in dag.tasks} == {"rebuild", "validate", "swap"}
+        """One task, because the sequence is library code.
+
+        rebuild / validate / swap put the build-gate-promote ORDER in the DAG,
+        where no CI run executed it and where ``embed_catalogue`` ran twice per
+        build. The order is now
+        :func:`indexing.pipeline.rebuild_and_promote`, asserted in
+        ``test_promote.py`` without an Airflow installation.
+        """
+        assert {task.task_id for task in dag.tasks} == {"rebuild"}
 
 
 class TestTheShape:
-    def test_the_gate_sits_between_the_build_and_the_swap(self, dag: Any) -> None:
-        """If the swap does not depend on the gate, the gate is decoration."""
-        assert "swap" in dag.get_task("validate").downstream_task_ids
-        assert "validate" in dag.get_task("rebuild").downstream_task_ids
+    def test_the_dag_holds_no_sequence_of_its_own(self, dag: Any) -> None:
+        """A DAG with dependencies is a DAG with an opinion about order.
 
-    def test_the_swap_cannot_run_without_the_gate(self, dag: Any) -> None:
-        """A short circuit only skips what is DOWNSTREAM of it."""
-        assert "validate" in dag.get_task("swap").upstream_task_ids
+        The gate-before-swap property this class used to assert is now
+        ``test_promote.py::test_a_refused_gate_leaves_the_pointer_alone``, which
+        tests the branch rather than the wiring that happens to express it.
+        """
+        task = dag.get_task("rebuild")
+        assert not task.upstream_task_ids
+        assert not task.downstream_task_ids
 
     def test_it_runs_hourly(self, dag: Any) -> None:
         """Nightly would leave an article missing for its entire useful life."""

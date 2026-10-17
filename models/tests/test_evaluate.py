@@ -25,6 +25,7 @@ import pytest
 import torch
 
 from common.torch_env import select_device
+from common.utils import load_tower
 from models.classes.dataset import ItemTables, SplitTensors
 from models.classes.train import Hits
 from models.retrieval.dataloader.batching import make_loader
@@ -34,7 +35,6 @@ from models.retrieval.evaluate import (
     BandRow,
     band_labels,
     band_of,
-    load_tower,
     popularity_hits,
     render,
     summarise,

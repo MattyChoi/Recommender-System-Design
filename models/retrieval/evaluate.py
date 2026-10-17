@@ -21,8 +21,8 @@ from common.config import load_settings
 from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
+from common.utils import load_tower
 from data_pipeline.features.user_history import MAX_HISTORY
-from models.classes.dataset import ItemTables
 from models.classes.train import Hits
 from models.retrieval.dataloader.batching import make_loader
 from models.retrieval.dataloader.dataset import (
@@ -31,7 +31,6 @@ from models.retrieval.dataloader.dataset import (
     prior_window_counts,
 )
 from models.retrieval.train import retrieval_hits
-from models.retrieval.two_tower import TwoTower
 
 # Upper-inclusive edges. The first band is the single value 0 -- cold items,
 # which no counting retriever can reach and which are a quarter of the traffic.
@@ -185,33 +184,6 @@ def render(rows: Sequence[BandRow], k: int) -> str:
             f"{row.recall:>10.4f}  {row.popularity:>8.4f}"
         )
     return "\n".join(lines)
-
-
-def load_tower(path: Path, items: ItemTables, n_user_feats: int, device: torch.device) -> TwoTower:
-    """Rebuild the tower a checkpoint was saved from.
-
-    ``use_id``, ``use_content`` and ``use_sequence`` are READ OFF the state dict
-    rather than passed in. They are the ablation axes, so a mismatched flag would
-    score one arm's rows through the other arm's architecture -- and the run name
-    on the output would still look right. Every other dimension is left at its
-    default and guarded by ``strict=True``, which raises on any shape it did not
-    expect.
-    """
-    state = torch.load(path, map_location=device, weights_only=True)["model"]
-    model = TwoTower(
-        content=items.content,
-        item_category=items.category,
-        item_subcategory=items.subcategory,
-        n_user_feats=n_user_feats,
-        n_categories=items.n_categories,
-        n_subcategories=items.n_subcategories,
-        use_id="item_id_emb.weight" in state,
-        use_content="content.weight" in state,
-        use_sequence="sequence.pos_emb.weight" in state,
-    ).to(device)
-    model.load_state_dict(state)
-    model.eval()
-    return model
 
 
 def save(
