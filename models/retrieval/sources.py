@@ -28,7 +28,7 @@ from common.config import load_settings
 from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
-from common.utils import read_gold
+from common.utils import load_tower, read_gold
 from data_pipeline.features.user_history import MAX_HISTORY
 from models.classes.dataset import SplitTensors
 from models.classes.sources import RESULTS, Retrieved
@@ -40,7 +40,7 @@ from models.retrieval.dataloader.dataset import (
     load_train_and_validation,
     prior_window_counts,
 )
-from models.retrieval.evaluate import BAND_EDGES, band_of, load_tower
+from models.retrieval.evaluate import BAND_EDGES, band_of
 from models.retrieval.two_tower import TwoTower
 
 DEFAULT_K = 100

@@ -28,6 +28,7 @@ from common.features import CONTENT_VARIANTS
 from common.spark import get_spark
 from common.torch_env import describe, select_device
 from common.tracking import provenance, require_reachable, run_label, track
+from common.utils import load_tower
 from data_pipeline.features.user_history import MAX_HISTORY
 from evaluation.offline.stats import paired_bootstrap, per_user_means
 from models.classes.sources import RESULTS, load_retrieved
@@ -48,7 +49,6 @@ from models.retrieval.dataloader.dataset import (
     load_train_and_validation,
     prior_window_counts,
 )
-from models.retrieval.evaluate import load_tower
 
 CHECKPOINTS = Path("data/checkpoints/ranking")
 
