@@ -9,7 +9,6 @@ categorical indices).
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,15 +21,9 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as f
 
 from common.config import Settings
-from common.features import CONTENT_VARIANTS, LOG1P_USER_FEATURES, USER_FEATURES, USER_FLAGS
+from common.features import CONTENT_VARIANTS, USER_FEATURES, USER_FLAGS, build_user_features
 from common.utils import read_gold
 from models.classes.dataset import ItemTables, SplitTensors
-
-
-def _cyclic(values: np.ndarray, period: int) -> tuple[np.ndarray, np.ndarray]:
-    """Sin/cos encoding of a cyclic integer feature."""
-    radians = 2.0 * math.pi * values / period
-    return np.sin(radians), np.cos(radians)
 
 
 def load_item_tables(settings: Settings, variant: str = CONTENT_VARIANTS[0]) -> ItemTables:
@@ -123,21 +116,18 @@ def _tensors_from(
         .toPandas()
     )
 
-    numeric = []
-    for name in USER_FEATURES:
-        column = rows[name].fillna(0.0).to_numpy(dtype="float32")
-        numeric.append(np.log1p(column) if name in LOG1P_USER_FEATURES else column)
-    for name in USER_FLAGS:
-        numeric.append(rows[name].fillna(False).to_numpy(dtype="float32"))
-    # Spark's dayofweek is 1..7, hour is 0..23; both wrap, so both get sin/cos.
-    numeric.extend(_cyclic(rows["hour_of_day"].to_numpy(dtype="float32"), 24))
-    numeric.extend(_cyclic(rows["day_of_week"].to_numpy(dtype="float32") - 1.0, 7))
+    numeric = build_user_features(
+        static={name: rows[name].fillna(0.0).to_numpy(dtype="float32") for name in USER_FEATURES},
+        has_user_features=rows[USER_FLAGS[0]].fillna(False).to_numpy(dtype="float32"),
+        hour_of_day=rows["hour_of_day"].to_numpy(dtype="float32"),
+        day_of_week=rows["day_of_week"].to_numpy(dtype="float32"),
+    )
 
     ids, mask = _pad_ragged(rows["history_idx"], max_len)
     neg_ids, neg_mask = _pad_ragged(rows["neg_idx"], max_negs)
 
     return SplitTensors(
-        user_feats=torch.from_numpy(np.stack(numeric, axis=1)),
+        user_feats=torch.from_numpy(numeric),
         history_ids=ids,
         history_mask=mask,
         item_ids=torch.from_numpy(rows["item_idx"].to_numpy(dtype="int64")),

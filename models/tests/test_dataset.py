@@ -29,10 +29,9 @@ import torch
 from pyspark.sql import SparkSession
 
 from common.config import Settings, load_settings
-from common.features import LOG1P_USER_FEATURES, USER_FEATURES, USER_FLAGS
+from common.features import LOG1P_USER_FEATURES, USER_FEATURES, USER_FLAGS, _cyclic
 from models.classes.dataset import ItemTables
 from models.retrieval.dataloader.dataset import (
-    _cyclic,
     _pad_ragged,
     load_item_tables,
     load_train_and_validation,

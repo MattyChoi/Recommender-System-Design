@@ -3,12 +3,16 @@
 
 .PHONY: serve bench demo
 
-FEATURES_PORT ?= $(FEATURES_REDIS_PORT)
 FEATURES_ARGS ?=
+RETRIEVAL_ARGS ?= --artifacts data/index --pointer data/index/CURRENT
 
 features-serve:  ## Run the Feast gateway sidecar on :50053
 	uv run --extra serving python -m serving.features \
 	    --port $(FEATURES_PORT) $(FEATURES_ARGS)
+
+retrieval-serve:  ## Run the FAISS + user-tower sidecar on :50052
+	uv run --extra serving python -m serving.retrieval \
+	    --port $(RETRIEVAL_PORT) $(RETRIEVAL_ARGS)
 
 serve:  ## Run the gRPC orchestrator
 	@echo "TODO: serving"; exit 1

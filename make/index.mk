@@ -4,7 +4,7 @@
 
 INDEX_CHECKPOINT ?= data/checkpoints/both-logq-n4u0-b8192e10lr0.001-ab7e1d500b9bf792.pt
 INDEX_ROOT ?= data/index
-INDEX_KIND ?= flat
+INDEX_KIND ?= hnsw
 
 BENCHMARK_INDEX_ARGS ?=
 PROMOTE_ARGS ?=
