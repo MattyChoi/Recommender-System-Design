@@ -60,6 +60,6 @@ include make/retrieval.mk
 include make/ranking.mk
 include make/rerank.mk
 include make/index.mk
+include make/serving_artifacts.mk
 include make/serving.mk
 include make/quality.mk
-include make/serving_artifacts.mk

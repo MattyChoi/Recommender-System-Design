@@ -104,9 +104,11 @@ type Catalogue interface {
 	// Vectors are L2-normalised content vectors for MMR. Returning nil disables
 	// MMR for the request rather than failing it.
 	Vectors(items []int32) [][]float32
-	// Categories back the per-category cap, and the ranker's category_idx.
+	// Categories back the ranker's category_idx column.
 	Categories(items []int32) []int32
-	// Subcategories back the ranker's subcategory_idx.
+
+	// Subcategories back the ranker's subcategory_idx column AND the
+	// per-category cap.
 	Subcategories(items []int32) []int32
 }
 
