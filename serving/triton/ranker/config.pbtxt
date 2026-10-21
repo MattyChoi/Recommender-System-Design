@@ -1,0 +1,41 @@
+# Layout matters and is not optional: Triton reads <repo>/<model>/<version>/,
+# so the graph lives at serving/triton/ranker/1/model.onnx and `1` is the model
+# VERSION. `make onnx` writes it there.
+
+name: "ranker"
+platform: "onnxruntime_onnx"
+
+max_batch_size: 1024
+
+dynamic_batching {
+  preferred_batch_size: [ 128, 256, 512 ]
+  max_queue_delay_microseconds: 500
+}
+
+input [
+  {
+    name: "features"
+    data_type: TYPE_FP32
+    dims: [ 11 ]
+  }
+]
+
+output [
+  {
+    name: "score"
+    data_type: TYPE_FP32
+    # One LOGIT per sample. Logits, not probabilities: calibration is a separate
+    # isotonic fit and is deliberately NOT in this graph. The ranker only has to
+    # ORDER candidates, and a calibrated number answers a different question.
+    dims: [ 1 ]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]
+
+version_policy: { latest: { num_versions: 1 } }

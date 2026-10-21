@@ -145,6 +145,41 @@ services:
       # config and dashboard content stay separate in the repo.
       - "./infra/docker/grafana/dashboards:/etc/grafana/dashboards:ro"
 
+  triton:
+    image: nvcr.io/nvidia/tritonserver:25.12-py3
+    container_name: recsys-triton
+    command: ["tritonserver", "--model-repository=/models"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "8000:8000"              # HTTP/REST v2, used only by the healthcheck below
+      - "8001:8001"              # gRPC -- the orchestrator's -triton flag
+      - "8002:8002"              # its own Prometheus metrics, scraped by prometheus
+    volumes:
+      # The MODEL REPOSITORY, not the model. Triton reads
+      # <repo>/<model>/<version>/, so this must be the directory holding
+      # `ranker/`, never `ranker/` itself. Read-only: Triton only ever reads it,
+      # and a writable mount invites a container to modify a checked-in artifact.
+      - "./serving/triton:/models:ro"
+    # 64MB is Docker's default and Triton's docs call for more. Not measured
+    # here, but an obscure shared-memory failure is a bad way to find the floor.
+    shm_size: "1gb"
+    # curl, not the python trick the mlflow service needs: the tritonserver image
+    # ships it. /v2/health/ready answers 200 only once the model repository has
+    # LOADED, so `--wait` gates on the ranker being SERVABLE rather than on the
+    # process existing.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
 # Named volumes. An empty value means "use the default local driver".
 volumes:
   minio:

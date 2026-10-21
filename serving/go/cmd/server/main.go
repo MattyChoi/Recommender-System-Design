@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/catalogue"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/index"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/popular"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/ranking"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/server"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/sources"
 )
@@ -32,6 +34,7 @@ type options struct {
 	featuresAPI  string
 	retrievalAPI string
 	tritonAPI    string
+	tritonModel  string
 	conns        int
 
 	// --- deadline budgets ---
@@ -54,6 +57,11 @@ type options struct {
 
 	// --- observability ---
 	traceRatio float64
+}
+
+type namedProbe struct {
+	name  string
+	check func(context.Context) error
 }
 
 func parse() options {
@@ -82,6 +90,7 @@ func parse() options {
 	flag.StringVar(&o.tritonAPI, "triton", "localhost:8001", "Triton's gRPC port, NOT 8000")
 	flag.IntVar(&o.conns, "conns", 4,
 		"HTTP/2 connections per upstream; one connection serialises every stream on it")
+	flag.StringVar(&o.tritonModel, "triton-model", "ranker", "triton model name")
 
 	flag.StringVar(&o.sourceName, "source-name", "two_tower", "the retriever's name in quotas")
 	flag.IntVar(&o.candidates, "candidates", 400, "candidates entering the ranker")
@@ -127,6 +136,26 @@ func readColumns(path string) ([]string, error) {
 		return nil, fmt.Errorf("%s declares no features", path)
 	}
 	return decoded.Features, nil
+}
+
+const warmTimeout = 5 * time.Second
+
+// warmConnections dials every backend once, before the first real request.
+func warmConnections(ctx context.Context, probes []namedProbe) {
+	for _, probe := range probes {
+		started := time.Now()
+		inner, cancel := context.WithTimeout(ctx, warmTimeout)
+		err := probe.check(inner)
+		cancel()
+
+		took := time.Since(started).Round(time.Millisecond)
+		if err != nil {
+			log.Printf("  warm       %-9s FAILED in %v (%v); its first request pays setup",
+				probe.name, took, err)
+			continue
+		}
+		log.Printf("  warm       %-9s ok in %v", probe.name, took)
+	}
 }
 
 func run(o options) error {
@@ -184,17 +213,32 @@ func run(o options) error {
 	if err != nil {
 		return err
 	}
-	defer gateway.Close()
+	defer func() { _ = gateway.Close() }()
 
 	index, err := sources.DialIndex(o.retrievalAPI, o.sourceName, o.candidates, o.conns, int32(o.efSearch), o.srcDeadline)
 	if err != nil {
 		return err
 	}
-	defer index.Close()
+	defer func() { _ = index.Close() }()
+
+	ranker, err := ranking.Dial(o.tritonAPI, o.tritonModel, columns, o.conns)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ranker.Close() }()
 
 	log.Printf("  retrieval  %s", o.retrievalAPI)
 	log.Printf("  features   %s", o.featuresAPI)
+	log.Printf("  triton     %s/%s", o.tritonAPI, o.tritonModel)
 	log.Printf("  conns      %d per backend (1 = one loopyWriter, the measured limit)", o.conns)
+	log.Printf("  catalogue  %s (%d rows, %s)", o.catalogue, catalog.Size(), catalog.Version())
+	log.Printf("  columns    %d, from %s", len(columns), o.columns)
+
+	warmConnections(context.Background(), []namedProbe{
+		{"features", gateway.Ready},
+		{"retrieval", index.Ready},
+		{"triton", ranker.Ready},
+	})
 
 	return nil
 }

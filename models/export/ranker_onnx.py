@@ -154,6 +154,9 @@ def export(servable: ServableRanker, out: Path, batch: int = 4) -> Path:
     fewer than the configured maximum.
     """
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Eval mode, so dropout is not traced into the graph. load_checkpoint
+    # already does this; a caller that built the wrapper by hand may not have.
+    servable.eval()
     example = torch.zeros(batch, len(servable.names), dtype=torch.float32)
 
     # `dynamo=True` with `dynamic_shapes`, both stated explicitly.
