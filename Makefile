@@ -55,6 +55,7 @@ include make/docker.mk
 include make/proto.mk
 include make/data.mk
 include make/kafka.mk
+include make/parity.mk
 include make/eval.mk
 include make/retrieval.mk
 include make/ranking.mk
