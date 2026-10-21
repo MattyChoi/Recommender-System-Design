@@ -78,4 +78,5 @@ class RetrievalServicer(retrieval_pb2_grpc.RetrievalServicer):
             index_version=self._loaded.version,
             index_kind=self._loaded.kind,
             index_ef_search=self._loaded.ef_search,
+            item_count=self._loaded.index.ntotal
         )

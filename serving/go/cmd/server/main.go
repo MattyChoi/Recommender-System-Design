@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/catalogue"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/index"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/popular"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/server"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/sources"
 )
 
 type options struct {
@@ -31,6 +33,14 @@ type options struct {
 	retrievalAPI string
 	tritonAPI    string
 	conns        int
+
+	// --- deadline budgets ---
+	srcDeadline time.Duration
+
+	// --- retrieval api parameters ---
+	sourceName string
+	candidates int
+	efSearch   int
 
 	// --- reranking policies ----
 	lambda         float64
@@ -72,6 +82,12 @@ func parse() options {
 	flag.StringVar(&o.tritonAPI, "triton", "localhost:8001", "Triton's gRPC port, NOT 8000")
 	flag.IntVar(&o.conns, "conns", 4,
 		"HTTP/2 connections per upstream; one connection serialises every stream on it")
+
+	flag.StringVar(&o.sourceName, "source-name", "two_tower", "the retriever's name in quotas")
+	flag.IntVar(&o.candidates, "candidates", 400, "candidates entering the ranker")
+	flag.IntVar(&o.efSearch, "ef-search", 0, "per-request efSearch, 0 for the index sidecar's default")
+
+	flag.DurationVar(&o.srcDeadline, "source-deadline", 25*time.Millisecond, "per retriever")
 
 	flag.Float64Var(&o.lambda, "lambda", 1.0,
 		"MMR's weight on relevance. 1.0, makes MMR a no-op")
@@ -162,6 +178,23 @@ func run(o options) error {
 		log.Printf("mmr   %s  %dx%d  lambda %.2f",
 			catalog.VectorVersion(), catalog.Size(), catalog.Dim(), o.lambda)
 	}
+
+	// dial the microservices
+	gateway, err := sources.DialGateway(o.featuresAPI, o.conns)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+
+	index, err := sources.DialIndex(o.retrievalAPI, o.sourceName, o.candidates, o.conns, int32(o.efSearch), o.srcDeadline)
+	if err != nil {
+		return err
+	}
+	defer index.Close()
+
+	log.Printf("  retrieval  %s", o.retrievalAPI)
+	log.Printf("  features   %s", o.featuresAPI)
+	log.Printf("  conns      %d per backend (1 = one loopyWriter, the measured limit)", o.conns)
 
 	return nil
 }
