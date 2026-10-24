@@ -15,6 +15,7 @@ import (
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/ranking"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/server"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/sources"
+	"github.com/redis/go-redis/v9"
 )
 
 type options struct {
@@ -29,6 +30,12 @@ type options struct {
 	columns     string
 	indexStem   string
 	contentStem string
+
+	// --- seen list ---
+	redisURL string
+	seenCap  int
+	seenRate float64
+	seenTTL  time.Duration
 
 	// --- microservices ---
 	featuresAPI  string
@@ -84,6 +91,11 @@ func parse() options {
 		"stem of the rung-2 item table (`make index-vectors`); empty disables FAISS")
 	flag.StringVar(&o.contentStem, "content-stem", "",
 		"stem of the content table for MMR (`make content-vectors`); empty disables MMR")
+
+	flag.StringVar(&o.redisURL, "redis", "redis://localhost:6379", "seen-list and embedding cache")
+	flag.IntVar(&o.seenCap, "seen-capacity", 200, "items per user the filter is sized for")
+	flag.Float64Var(&o.seenRate, "seen-fp-rate", 0.01, "target false-positive rate")
+	flag.DurationVar(&o.seenTTL, "seen-ttl", sources.SeenTTL, "how long \"recently shown\" lasts")
 
 	flag.StringVar(&o.featuresAPI, "features", "localhost:50053", "the Feast gateway")
 	flag.StringVar(&o.retrievalAPI, "retrieval", "localhost:50052", "the FAISS sidecar")
@@ -180,7 +192,7 @@ func run(o options) error {
 	if o.indexStem == "" {
 		log.Printf("index vectors missing (no -index-stem; exact search fallback is disabled)")
 	} else if flat, err = index.Load(o.indexStem); err != nil {
-		return fmt.Errorf("index vectors: %w", err)
+		log.Printf("index vectors failed to load from %s (exact search fallback is disabled): %v", o.indexStem, err)
 	}
 
 	if o.contentStem == "" {
@@ -208,6 +220,28 @@ func run(o options) error {
 			catalog.VectorVersion(), catalog.Size(), catalog.Dim(), o.lambda)
 	}
 
+	// --- Redis: the seen-list and the user embedding cache ------------------------
+	redisOptions, err := redis.ParseURL(o.redisURL)
+	if err != nil {
+		return fmt.Errorf("parsing -redis: %w", err)
+	}
+
+	// One client per logical DB: a go-redis client SELECTs its DB once per
+	// pooled connection
+	seenOptions := *redisOptions
+	seenOptions.DB = sources.SeenDB
+	seenClient := redis.NewClient(&seenOptions)
+	defer func() { _ = seenClient.Close() }()
+
+	embeddingOptions := *redisOptions
+	embeddingOptions.DB = sources.EmbeddingDB
+	embeddingClient := redis.NewClient(&embeddingOptions)
+	defer func() { _ = embeddingClient.Close() }()
+
+	bits, hashes := sources.Sizing(o.seenCap, o.seenRate)
+	seen := sources.NewSeenList(seenClient, bits, hashes)
+	seen.TTL = o.seenTTL
+
 	// dial the microservices
 	gateway, err := sources.DialGateway(o.featuresAPI, o.conns)
 	if err != nil {
@@ -221,6 +255,10 @@ func run(o options) error {
 	}
 	defer func() { _ = index.Close() }()
 
+	if flat != nil {
+		index.Fallback = sources.NewCachedSearch(embeddingClient, flat)
+	}
+
 	ranker, err := ranking.Dial(o.tritonAPI, o.tritonModel, columns, o.conns)
 	if err != nil {
 		return err
@@ -233,6 +271,8 @@ func run(o options) error {
 	log.Printf("  conns      %d per backend (1 = one loopyWriter, the measured limit)", o.conns)
 	log.Printf("  catalogue  %s (%d rows, %s)", o.catalogue, catalog.Size(), catalog.Version())
 	log.Printf("  columns    %d, from %s", len(columns), o.columns)
+	log.Printf("  seen-list  %d bits, %d hashes (capacity %d at %.3f), ttl %v",
+		bits, hashes, o.seenCap, o.seenRate, o.seenTTL)
 
 	warmConnections(context.Background(), []namedProbe{
 		{"features", gateway.Ready},

@@ -24,9 +24,6 @@ from data_pipeline.features.user_history import MAX_HISTORY
 from models.retrieval.dataloader.dataset import load_item_tables
 from models.retrieval.two_tower import TwoTower
 
-# ``torch.nn.functional.normalize``'s own floor.
-_NORM_EPS = 1e-12
-
 
 @dataclass(frozen=True)
 class LoadedIndex:
@@ -35,10 +32,17 @@ class LoadedIndex:
     kind: str
     version: str
     ef_search: int
-    content: Any  # np.ndarray[np.float32, Any]
+    content: torch.Tensor
+    device: torch.device
 
 
-def load_index(checkpoint: Path, artifacts: Path, pointer: Path, ef_search: int) -> LoadedIndex:
+def load_index(
+    checkpoint: Path,
+    artifacts: Path,
+    pointer: Path,
+    ef_search: int,
+    device: torch.device | None = None,
+) -> LoadedIndex:
     """Read CURRENT, load what it names, and report what was actually loaded."""
 
     ### Fetch the FAISS index
@@ -61,10 +65,11 @@ def load_index(checkpoint: Path, artifacts: Path, pointer: Path, ef_search: int)
         index.hnsw.efSearch = ef_search
 
     ### Load the pretrained tower for user encoding
+    where = device or torch.device("cpu")
     settings = load_settings()
     items = load_item_tables(settings, CONTENT_VARIANTS[0])
 
-    state = torch.load(checkpoint, map_location="cpu", weights_only=True)["model"]
+    state = torch.load(checkpoint, map_location=where, weights_only=True)["model"]
     if "user_norm.weight" not in state:
         raise SystemExit(f"{checkpoint} is not a two-tower checkpoint")
     n_user_feats = int(state["user_norm.weight"].shape[0])
@@ -74,12 +79,12 @@ def load_index(checkpoint: Path, artifacts: Path, pointer: Path, ef_search: int)
             f"USER_TOWER_COLUMNS has {len(USER_TOWER_COLUMNS)}: {USER_TOWER_COLUMNS}"
         )
 
-    tower = load_tower(checkpoint, items, n_user_feats, torch.device("cpu"))
+    tower = load_tower(checkpoint, items, n_user_feats, where)
 
     ### Fetch the content table
     # The same [n_items + 1, dim] table `models.ranking.dataset.build` pools
     # over: item-indexed, row 0 reserved
-    content = np.ascontiguousarray(items.content.numpy(), dtype="float32")
+    content = items.content
 
     if index.ntotal + 1 != len(content):
         raise SystemExit(
@@ -95,6 +100,7 @@ def load_index(checkpoint: Path, artifacts: Path, pointer: Path, ef_search: int)
         version=version,
         ef_search=ef_search,
         content=content,
+        device=where,
     )
 
 
@@ -108,21 +114,24 @@ def real_history(history: Sequence[int], n_items: int) -> list[int]:
 
 @torch.inference_mode()
 def encode_user(
-    tower: TwoTower, feats: npt.NDArray[np.float32], history: list[int]
+    tower: TwoTower,
+    feats: npt.NDArray[np.float32],
+    history: list[int],
+    device: torch.device,
 ) -> npt.NDArray[np.float32]:
-    items = torch.zeros((1, MAX_HISTORY), dtype=torch.long)
-    mask = torch.zeros((1, MAX_HISTORY), dtype=torch.bool)
+    items = torch.zeros((1, MAX_HISTORY), dtype=torch.long, device=device)
+    mask = torch.zeros((1, MAX_HISTORY), dtype=torch.bool, device=device)
     if history:
         items[0, : len(history)] = torch.tensor(history, dtype=torch.long)
         mask[0, : len(history)] = True
 
-    vector = tower.encode_user(torch.from_numpy(feats), items, mask)
+    vector = tower.encode_user(torch.from_numpy(feats).to(device), items, mask)
     # float32 and C-contiguous, because FAISS takes neither on faith.
-    return np.ascontiguousarray(vector.numpy(), dtype="float32")
+    return np.ascontiguousarray(vector.cpu().numpy(), dtype="float32")
 
 
 def content_similarity(
-    content: npt.NDArray[np.float32], history: Sequence[int], items: Sequence[int]
+    content: torch.Tensor, history: list[int], items: list[int]
 ) -> npt.NDArray[np.float32]:
     """``content_similarity`` per candidate, as the ranker was trained on it.
 
@@ -139,18 +148,16 @@ def content_similarity(
     Returns:
         One similarity per candidate, aligned with ``items``.
     """
-    rows = list(history)
+    rows = history
     if rows:
-        pooled = np.asarray(content[rows].sum(axis=0) / len(rows), dtype="float32")
+        pooled = content[torch.tensor(rows, dtype=torch.long)].mean(dim=0)
     else:
-        pooled = np.zeros(content.shape[1], dtype="float32")
-    pooled /= max(float(np.linalg.norm(pooled)), _NORM_EPS)
+        pooled = torch.zeros(content.shape[1], dtype=content.dtype)
+    pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
 
-    # One [k, dim] gather and a matvec. Candidates are item ids and the table is
-    # item-indexed, so this needs no offset -- which is only true because
-    # `Retrieve` converted the FAISS positions first.
-    similarity: npt.NDArray[np.float32] = content[list(items)] @ pooled
-    return similarity
+    candidates = content[torch.tensor(items, dtype=torch.long)]
+    similarity = (candidates * pooled).sum(dim=-1)
+    return similarity.numpy().astype(np.float32)
 
 
 def build_user_tower_columns(

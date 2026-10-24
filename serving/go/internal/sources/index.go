@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -15,7 +16,7 @@ import (
 )
 
 type Searcher interface {
-	Search(ctx context.Context, userID string, k int) ([]int32, []float32, error)
+	Search(ctx context.Context, userID string, k int) ([]int32, bool, error)
 }
 
 type ANNIndex struct {
@@ -107,14 +108,18 @@ func (s *ANNIndex) degrade(
 		return service.Candidates{}, fmt.Errorf("FAISS index retrieval: %w", cause)
 	}
 
-	items, scores, err := s.Fallback.Search(ctx, user.ID, s.K)
-	if err != nil || len(scores) == 0 {
+	items, ok, err := s.Fallback.Search(ctx, user.ID, s.K)
+	if err != nil {
+		return service.Candidates{}, fmt.Errorf("FAISS index retrieval: %w",
+			errors.Join(cause, fmt.Errorf("exact search fallback: %w", err)))
+	}
+	if !ok {
 		return service.Candidates{}, fmt.Errorf("FAISS index retrieval: %w", cause)
 	}
 
 	s.setLastIndex("flat", "")
 
-	return service.Candidates{Items: items, Scores: scores}, nil
+	return service.Candidates{Items: items}, nil
 
 }
 
@@ -130,7 +135,7 @@ func (s *ANNIndex) Ready(ctx context.Context) error {
 		return fmt.Errorf("FAISS index sidecar not ready: %s", response.GetDetail())
 	}
 	if count := response.GetItemCount(); count == 0 {
-		return fmt.Errorf("retrieval sidecar reports an empty index (version %q)",
+		return fmt.Errorf("FAISS index sidecar reports an empty index (version %q)",
 			response.GetIndexVersion())
 	}
 	s.setLastIndex(response.GetIndexKind(), response.GetIndexVersion())

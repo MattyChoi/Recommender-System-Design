@@ -45,7 +45,7 @@ HISTORIES = [
 
 
 @pytest.fixture
-def content() -> npt.NDArray[np.float32]:
+def content() -> torch.Tensor:
     """A content table shaped like the real one: row 0 zeroed, rows of UNEQUAL norm.
 
     Both properties are load-bearing.
@@ -64,11 +64,11 @@ def content() -> npt.NDArray[np.float32]:
     table = rng.normal(size=(N_ROWS, CONTENT_DIM)).astype("float32")
     table *= rng.uniform(0.25, 4.0, size=(N_ROWS, 1)).astype("float32")
     table[0] = 0.0
-    return np.ascontiguousarray(table, dtype="float32")
+    return torch.from_numpy(np.ascontiguousarray(table, dtype="float32"))
 
 
 def _training_column(
-    content: npt.NDArray[np.float32], history: list[int], items: list[int]
+    content: torch.Tensor, history: list[int], items: list[int]
 ) -> npt.NDArray[np.float32]:
     """``models/ranking/dataset.py:build`` for one request, transcribed.
 
@@ -76,7 +76,7 @@ def _training_column(
     0 and a zero mask, which is how the gold table stores them and therefore
     what ``build`` was reading when it produced every offline number.
     """
-    table = torch.from_numpy(content)
+    table = content
     ids = torch.zeros((1, MAX_HISTORY), dtype=torch.long)
     mask = torch.zeros((1, MAX_HISTORY), dtype=torch.long)
     ids[0, : len(history)] = torch.tensor(history, dtype=torch.long)
@@ -95,7 +95,7 @@ def _training_column(
 
 class TestItAgreesWithTraining:
     @pytest.mark.parametrize("history", HISTORIES)
-    def test_the_column_matches(self, content: npt.NDArray[np.float32], history: list[int]) -> None:
+    def test_the_column_matches(self, content: torch.Tensor, history: list[int]) -> None:
         np.testing.assert_allclose(
             content_similarity(content, history, CANDIDATES),
             _training_column(content, history, CANDIDATES),
@@ -103,7 +103,7 @@ class TestItAgreesWithTraining:
             atol=1e-6,
         )
 
-    def test_an_empty_history_is_zero_on_both_sides(self, content: npt.NDArray[np.float32]) -> None:
+    def test_an_empty_history_is_zero_on_both_sides(self, content: torch.Tensor) -> None:
         """Zero is the training answer for a cold user, not a serving fallback.
 
         ``build`` divides by ``clamp(min=1.0)`` and normalises a zero vector,
@@ -116,7 +116,7 @@ class TestItAgreesWithTraining:
         np.testing.assert_array_equal(served, np.zeros(len(CANDIDATES), dtype="float32"))
         np.testing.assert_array_equal(served, _training_column(content, [], CANDIDATES))
 
-    def test_the_alignment_is_positional(self, content: npt.NDArray[np.float32]) -> None:
+    def test_the_alignment_is_positional(self, content: torch.Tensor) -> None:
         """Reordering the candidates reorders the column and changes nothing else.
 
         The response pairs ``items``, ``scores`` and ``content_similarity`` by
@@ -131,7 +131,7 @@ class TestItAgreesWithTraining:
 
 class TestThePropertiesThatCouldDriftSilently:
     def test_normalising_the_candidate_too_is_a_different_column(
-        self, content: npt.NDArray[np.float32]
+        self, content: torch.Tensor
     ) -> None:
         """The asymmetry is the whole trap, so prove the symmetric version differs.
 
@@ -143,7 +143,7 @@ class TestThePropertiesThatCouldDriftSilently:
         history = [3, 5, 8]
         asymmetric = content_similarity(content, history, CANDIDATES)
 
-        table = torch.from_numpy(content)
+        table = content
         pooled = torch.nn.functional.normalize(
             table[torch.tensor(history)].mean(dim=0), p=2, dim=-1
         )
@@ -155,7 +155,7 @@ class TestThePropertiesThatCouldDriftSilently:
         assert not np.allclose(asymmetric, symmetric, rtol=1e-3, atol=1e-4)
 
     def test_the_filter_cannot_be_seen_here_and_is_still_required(
-        self, content: npt.NDArray[np.float32]
+        self, content: torch.Tensor
     ) -> None:
         """This column is scale-invariant. The TOWER is not. Do not remove the filter.
 

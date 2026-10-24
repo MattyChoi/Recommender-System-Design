@@ -8,6 +8,7 @@ import signal
 from concurrent import futures
 from pathlib import Path
 from types import FrameType
+from typing import Any
 
 import faiss
 import grpc
@@ -15,6 +16,7 @@ import torch
 from dotenv import load_dotenv
 
 from common.pb import retrieval_pb2_grpc
+from serving.retrieval.cache import DEFAULT_TTL, REDIS_URL, UserEmbeddingCache, connect
 from serving.retrieval.index import load_index
 from serving.retrieval.service import RetrievalServicer
 
@@ -38,6 +40,8 @@ def serve(
     artifacts: Path,
     pointer: Path,
     ef_search: int,
+    redis_url: str,
+    cache_ttl: int,
 ) -> None:
     # ONE thread each for torch and FAISS, with all the concurrency coming from
     # the gRPC pool. Both libraries default to using every core for intra-op
@@ -48,8 +52,17 @@ def serve(
 
     loaded = load_index(checkpoint, artifacts, pointer, ef_search)
 
+    embeddings_cache: Any = None
+    if redis_url:
+        try:
+            embeddings_cache = UserEmbeddingCache(connect(redis_url), loaded.index.d, cache_ttl)
+        except RuntimeError as exc:
+            print(f"WARNING: no user-embedding cache ({exc})")
+
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=workers))
-    retrieval_pb2_grpc.add_RetrievalServicer_to_server(RetrievalServicer(loaded), server)
+    retrieval_pb2_grpc.add_RetrievalServicer_to_server(
+        RetrievalServicer(loaded, embeddings_cache), server
+    )
     server.add_insecure_port(f"[::]:{port}")
 
     print(
@@ -77,6 +90,12 @@ def main() -> int:
     parser.add_argument("--artifacts", type=Path, default=Path("data/index"))
     parser.add_argument("--pointer", type=Path, default=Path("data/index/CURRENT"))
     parser.add_argument("--ef-search", type=int, default=DEFAULT_EF_SEARCH)
+    parser.add_argument(
+        "--redis-url",
+        default=REDIS_URL,
+        help="User-embedding cache. Empty string disables it.",
+    )
+    parser.add_argument("--cache-ttl", type=int, default=DEFAULT_TTL)
     args = parser.parse_args()
 
     serve(
@@ -86,6 +105,8 @@ def main() -> int:
         args.artifacts,
         args.pointer,
         args.ef_search,
+        args.redis_url,
+        args.cache_ttl,
     )
     return 0
 

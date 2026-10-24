@@ -81,7 +81,8 @@ def make_session(graph: Path) -> ort.InferenceSession:
 
 
 def test_the_wrapper_matches_eager_pytorch_on_raw_columns(
-    rows: RankingRows, trained_pair: tuple[MMoE, Standardiser],
+    rows: RankingRows,
+    trained_pair: tuple[MMoE, Standardiser],
 ) -> None:
     """**The load-bearing test, and it needs no onnxruntime.**
 
@@ -97,7 +98,9 @@ def test_the_wrapper_matches_eager_pytorch_on_raw_columns(
 
 
 def test_onnx_matches_eager_pytorch(
-    tmp_path: Path, rows: RankingRows, trained_pair: tuple[MMoE, Standardiser],
+    tmp_path: Path,
+    rows: RankingRows,
+    trained_pair: tuple[MMoE, Standardiser],
 ) -> None:
     """The export itself. Looser tolerance than above -- 1e-4 rather than 1e-5 --
     because onnxruntime is entitled to fuse and reassociate operations."""
@@ -116,7 +119,8 @@ def test_onnx_matches_eager_pytorch(
 
 
 def test_the_column_sidecar_matches_the_graph(
-    tmp_path: Path, trained_pair: tuple[MMoE, Standardiser],
+    tmp_path: Path,
+    trained_pair: tuple[MMoE, Standardiser],
 ) -> None:
     """The file the Go orchestrator reads must declare the order the graph was
     built for. This is the other half of readColumns in ch 5."""
@@ -131,7 +135,8 @@ def test_the_column_sidecar_matches_the_graph(
 
 
 def test_two_swapped_columns_change_the_scores(
-    rows: RankingRows, trained_pair: tuple[MMoE, Standardiser],
+    rows: RankingRows,
+    trained_pair: tuple[MMoE, Standardiser],
 ) -> None:
     """Why the sidecar matters. Swapping two columns is a valid-shaped input that
     Triton accepts and the model scores, so nothing downstream can catch it --

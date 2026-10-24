@@ -6,7 +6,7 @@ provider: local
 online_store:
   type: redis
   # localhost from the host, redis:6379 from inside the compose network.
-  connection_string: ${FEAST_REDIS_CONNECTION}
+  connection_string: ${REDIS_URL}
   key_ttl_seconds: 604800
 
 offline_store:
