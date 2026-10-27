@@ -36,6 +36,18 @@ go-fmt:
 go-test:  ## Go unit tests, including the Python parity fixtures
 	cd $(GO_DIR) && $(GO) test ./...
 
+go-race:  ## Go tests under the race detector (needs a C toolchain)
+	@cc=$$(command -v gcc || command -v clang) || true; \
+	  if [ -z "$$cc" ]; then \
+	    echo "go-race needs a C compiler: the detector is cgo instrumentation."; \
+	    echo "  Debian/Ubuntu:  sudo apt install build-essential"; \
+	    echo "  Fedora/RHEL:    sudo dnf install gcc"; \
+	    echo "  Arch:           sudo pacman -S gcc"; \
+	    echo "  Skip this gate: make check SKIP_RACE=1"; \
+	    exit 1; \
+	  fi; \
+	  cd $(GO_DIR) && CGO_ENABLED=1 CC="$$cc" $(GO) test -race ./...
+
 go-build:  ## Compile the serving orchestrator
 	cd $(GO_DIR) && $(GO) build ./...
 

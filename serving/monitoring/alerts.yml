@@ -1,0 +1,125 @@
+# Alert rules for the orchestrator.
+groups:
+  - name: recsys-latency
+    interval: 30s
+    rules:
+      - alert: RecsysP99OverBudget
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(recsys_request_duration_seconds_bucket[5m]))
+          ) > 0.1
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "p99 is {{ $value | humanizeDuration }}, past the 100ms budget"
+          runbook: "Check recsys_stage_duration_seconds to see WHICH stage; a single end-to-end number says a request was slow, the per-stage one says why."
+
+      - alert: RecsysStageOverBudget
+        # Per-stage budgets: features 8ms, retrieval 25ms, rank 35ms, rerank
+        # 5ms.
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, stage) (rate(recsys_stage_duration_seconds_bucket[5m]))
+          )
+          > on (stage)
+          (
+            label_replace(vector(0.008), "stage", "features", "", "")
+            or label_replace(vector(0.025), "stage", "retrieval", "", "")
+            or label_replace(vector(0.035), "stage", "rank", "", "")
+            or label_replace(vector(0.005), "stage", "rerank", "", "")
+          )
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "stage {{ $labels.stage }} p99 is past its budget"
+
+  - name: recsys-errors
+    interval: 30s
+    rules:
+      - alert: RecsysErrorRate
+        expr: |
+          sum(rate(recsys_requests_total{code!~"OK|InvalidArgument"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)
+          > 0.01
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "server error rate is {{ $value | humanizePercentage }}"
+
+      - alert: RecsysClientErrorSpike
+        expr: |
+          sum(rate(recsys_requests_total{code="InvalidArgument"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)
+          > 0.05
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests are being rejected as malformed"
+
+  - name: recsys-degradation
+    interval: 30s
+    rules:
+      - alert: RecsysFallbackRate
+        expr: |
+          sum(rate(recsys_fallback_total[5m]))
+          / clamp_min(sum(rate(recsys_requests_total{code="OK"}[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of slates are the popularity fallback"
+
+      - alert: RecsysRankerDegraded
+        expr: |
+          sum(rate(recsys_degraded_total{source="ranker"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total{code="OK"}[5m])), 0.001)
+          > 0.02
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests served the retrieval order"
+
+      - alert: RecsysFeatureGatewayDegraded
+        expr: |
+          sum(rate(recsys_degraded_total{source="features"}[5m]))
+          / clamp_min(sum(rate(recsys_requests_total{code="OK"}[5m])), 0.001)
+          > 0.02
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests ran against a cold user"
+
+      - alert: RecsysRetrievalOnRungTwo
+        expr: sum(rate(recsys_incomplete_rows_total[5m])) > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "retrieval resolves to fallback; exact search is ~2 cores at peak QPS"
+
+      - alert: RecsysSeenFilterSaturated
+        expr: |
+          histogram_quantile(
+            0.5,
+            sum by (le) (rate(recsys_stage_candidates_bucket{stage="after_filter"}[10m]))
+          ) < 1
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "the seen-list is blocking every candidate; check capacity against items per user"
+
+  - name: recsys-experiments
+    interval: 60s
+    rules:
+      - alert: RecsysExperimentImbalance
+        expr: |
+          (
+            max(sum by (variant) (rate(recsys_experiment_assignments_total{variant!="none"}[30m])))
+            /
+            clamp_min(min(sum by (variant) (rate(recsys_experiment_assignments_total{variant!="none"}[30m]))), 0.001)
+          ) > 1.2
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: "experiment arms differ by more than 20%; run the chi-square before trusting any result"

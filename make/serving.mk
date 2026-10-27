@@ -29,8 +29,10 @@ serve:  ## Run the gRPC orchestrator on :50051
 	    -popular ../../$(POPULAR) -columns ../../$(RANKER_COLUMNS) \
 	    -index-stem ../../$(INDEX_STEM) $(SERVE_ARGS)
 
-bench:  ## Latency + recall/QPS benchmarks
-	@echo "TODO: benchmarks"; exit 1
+BENCH_TARGET ?= localhost:50051
+BENCH_ARGS ?=
+bench:  ## Sweep the orchestrator to saturation with ghz
+	uv run python -m scripts.writeups.bench_serving --target $(BENCH_TARGET) $(BENCH_ARGS)
 
 # Runs against the LOCAL gold layer on purpose.
 demo: export RECSYS_STORAGE__BACKEND = local

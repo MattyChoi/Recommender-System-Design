@@ -122,7 +122,9 @@ services:
     ports: ["9090:9090"]         # query UI and API
     # Mounts your scrape config over the path the image reads at startup.
     # ":ro" = read-only, so the container cannot modify your repo file.
-    volumes: ["./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    volumes: 
+      - "./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "./serving/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"
 
   grafana:
     image: grafana/grafana:13.2.0        # Grafana 13.2.0, released 2026-08-18
@@ -144,6 +146,9 @@ services:
       # The dashboard JSON the provider above loads. Separate mount so provider
       # config and dashboard content stay separate in the repo.
       - "./infra/docker/grafana/dashboards:/etc/grafana/dashboards:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "recsys-host:${HOST_IP:-host-gateway}"
 
   # OpenTelemetry collector: the tail-sampling decision point.
   otel-collector:
