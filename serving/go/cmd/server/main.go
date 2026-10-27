@@ -213,11 +213,14 @@ func parse() options {
 	flag.Float64Var(&o.seenRate, "seen-fp-rate", 0.01, "target false-positive rate")
 	flag.DurationVar(&o.seenTTL, "seen-ttl", sources.SeenTTL, "how long \"recently shown\" lasts")
 
-	flag.StringVar(&o.featuresAPI, "features", "localhost:50053", "the Feast gateway")
-	flag.StringVar(&o.retrievalAPI, "retrieval", "localhost:50052", "the FAISS sidecar")
+	flag.StringVar(&o.featuresAPI, "features", "localhost:50053",
+		"the Feast gateway; comma-separate one address per sidecar process")
+	flag.StringVar(&o.retrievalAPI, "retrieval", "localhost:50052",
+		"the FAISS sidecar; comma-separate one address per sidecar process")
 	flag.StringVar(&o.tritonAPI, "triton", "localhost:8001", "Triton's gRPC port, NOT 8000")
-	flag.IntVar(&o.conns, "conns", 4,
-		"HTTP/2 connections per upstream; one connection serialises every stream on it")
+	flag.IntVar(&o.conns, "conns", 8,
+		"HTTP/2 connections per upstream, split evenly over its addresses; "+
+			"one connection serialises every stream on it")
 	flag.StringVar(&o.tritonModel, "triton-model", "ranker", "triton model name")
 
 	flag.StringVar(&o.sourceName, "source-name", "two_tower", "the retriever's name in quotas")

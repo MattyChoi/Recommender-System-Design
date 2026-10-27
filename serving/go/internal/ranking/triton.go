@@ -63,12 +63,21 @@ func (c *Client) Close() error {
 
 const readyTimeout = 2 * time.Second
 
-// Ready reports whether Triton has the model loaded.
+// Ready reports whether EVERY Triton address has the model loaded.
 func (c *Client) Ready(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
 
-	response, err := c.client.ModelReady(
+	if c.conn == nil {
+		return c.modelReady(ctx, c.client)
+	}
+	return c.conn.Each(ctx, func(ctx context.Context, _ string, conn grpc.ClientConnInterface) error {
+		return c.modelReady(ctx, pb.NewGRPCInferenceServiceClient(conn))
+	})
+}
+
+func (c *Client) modelReady(ctx context.Context, client pb.GRPCInferenceServiceClient) error {
+	response, err := client.ModelReady(
 		ctx, &pb.ModelReadyRequest{Name: c.Model, Version: c.Version},
 	)
 	if err != nil {

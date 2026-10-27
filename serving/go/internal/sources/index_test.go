@@ -65,10 +65,15 @@ type fakeFallback struct {
 	mu    sync.Mutex
 }
 
-func (f *fakeFallback) Search(_ context.Context, _ string, _ int) ([]int32, bool, error) {
+func (f *fakeFallback) Search(ctx context.Context, _ string, _ int) ([]int32, bool, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
+	// What the real one does first: a Redis GET under ctx, which an expired
+	// ctx fails before it is sent.
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	return f.items, f.ok, f.err
 }
 
@@ -253,6 +258,24 @@ func TestRungTwoAnswersWhenTheANNIndexIsUnreachable(t *testing.T) {
 	}
 	if fallback.calls != 1 {
 		t.Errorf("the fallback ran %d times", fallback.calls)
+	}
+}
+
+// TestRungTwoAnswersAfterTheSourceDeadlineHasPassed is the case rung 2 exists
+// for: the sidecar is slow, not down, and has used up the whole budget.
+func TestRungTwoAnswersAfterTheSourceDeadlineHasPassed(t *testing.T) {
+	sidecar := newANNIndex(&fakeRetrieval{err: context.DeadlineExceeded})
+	sidecar.Fallback = &fakeFallback{items: []int32{4, 5, 6}, ok: true}
+
+	expired, cancel := context.WithTimeout(context.Background(), -time.Second)
+	defer cancel()
+
+	got, err := sidecar.Retrieve(expired, testUser())
+	if err != nil {
+		t.Fatalf("rung 2 should answer under its own budget: %v", err)
+	}
+	if len(got.Items) != 3 {
+		t.Errorf("got %v, want the fallback's candidates", got.Items)
 	}
 }
 

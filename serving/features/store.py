@@ -18,7 +18,7 @@ from common.features import (
     feature_refs,
     item_has_own_history,
 )
-from serving.features.cache import ItemFeatureCache
+from serving.features.cache import Entry, ItemFeatureCache
 
 FEATURE_REPO = Path("data_pipeline/features/recsys_store/feature_repo")
 ITEM_MAP = Path("serving/artifacts/item_map.json")
@@ -209,7 +209,8 @@ class Store:
         `len(values) == len(items) * len(names)` and refuses a mismatch.
         """
         if self._cache is None:
-            hits, wanted = {}, list(dict.fromkeys(indices))
+            hits: dict[int, Entry] = {}
+            wanted = list(dict.fromkeys(indices))
         else:
             hits, wanted = self._cache.take(indices)
 

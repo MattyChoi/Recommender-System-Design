@@ -117,23 +117,47 @@ func (g *Gateway) ItemRows(ctx context.Context, items []int32) (rows [][]float32
 
 const readyTimeout = 2 * time.Second
 
-// Ready reports whether the gateway can read its online store.
+// Ready reports whether EVERY gateway process can read its online store.
 func (g *Gateway) Ready(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
 
-	response, err := g.client.Health(ctx, &pb.FeaturesHealthRequest{})
-	if err != nil {
-		return fmt.Errorf("feature gateway Health: %w", err)
-	}
-	if !response.GetReady() {
-		return fmt.Errorf("feature gateway not ready: %s", response.GetDetail())
+	if g.conn == nil {
+		age, err := health(ctx, g.client)
+		if age > 0 {
+			g.storeAge.Store(age)
+		}
+		return err
 	}
 
-	if age := response.GetOldestFeatureAgeSeconds(); age > 0 {
+	// The OLDEST age any process reports, gathered here and stored once: a
+	// running max on storeAge itself could never come back down.
+	var oldest atomic.Int64
+	err := g.conn.Each(ctx, func(ctx context.Context, _ string, conn grpc.ClientConnInterface) error {
+		age, err := health(ctx, pb.NewFeaturesClient(conn))
+		for current := oldest.Load(); age > current; current = oldest.Load() {
+			if oldest.CompareAndSwap(current, age) {
+				break
+			}
+		}
+		return err
+	})
+	if age := oldest.Load(); age > 0 {
 		g.storeAge.Store(age)
 	}
-	return nil
+	return err
+}
+
+// health is one gateway process's answer, and the feature age it reports.
+func health(ctx context.Context, client pb.FeaturesClient) (int64, error) {
+	response, err := client.Health(ctx, &pb.FeaturesHealthRequest{})
+	if err != nil {
+		return 0, fmt.Errorf("feature gateway Health: %w", err)
+	}
+	if !response.GetReady() {
+		return 0, fmt.Errorf("feature gateway not ready: %s", response.GetDetail())
+	}
+	return response.GetOldestFeatureAgeSeconds(), nil
 }
 
 func (g *Gateway) Close() error {

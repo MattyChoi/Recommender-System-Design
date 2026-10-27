@@ -42,7 +42,7 @@ class ItemFeatureCache:
 
     Batch in and batch out, one lock acquisition each. No LRU. Eviction is by expiry.
     """
-    
+
     def __init__(self, ttl: float = DEFAULT_TTL, capacity: int = DEFAULT_CAPACITY) -> None:
         self.ttl = ttl
         self.capacity = capacity
@@ -50,7 +50,7 @@ class ItemFeatureCache:
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
-        
+
     def take(self, keys: list[int]) -> tuple[dict[int, Entry], list[int]]:
         """Split ``keys`` into what is cached and what has to be fetched.
 
@@ -64,7 +64,7 @@ class ItemFeatureCache:
         hits: dict[int, Entry] = {}
         misses: list[int] = []
         seen: set[int] = set()
-        
+
         with self._lock:
             for key in keys:
                 if key in hits or key in seen:
@@ -79,7 +79,7 @@ class ItemFeatureCache:
                 misses.append(key)
             self.hits += len(hits)
             self.misses += len(misses)
-        
+
         return hits, misses
 
     def put(self, rows: dict[int, tuple[tuple[float, ...], bool]]) -> None:
