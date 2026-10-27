@@ -14,6 +14,8 @@ import numpy.typing as npt
 #: rotated by a constant, which no width or range check can see.
 DAY_OF_WEEK_ORIGIN = 1
 
+USER_VIEW = "user_stats"
+
 # The RAW user block, in the order GetUserResponse.values uses.
 USER_FEATURES = (
     "user_impressions_24h",
@@ -36,6 +38,8 @@ USER_TOWER_COLUMNS: tuple[str, ...] = (
     "day_of_week_sin",
     "day_of_week_cos",
 )
+
+ITEM_VIEW = "item_stats"
 
 # The per-item block GetItems serves, row-major, one row per candidate.
 ITEM_COLUMNS: tuple[str, ...] = (
@@ -115,3 +119,8 @@ def build_user_features(
 
     stacked: npt.NDArray[np.float32] = np.stack(numeric, axis=1).astype("float32")
     return stacked
+
+
+def feature_refs(view: str, columns: tuple[str, ...]) -> list[str]:
+    """Feast's "view:column" references, in this module's declared order."""
+    return [f"{view}:{column}" for column in columns]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import OrderedDict
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,17 +11,20 @@ from feast import FeatureStore
 
 from common.features import (
     ITEM_COLUMNS,
+    ITEM_VIEW,
     USER_FEATURES,
+    USER_VIEW,
     effective_item_ctr,
+    feature_refs,
     item_has_own_history,
 )
+from serving.features.cache import ItemFeatureCache
 
 FEATURE_REPO = Path("data_pipeline/features/recsys_store/feature_repo")
 ITEM_MAP = Path("serving/artifacts/item_map.json")
 CATEGORY_MAP = Path("serving/artifacts/category_map.json")
 
 DEFAULT_MAX_HISTORY = 50
-DEFAULT_CACHE_CAPACITY = 50_000
 
 # ITEM_COLUMNS, split by where each value actually comes from.
 #
@@ -74,29 +77,6 @@ class ItemRows:
     cached: int
 
 
-class RowCache:
-    """Bounded LRU over item feature rows, reported as GetItemsResponse.cached."""
-
-    def __init__(self, capacity: int = DEFAULT_CACHE_CAPACITY) -> None:
-        self._rows: OrderedDict[int, list[float]] = OrderedDict()
-        self._capacity = capacity
-
-    def get(self, index: int) -> list[float] | None:
-        row = self._rows.get(index)
-        if row is not None:
-            self._rows.move_to_end(index)
-        return row
-
-    def put(self, index: int, row: list[float]) -> None:
-        self._rows[index] = row
-        self._rows.move_to_end(index)
-        if len(self._rows) > self._capacity:
-            self._rows.popitem(last=False)
-
-    def __len__(self) -> int:
-        return len(self._rows)
-
-
 class Store:
     """Feast's online store."""
 
@@ -105,7 +85,7 @@ class Store:
         repo: Path = FEATURE_REPO,
         item_map: Path = ITEM_MAP,
         category_map: Path = CATEGORY_MAP,
-        cache_capacity: int = DEFAULT_CACHE_CAPACITY,
+        cache: ItemFeatureCache | None = None,
     ) -> None:
         self._store = FeatureStore(repo_path=str(repo))
 
@@ -122,7 +102,7 @@ class Store:
         self.category_map_version: str = vocabulary["version"]
         self._categories: list[str] = vocabulary["categories"]
 
-        self._cache = RowCache(cache_capacity)
+        self._cache = cache
 
     def _translate(self, external: list[str], limit: int) -> tuple[list[int], int]:
         """item_id -> item_idx, most recent first.
@@ -159,42 +139,46 @@ class Store:
         )
         return affinity
 
-    def _fetch_items(self, indices: list[int]) -> dict[int, list[float]]:
+    def _fetch_items(self, indices: list[int]) -> dict[int, tuple[tuple[float, ...], bool]]:
         """ONE batched read for every miss, then the two local derivations.
 
-        One call, not one per item.
+        One call, not one per item. Returns ``index -> (values, found)``, the
+        shape `ItemFeatureCache.put` takes. An index the item map does not know
+        is left out: Feast was never asked, so there is no answer to cache.
         """
         known = [index for index in indices if index in self._to_id]
         if not known:
             return {}
 
-        refs = [f"item_stats:{name}" for name in _FETCH_FROM_ITEM_STATS]
         entity_rows = [{"item_id": self._to_id[index]} for index in known]
+        got = self._store.get_online_features(
+            features=feature_refs(ITEM_VIEW, _FETCH_FROM_ITEM_STATS), entity_rows=entity_rows
+        ).to_dict()
 
-        got = self._store.get_online_features(features=refs, entity_rows=entity_rows).to_dict()
-
-        rows: dict[int, list[float]] = {}
+        rows: dict[int, tuple[tuple[float, ...], bool]] = {}
         for position, index in enumerate(known):
             computed: dict[str, float | bool | None] = {
                 name: got[name][position] for name in _FETCH_FROM_ITEM_STATS
             }
+            # Feast answers a missing entity with all-None, not an error.
+            found = any(value is not None for value in computed.values())
 
             smoothed = got["item_ctr_smoothed"][position]
             prior = got["cat_expanding_ctr"][position]
             computed["item_ctr_effective"] = effective_item_ctr(smoothed, prior)
             computed["has_item_features"] = item_has_own_history(smoothed)
 
-            row: list[float] = []
-            for name in ITEM_COLUMNS:
-                value = computed[name]
-                row.append(float(value) if value is not None else 0.0)
-            rows[index] = row
+            values = tuple(
+                float(value) if value is not None else 0.0
+                for value in (computed[name] for name in ITEM_COLUMNS)
+            )
+            rows[index] = (values, found)
 
         return rows
 
     def user(self, user_id: str, max_history: int = DEFAULT_MAX_HISTORY) -> UserRow:
         """The raw block, the found flag, the translated history, the OOV count."""
-        refs = [f"user_stats:{name}" for name in USER_FEATURES]
+        refs = feature_refs(USER_VIEW, USER_FEATURES)
         refs.append("user_realtime:last_50_items")
 
         got = self._store.get_online_features(
@@ -224,30 +208,43 @@ class Store:
         messages. The reshape arithmetic lives in the Go client, which checks
         `len(values) == len(items) * len(names)` and refuses a mismatch.
         """
-        rows: dict[int, list[float]] = {}
-        wanted: list[int] = []
-        seen: set[int] = set()
-        cached = 0
+        if self._cache is None:
+            hits, wanted = {}, list(dict.fromkeys(indices))
+        else:
+            hits, wanted = self._cache.take(indices)
 
-        for index in indices:
-            hit = self._cache.get(index)
-            if hit is not None:
-                rows[index] = hit
-                cached += 1
-            elif index not in seen:
-                seen.add(index)
-                wanted.append(index)
-
+        rows = {index: (entry.values, entry.found) for index, entry in hits.items()}
         if wanted:
-            for index, fetched in self._fetch_items(wanted).items():
-                rows[index] = fetched
-                self._cache.put(index, fetched)
+            fetched = self._fetch_items(wanted)
+            if self._cache is not None:
+                self._cache.put(fetched)
+            rows.update(fetched)
 
+        missing = ((0.0,) * len(ITEM_COLUMNS), False)
         values: list[float] = []
         found: list[bool] = []
+        cached = 0
         for index in indices:
-            row = rows.get(index)
-            found.append(row is not None)
-            values.extend(row if row is not None else [0.0] * len(ITEM_COLUMNS))
+            row, row_found = rows.get(index, missing)
+            values.extend(row)
+            found.append(row_found)
+            # Per position, not per distinct index: a repeated hit is served twice.
+            cached += index in hits
 
         return ItemRows(values=values, found=found, cached=cached)
+
+    def warm(self) -> float:
+        """One throwaway read per view, so the first request skips Feast's lazy setup."""
+        started = time.perf_counter()
+        for view, columns, key in (
+            (USER_VIEW, USER_FEATURES, "user_id"),
+            (ITEM_VIEW, _FETCH_FROM_ITEM_STATS, "item_id"),
+        ):
+            try:
+                self._store.get_online_features(
+                    features=feature_refs(view, columns),
+                    entity_rows=[{key: "__warmup__"}],
+                ).to_dict()
+            except Exception as exc:
+                print(f"  warmup of {view} failed ({exc}); the first request will pay for it")
+        return time.perf_counter() - started
