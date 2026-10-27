@@ -145,6 +145,19 @@ services:
       # config and dashboard content stay separate in the repo.
       - "./infra/docker/grafana/dashboards:/etc/grafana/dashboards:ro"
 
+  # OpenTelemetry collector: the tail-sampling decision point.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.142.0
+    container_name: recsys-otel
+    # -contrib, not the core image: tail_sampling ships only in contrib, and
+    # the core image accepts the config file and ignores the processor.
+    command: ["--config=/etc/otel/config.yaml"]
+    ports:
+      - "4317:4317"              # OTLP/gRPC -- the -otlp flag on the orchestrator
+      - "8888:8888"              # its own metrics, scraped by prometheus above
+    volumes:
+      - "./infra/docker/otel-collector.yaml:/etc/otel/config.yaml:ro" 
+
   triton:
     image: nvcr.io/nvidia/tritonserver:25.12-py3
     container_name: recsys-triton

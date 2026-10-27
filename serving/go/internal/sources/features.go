@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/features"
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rpc"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
@@ -144,3 +145,4 @@ func (g *Gateway) Close() error {
 
 // Compile-time proof this satisfies the port the pipeline fetches through.
 var _ service.UserStore = (*Gateway)(nil)
+var _ features.ItemStore = (*Gateway)(nil)
