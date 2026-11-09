@@ -33,9 +33,10 @@ from indexing.lifecycle import (
     KEEP_VERSIONS,
     RECALL_TOLERANCE,
     current,
-    expired,
     gate,
+    mark_refused,
     promote,
+    retire,
     version_label,
 )
 from models.retrieval.dataloader.dataset import load_item_tables, load_train_and_validation
@@ -75,8 +76,8 @@ class Outcome:
         promoted: Whether the pointer now names ``label``.
         reason: The gate's sentence, logged either way -- a gate that explains
             itself only on failure gives no evidence when it passes.
-        retired: Versions past the retention depth. Reported, NOT deleted; see
-            :func:`rebuild_and_promote`.
+        retired: Versions deleted by retention on this run. Always empty on a
+            refusal: see :func:`indexing.lifecycle.retire`.
     """
 
     label: str
@@ -201,10 +202,13 @@ def rebuild_and_promote(
 
     decision = gate(candidate, live, tolerance)
     if not decision.allowed:
+        # Kept for inspection, and marked so retention does not count it as a
+        # rollback target. Retention does not run on a refusal at all.
+        mark_refused(written.parent, decision.reason)
         return Outcome(label, candidate, live, False, decision.reason, [])
 
     promote(pointer, label)
-    retired = expired([path.name for path in artifacts.glob("v=*")], keep)
+    retired = retire(artifacts, live=label, keep=keep)
     return Outcome(label, candidate, live, True, decision.reason, retired)
 
 
@@ -245,7 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"{outcome.label}: {outcome.reason}")
     for stale in outcome.retired:
-        print(f"  retire {stale} (not deleted)")
+        print(f"  retired {stale}")
     if not outcome.promoted:
         print("  pointer unchanged")
         return 1

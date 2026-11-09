@@ -137,3 +137,57 @@ class TestASecondPromotion:
         outcome = _rebuild(tmp_path, probe, HOUR_TWO)
 
         assert outcome.retired == []
+
+
+def _hour(n: int) -> datetime:
+    return datetime(2019, 11, 15, n, tzinfo=UTC)
+
+
+class TestRetention:
+    """Retention now DELETES, so what it keeps is a correctness property."""
+
+    def test_versions_past_the_depth_are_deleted(self, tmp_path: Path, probe: Probe) -> None:
+        for hour in range(4):
+            outcome = _rebuild(tmp_path, probe, _hour(hour))
+
+        assert outcome.retired == [version_label(_hour(0))]
+        assert not (tmp_path / version_label(_hour(0))).exists()
+        assert sorted(p.name for p in tmp_path.glob("v=*")) == [
+            version_label(_hour(h)) for h in (1, 2, 3)
+        ]
+
+    def test_refusals_cannot_crowd_out_the_rollback_target(
+        self, tmp_path: Path, probe: Probe, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Good v0..v2, refused v3 and v4, promoted v5, keep three.
+
+        Counted together, the newest three are v3, v4, v5 and every good
+        rollback target is gone. Counted apart, v1 and v2 survive.
+        """
+        for hour in range(3):
+            _rebuild(tmp_path, probe, _hour(hour))
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "indexing.pipeline.gate",
+                lambda candidate, live, tolerance: Promotion(False, "refused by the test"),
+            )
+            _rebuild(tmp_path, probe, _hour(3))
+            _rebuild(tmp_path, probe, _hour(4))
+        outcome = _rebuild(tmp_path, probe, _hour(5))
+
+        assert outcome.retired == [version_label(_hour(0))]
+        for hour in (1, 2, 3, 4, 5):
+            assert (tmp_path / version_label(_hour(hour))).is_dir()
+
+    def test_a_refused_build_says_why(
+        self, tmp_path: Path, probe: Probe, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _rebuild(tmp_path, probe, _hour(0))
+        monkeypatch.setattr(
+            "indexing.pipeline.gate",
+            lambda candidate, live, tolerance: Promotion(False, "refused by the test"),
+        )
+        _rebuild(tmp_path, probe, _hour(1))
+
+        marker = tmp_path / version_label(_hour(1)) / "REFUSED"
+        assert marker.read_text().strip() == "refused by the test"

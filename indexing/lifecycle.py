@@ -18,6 +18,7 @@ fail-closed: anything the gate cannot evaluate aborts it.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,6 +33,10 @@ RECALL_TOLERANCE = 0.005
 # Rollback depth. Three is two more than anyone plans to use and one more than
 # the number of times "the previous one was also broken" has happened.
 KEEP_VERSIONS = 3
+
+# Dropped into a version directory the gate refused. Retention reads it so a run
+# of refusals cannot crowd the last good rollback target out of the kept window.
+REFUSED_MARKER = "REFUSED"
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,34 @@ def expired(versions: list[str], keep: int = KEEP_VERSIONS) -> list[str]:
     rather than a preference about it.
     """
     return sorted(versions)[: max(0, len(versions) - keep)]
+
+
+def mark_refused(version_dir: Path, reason: str) -> None:
+    """Record that the gate refused this build, and why, beside the index."""
+    (version_dir / REFUSED_MARKER).write_text(reason + "\n")
+
+
+def retire(artifacts: Path, live: str | None, keep: int = KEEP_VERSIONS) -> list[str]:
+    """Delete versions past the retention depth, and return what was deleted.
+
+    Promoted and refused builds are retained SEPARATELY, ``keep`` of each. Counted
+    together, a run of refusals would fill the window: live good v1, refused v2
+    and v3, promoted v4, keep three -- and v1, the one known-good rollback
+    target, is the one deleted. Refused builds are kept at all because they are
+    what an incident is diagnosed from.
+
+    The live version is never deleted, whatever the arithmetic says. Deleting is
+    safe for a sidecar already serving an older version: FAISS reads the index
+    fully into memory (no mmap), so the process does not need the file.
+    """
+    dirs = [path for path in artifacts.glob("v=*") if path.is_dir()]
+    refused = [path.name for path in dirs if (path / REFUSED_MARKER).is_file()]
+    promoted = [path.name for path in dirs if path.name not in refused]
+
+    stale = sorted(v for v in expired(promoted, keep) + expired(refused, keep) if v != live)
+    for version in stale:
+        shutil.rmtree(artifacts / version)
+    return stale
 
 
 def promote(pointer: Path, version: str) -> Path:

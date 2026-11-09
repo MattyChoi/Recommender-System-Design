@@ -58,7 +58,7 @@ def rebuild(
 
     print(f"{outcome.label}: {outcome.reason}")
     for stale in outcome.retired:
-        print(f"retire {stale}")
+        print(f"retired {stale}")
     if not outcome.promoted:
         print(f"{outcome.label}: pointer unchanged")
 
