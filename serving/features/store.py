@@ -26,6 +26,9 @@ CATEGORY_MAP = Path("serving/artifacts/category_map.json")
 
 DEFAULT_MAX_HISTORY = 50
 
+# The BATCH views this gateway reads, i.e. the ones `make feast` materialises.
+MATERIALISED_VIEWS: tuple[str, ...] = (USER_VIEW, ITEM_VIEW, "user_category_stats")
+
 # ITEM_COLUMNS, split by where each value actually comes from.
 #
 # `cat_expanding_ctr` is FETCHED BUT NOT SERVED: it is the category prior that
@@ -175,6 +178,25 @@ class Store:
             rows[index] = (values, found)
 
         return rows
+
+    def oldest_feature_age_seconds(self, now: float | None = None) -> int:
+        """How far behind the stalest materialised view is, in seconds.
+
+        Returns 0 when no view has ever been materialised -- "unknown", which the
+        Go side already treats as no reading rather than as perfectly fresh.
+        """
+        clock = time.time() if now is None else now
+        ages = []
+        for name in MATERIALISED_VIEWS:
+            try:
+                end = self._store.get_feature_view(name).most_recent_end_time
+            except Exception:
+                # An unreadable registry is NOT a failed health check: GetUser
+                # and GetItems answer from Redis, not the registry. No reading.
+                continue
+            if end is not None:
+                ages.append(clock - end.timestamp())
+        return max(0, int(max(ages))) if ages else 0
 
     def user(self, user_id: str, max_history: int = DEFAULT_MAX_HISTORY) -> UserRow:
         """The raw block, the found flag, the translated history, the OOV count."""

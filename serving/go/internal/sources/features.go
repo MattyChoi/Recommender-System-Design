@@ -160,6 +160,10 @@ func health(ctx context.Context, client pb.FeaturesClient) (int64, error) {
 	return response.GetOldestFeatureAgeSeconds(), nil
 }
 
+// StoreAgeSeconds is the stalest materialised view's lag, as of the last
+// Ready call
+func (g *Gateway) StoreAgeSeconds() int64 { return g.storeAge.Load() }
+
 func (g *Gateway) Close() error {
 	if g.conn == nil {
 		return nil

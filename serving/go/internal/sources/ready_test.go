@@ -138,7 +138,7 @@ func TestGatewayReadyChecksEveryProcessAndKeepsTheOldestAge(t *testing.T) {
 		t.Fatalf("Ready: %v", err)
 	}
 	// The stalest process is the one that bounds how fresh a feature can be.
-	if age := gateway.storeAge.Load(); age != 900 {
+	if age := gateway.StoreAgeSeconds(); age != 900 {
 		t.Errorf("store age %d, want the oldest (900)", age)
 	}
 

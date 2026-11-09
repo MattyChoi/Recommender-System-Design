@@ -466,6 +466,12 @@ func run(o options) error {
 		impressionLog = async
 	}
 
+	// The feature store's freshness lag, from the gateway's Health.
+	prometheus.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: metrics.Namespace, Name: "feature_store_age_seconds",
+		Help: "Seconds behind the stalest materialised Feast view, as of the last readiness probe. 0 = no reading.",
+	}, func() float64 { return float64(gateway.StoreAgeSeconds()) }))
+
 	if async != nil {
 		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
 			Namespace: metrics.Namespace, Name: "impression_drops_total",

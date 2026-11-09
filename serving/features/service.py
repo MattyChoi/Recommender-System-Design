@@ -53,9 +53,6 @@ class FeaturesServicer(features_pb2_grpc.FeaturesServicer):
         return features_pb2.FeaturesHealthResponse(
             ready=True,
             detail="",
-            # Feast's to_dict() hands back values without their event
-            # timestamps, so the staleness number needs either a second read
-            # path or a direct Redis peek at the `_ts:` field.
-            oldest_feature_age_seconds=0,
+            oldest_feature_age_seconds=self._store.oldest_feature_age_seconds(),
             item_map_version=self._store.item_map_version,
         )
