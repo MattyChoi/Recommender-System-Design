@@ -30,7 +30,7 @@ func degradedResult() service.Result {
 		},
 		StageCounts: map[string]int{
 			"retrieved":       400,
-			"after_filter":    0,
+			"unblocked":       0,
 			"served":          10,
 			"incomplete_rows": 7,
 		},

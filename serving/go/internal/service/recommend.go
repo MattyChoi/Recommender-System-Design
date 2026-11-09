@@ -136,7 +136,7 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	s.stage(ctx, "filter", &result, func(inner context.Context) {
 		blocked = s.blocked(inner, userID, candidates, request.Exclude, &result)
 	})
-	result.StageCounts["after_filter"] = countUnblocked(blocked, len(candidates))
+	result.StageCounts["unblocked"] = countUnblocked(blocked, len(candidates))
 
 	// --- step 3: ranking ---
 	var scores []float64
@@ -205,6 +205,7 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 			Scores:     result.Scores,
 			Propensity: slate.Propensity,
 			UserFeats:  user.Feats,
+			UserFound:  user.Found,
 			Degraded:   result.DegradedSources,
 		})
 	}

@@ -36,6 +36,7 @@ class ImpressionContext(_message.Message):
     OBJECTIVE_FIELD_NUMBER: _builtins.int
     USER_FEATS_FIELD_NUMBER: _builtins.int
     DEGRADED_FIELD_NUMBER: _builtins.int
+    USER_FOUND_FIELD_NUMBER: _builtins.int
     request_id: _builtins.str
     """joins to InteractionEvent.request_id"""
     user_id: _builtins.str
@@ -43,6 +44,10 @@ class ImpressionContext(_message.Message):
     """the A/B arm."""
     served_ts_ms: _builtins.int
     """== InteractionEvent.event_ts_ms for this request"""
+    user_found: _builtins.bool
+    """Whether the store had a row for this user. False means user_feats are the
+    zero defaults, not measured values
+    """
     @_builtins.property
     def item_ids(self) -> _containers.RepeatedScalarFieldContainer[_builtins.int]:
         """ALIGNED: with each other, and with the `position` of the InteractionEvent
@@ -79,10 +84,11 @@ class ImpressionContext(_message.Message):
         objective: _abc.Iterable[_builtins.float] | None = ...,
         user_feats: _abc.Iterable[_builtins.float] | None = ...,
         degraded: _abc.Iterable[_builtins.str] | None = ...,
+        user_found: _builtins.bool = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["degraded", b"degraded", "item_ids", b"item_ids", "objective", b"objective", "request_id", b"request_id", "scores", b"scores", "served_ts_ms", b"served_ts_ms", "user_feats", b"user_feats", "user_id", b"user_id", "variant", b"variant"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["degraded", b"degraded", "item_ids", b"item_ids", "objective", b"objective", "request_id", b"request_id", "scores", b"scores", "served_ts_ms", b"served_ts_ms", "user_feats", b"user_feats", "user_found", b"user_found", "user_id", b"user_id", "variant", b"variant"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 

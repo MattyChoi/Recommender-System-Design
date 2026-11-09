@@ -42,7 +42,10 @@ type ImpressionContext struct {
 	UserFeats []float32 `protobuf:"fixed32,8,rep,packed,name=user_feats,json=userFeats,proto3" json:"user_feats,omitempty"`
 	// What degraded, so off-policy evaluation can exclude or weight the requests
 	// where the logging policy was not the policy under study.
-	Degraded      []string `protobuf:"bytes,9,rep,name=degraded,proto3" json:"degraded,omitempty"`
+	Degraded []string `protobuf:"bytes,9,rep,name=degraded,proto3" json:"degraded,omitempty"`
+	// Whether the store had a row for this user. False means user_feats are the
+	// zero defaults, not measured values
+	UserFound     bool `protobuf:"varint,10,opt,name=user_found,json=userFound,proto3" json:"user_found,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -140,11 +143,18 @@ func (x *ImpressionContext) GetDegraded() []string {
 	return nil
 }
 
+func (x *ImpressionContext) GetUserFound() bool {
+	if x != nil {
+		return x.UserFound
+	}
+	return false
+}
+
 var File_impressions_proto protoreflect.FileDescriptor
 
 const file_impressions_proto_rawDesc = "" +
 	"\n" +
-	"\x11impressions.proto\x12\trecsys.v1\"\x93\x02\n" +
+	"\x11impressions.proto\x12\trecsys.v1\"\xb2\x02\n" +
 	"\x11ImpressionContext\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x17\n" +
@@ -157,7 +167,10 @@ const file_impressions_proto_rawDesc = "" +
 	"\tobjective\x18\a \x03(\x01R\tobjective\x12\x1d\n" +
 	"\n" +
 	"user_feats\x18\b \x03(\x02R\tuserFeats\x12\x1a\n" +
-	"\bdegraded\x18\t \x03(\tR\bdegradedBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3"
+	"\bdegraded\x18\t \x03(\tR\bdegraded\x12\x1d\n" +
+	"\n" +
+	"user_found\x18\n" +
+	" \x01(\bR\tuserFoundBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3"
 
 var (
 	file_impressions_proto_rawDescOnce sync.Once

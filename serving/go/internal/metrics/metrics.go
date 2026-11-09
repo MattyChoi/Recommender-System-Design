@@ -67,7 +67,7 @@ func New(registry prometheus.Registerer) *Pipeline {
 		candidates: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: Namespace,
 			Name:      "stage_candidates",
-			Help:      "Candidates surviving each stage. after_filter collapsing to zero is how a saturated seen-list is caught in production rather than in a postmortem.",
+			Help:      "Candidates at each stage. unblocked is the eligible count, not a filtered set (the ranker still scores every candidate); unblocked collapsing to zero is how a saturated seen-list is caught in production rather than in a postmortem.",
 			Buckets:   candidateBuckets,
 		}, []string{"stage"}),
 

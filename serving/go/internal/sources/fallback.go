@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/index"
 	"github.com/redis/go-redis/v9"
@@ -27,19 +28,49 @@ type CachedSearch struct {
 	client    redis.UniversalClient
 	index     *index.Flat
 	KeyPrefix string
+	// now is the clock the hour bucket is read from. A field so tests can pin
+	// the hour; time.Now in production.
+	now func() time.Time
 }
 
 func NewCachedSearch(client redis.UniversalClient, flat *index.Flat) *CachedSearch {
-	return &CachedSearch{client: client, index: flat, KeyPrefix: EmbeddingPrefix}
+	return &CachedSearch{client: client, index: flat, KeyPrefix: EmbeddingPrefix, now: time.Now}
+}
+
+// hourBucket is whole hours since the Unix epoch, in UTC. It mirrors
+// hour_bucket in serving/retrieval/cache.py
+func hourBucket(moment time.Time) int64 {
+	return moment.Unix() / 3600
+}
+
+// EmbeddingKey is the cache key for one user in one hour bucket.
+func EmbeddingKey(prefix, userID string, bucket int64) string {
+	return fmt.Sprintf("%s:%s:%d", prefix, userID, bucket)
 }
 
 func (c *CachedSearch) Search(ctx context.Context, userID string, k int) ([]int32, bool, error) {
-	raw, err := c.client.Get(ctx, fmt.Sprintf("%s:%s", c.KeyPrefix, userID)).Bytes()
+	// raw, err := c.client.Get(ctx, fmt.Sprintf("%s:%s", c.KeyPrefix, userID)).Bytes()
+	bucket := hourBucket(c.now())
+
+	// fetch the current hour and the previous hour, in case the current hour's embedding hasn't been written yet
+	values, err := c.client.MGet(ctx,
+		EmbeddingKey(c.KeyPrefix, userID, bucket),
+		EmbeddingKey(c.KeyPrefix, userID, bucket-1),
+	).Result()
 	if err != nil {
-		if err == redis.Nil {
-			return nil, false, nil
+		return nil, false, fmt.Errorf("embedding cache MGET: %w", err)
+	}
+
+	var raw []byte
+	for _, value := range values {
+		// MGET returns nil for a missing key and a string for a present one.
+		if text, ok := value.(string); ok {
+			raw = []byte(text)
+			break
 		}
-		return nil, false, fmt.Errorf("embedding cache GET: %w", err)
+	}
+	if raw == nil {
+		return nil, false, nil
 	}
 
 	query, err := c.decode(raw)

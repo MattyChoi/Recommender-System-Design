@@ -34,6 +34,8 @@ type Record struct {
 	// The SERVED feature values, not a re-read of the store. A skew report
 	// built from a later read measures the store's drift, not the model's.
 	UserFeats []float32
+	// UserFound is false when UserFeats are the store-miss defaults.
+	UserFound bool
 	// What degraded, so off-policy evaluation can exclude or weight the
 	// requests where the logging policy was not the policy under study.
 	Degraded []string

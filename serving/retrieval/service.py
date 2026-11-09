@@ -46,17 +46,18 @@ class RetrievalServicer(retrieval_pb2_grpc.RetrievalServicer):
                 f"tower expects {len(USER_FEATURES)}",
             )
 
+        now = datetime.now(UTC)
         feats = build_user_tower_columns(
             list(request.user_feats),
             request.has_user_features,
-            datetime.now(UTC),
+            now,
         )
 
         history = real_history(request.history, len(self._loaded.content))
 
         cached, user_vector = False, None
         if self._cache is not None:
-            user_vector = self._cache.get(request.user_id)
+            user_vector = self._cache.get(request.user_id, now)
             if user_vector is not None:
                 user_vector = user_vector
                 cached = True
@@ -65,7 +66,7 @@ class RetrievalServicer(retrieval_pb2_grpc.RetrievalServicer):
                 self._loaded.tower, feats, history, device=self._loaded.device
             )
             if self._cache is not None:
-                self._cache.put(request.user_id, user_vector)
+                self._cache.put(request.user_id, now, user_vector)
 
         # Per-call params, not `index.hnsw.efSearch`: the index is shared across
         # the server's worker threads and FAISS releases the GIL during search.

@@ -26,4 +26,8 @@ message ImpressionContext {
   // What degraded, so off-policy evaluation can exclude or weight the requests
   // where the logging policy was not the policy under study.
   repeated string degraded = 9;
+
+  // Whether the store had a row for this user. False means user_feats are the
+  // zero defaults, not measured values
+  bool user_found = 10;
 }

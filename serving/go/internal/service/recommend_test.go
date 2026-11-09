@@ -511,8 +511,8 @@ func TestASaturatedSeenListDoesNotEmptyTheSlate(t *testing.T) {
 	if got.UsedFallback {
 		t.Error("an over-blocking filter is not a retrieval failure")
 	}
-	if got.StageCounts["after_filter"] != 0 {
-		t.Errorf("after_filter should still record 0 as the saturation signal, got %v",
+	if got.StageCounts["unblocked"] != 0 {
+		t.Errorf("unblocked should still record 0 as the saturation signal, got %v",
 			got.StageCounts)
 	}
 }
@@ -606,7 +606,7 @@ func TestStageCountsAndLatenciesArePopulated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recommend: %v", err)
 	}
-	for _, stage := range []string{"retrieved", "after_filter", "scored", "served"} {
+	for _, stage := range []string{"retrieved", "unblocked", "scored", "served"} {
 		if _, ok := got.StageCounts[stage]; !ok {
 			t.Errorf("stage_counts missing %q: %v", stage, got.StageCounts)
 		}

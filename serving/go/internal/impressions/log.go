@@ -98,6 +98,7 @@ func (l *Log) Emit(rec service.Record) error {
 			Objective:  rec.Objective,
 			UserFeats:  rec.UserFeats,
 			Degraded:   rec.Degraded,
+			UserFound:  rec.UserFound,
 		}); err != nil {
 		return fmt.Errorf("producing context %s: %w", rec.RequestID, err)
 	}

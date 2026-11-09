@@ -9,6 +9,7 @@ Achieves two things
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -27,9 +28,25 @@ DEFAULT_TTL = 300
 KEY_PREFIX = "uemb"
 
 
-def key_for(user_id: str) -> str:
-    """The cache key, from the EXTERNAL user id."""
-    return f"{KEY_PREFIX}:{user_id}"
+def hour_bucket(moment: datetime) -> int:
+    """Whole hours since the Unix epoch, in UTC.
+
+    The user tower takes ``hour_of_day`` and ``day_of_week`` as inputs, so a user's
+    embedding is a function of the hour as well as of the user.
+
+    Mirrored by ``hourBucket`` in serving/go/internal/sources/fallback.go, which
+    reads these keys.
+    """
+    if moment.tzinfo is None:
+        # A naive datetime would be read in the host's local zone, shifting the
+        # bucket by the UTC offset -- the timezone bug this project already hit.
+        raise ValueError("hour_bucket needs a timezone-aware datetime")
+    return int(moment.timestamp()) // 3600
+
+
+def key_for(user_id: str, moment: datetime) -> str:
+    """The cache key: the EXTERNAL user id plus the hour the vector was encoded for."""
+    return f"{KEY_PREFIX}:{user_id}:{hour_bucket(moment)}"
 
 
 class UserEmbeddingCache:
@@ -43,9 +60,9 @@ class UserEmbeddingCache:
         self.misses = 0
         self.errors = 0
 
-    def get(self, user_id: str) -> npt.NDArray[np.float32] | None:
+    def get(self, user_id: str, moment: datetime) -> npt.NDArray[np.float32] | None:
         try:
-            raw = self.client.get(key_for(user_id))
+            raw = self.client.get(key_for(user_id, moment))
         except Exception:
             self.errors += 1
             return None
@@ -61,14 +78,14 @@ class UserEmbeddingCache:
         # [1, dim], the shape encode_user returns and FAISS search takes.
         return np.frombuffer(raw, dtype="<f4").astype(np.float32).reshape(1, self.dim)
 
-    def put(self, user_id: str, vector: npt.NDArray[np.float32]) -> None:
+    def put(self, user_id: str, moment: datetime, vector: npt.NDArray[np.float32]) -> None:
         """Store with the TTL. A failed write is not a failed request."""
         if vector.size != self.dim:
             return
         try:
             # Pin the wire format (little-endian float32, dim*4 bytes) that get() and the
             # Go reader expect; .tobytes() alone would dump whatever dtype/order came in.
-            self.client.setex(key_for(user_id), self.ttl, vector.astype("<f4").tobytes())
+            self.client.setex(key_for(user_id, moment), self.ttl, vector.astype("<f4").tobytes())
         except Exception:
             self.errors += 1
 

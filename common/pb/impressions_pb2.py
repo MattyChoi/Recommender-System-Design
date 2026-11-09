@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11impressions.proto\x12\trecsys.v1\"\xba\x01\n\x11ImpressionContext\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12\x0f\n\x07variant\x18\x03 \x01(\t\x12\x14\n\x0cserved_ts_ms\x18\x04 \x01(\x03\x12\x10\n\x08item_ids\x18\x05 \x03(\x05\x12\x0e\n\x06scores\x18\x06 \x03(\x01\x12\x11\n\tobjective\x18\x07 \x03(\x01\x12\x12\n\nuser_feats\x18\x08 \x03(\x02\x12\x10\n\x08\x64\x65graded\x18\t \x03(\tBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11impressions.proto\x12\trecsys.v1\"\xce\x01\n\x11ImpressionContext\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12\x0f\n\x07variant\x18\x03 \x01(\t\x12\x14\n\x0cserved_ts_ms\x18\x04 \x01(\x03\x12\x10\n\x08item_ids\x18\x05 \x03(\x05\x12\x0e\n\x06scores\x18\x06 \x03(\x01\x12\x11\n\tobjective\x18\x07 \x03(\x01\x12\x12\n\nuser_feats\x18\x08 \x03(\x02\x12\x10\n\x08\x64\x65graded\x18\t \x03(\t\x12\x12\n\nuser_found\x18\n \x01(\x08\x42JZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,5 +33,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb'
   _globals['_IMPRESSIONCONTEXT']._serialized_start=33
-  _globals['_IMPRESSIONCONTEXT']._serialized_end=219
+  _globals['_IMPRESSIONCONTEXT']._serialized_end=239
 # @@protoc_insertion_point(module_scope)

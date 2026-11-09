@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -63,7 +64,20 @@ func newCached(t *testing.T) (*CachedSearch, *miniredis.Miniredis) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewCachedSearch(client, axisIndex(t)), server
+	search := NewCachedSearch(client, axisIndex(t))
+	search.now = func() time.Time { return pinnedNow }
+	return search, server
+}
+
+// pinnedNow is 2026-11-09T13:30:00Z, hour bucket 498397. The same instant and
+// bucket are asserted in tests/test_embedding_cache_key.py: the two halves of
+// this key format live in different languages and must agree exactly.
+var pinnedNow = time.Date(2026, 11, 9, 13, 30, 0, 0, time.UTC)
+
+const pinnedBucket = 498397
+
+func keyAt(userID string, bucket int64) string {
+	return EmbeddingKey(EmbeddingPrefix, userID, bucket)
 }
 
 // encode writes a vector the way serving/retrieval/cache.py does: raw
@@ -79,7 +93,7 @@ func encode(values ...float32) string {
 func TestRungTwoSearchesWithTheCachedEmbedding(t *testing.T) {
 	search, server := newCached(t)
 	// Row 0 is the unit vector on axis 0, and BaseIndex 1 makes it item 1.
-	if err := server.Set(EmbeddingPrefix+":U1", encode(1, 0, 0, 0)); err != nil {
+	if err := server.Set(keyAt("U1", pinnedBucket), encode(1, 0, 0, 0)); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
 
@@ -120,7 +134,7 @@ func TestACacheMissIsNotAnError(t *testing.T) {
 // error so it does not disappear into a miss count.
 func TestAWrongWidthEmbeddingIsAnErrorNotAMiss(t *testing.T) {
 	search, server := newCached(t)
-	if err := server.Set(EmbeddingPrefix+":U1", encode(1, 0)); err != nil {
+	if err := server.Set(keyAt("U1", pinnedBucket), encode(1, 0)); err != nil {
 		t.Fatalf("seeding: %v", err)
 	}
 
@@ -170,5 +184,66 @@ func TestAnUnreachableCacheIsAnError(t *testing.T) {
 
 	if _, _, err := search.Search(context.Background(), "U1", 1); err == nil {
 		t.Fatal("an unreachable cache must be reported")
+	}
+}
+
+// TestTheKeyMatchesThePythonWriter pins the format against the literal the
+// Python side asserts for the same instant. A mismatch here is not a failing
+// request; it is rung 2 silently never finding anything.
+func TestTheKeyMatchesThePythonWriter(t *testing.T) {
+	if got := hourBucket(pinnedNow); got != pinnedBucket {
+		t.Fatalf("hourBucket = %d, want %d", got, pinnedBucket)
+	}
+	// A non-UTC location must not move the bucket: Unix() is zone-free.
+	if got := hourBucket(pinnedNow.In(time.FixedZone("UTC-5", -5*3600))); got != pinnedBucket {
+		t.Errorf("hourBucket depends on the location: %d", got)
+	}
+	if got := keyAt("U1", pinnedBucket); got != "uemb:U1:498397" {
+		t.Errorf("key %q, want uemb:U1:498397", got)
+	}
+}
+
+// TestRungTwoFallsBackToThePreviousHour covers the rollover: at 14:00 the
+// sidecar's last write is under the 13:00 bucket, and with the sidecar down
+// nothing will write a 14:00 one.
+func TestRungTwoFallsBackToThePreviousHour(t *testing.T) {
+	search, server := newCached(t)
+	if err := server.Set(keyAt("U1", pinnedBucket-1), encode(0, 1, 0, 0)); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	items, ok, err := search.Search(context.Background(), "U1", 1)
+
+	if err != nil || !ok {
+		t.Fatalf("got %v, %v", ok, err)
+	}
+	if len(items) != 1 || items[0] != 2 {
+		t.Errorf("items %v, want [2]", items)
+	}
+}
+
+// TestTheCurrentHourWinsOverThePrevious: when both exist, the fresh vector is
+// the one encoded with the right hour_of_day.
+func TestTheCurrentHourWinsOverThePrevious(t *testing.T) {
+	search, server := newCached(t)
+	_ = server.Set(keyAt("U1", pinnedBucket-1), encode(0, 1, 0, 0))
+	_ = server.Set(keyAt("U1", pinnedBucket), encode(1, 0, 0, 0))
+
+	items, _, err := search.Search(context.Background(), "U1", 1)
+
+	if err != nil || len(items) != 1 || items[0] != 1 {
+		t.Errorf("items %v, err %v; want [1] from the current hour", items, err)
+	}
+}
+
+// TestAVectorTwoHoursOldIsAMiss: the lookback is exactly one bucket.
+func TestAVectorTwoHoursOldIsAMiss(t *testing.T) {
+	search, server := newCached(t)
+	_ = server.Set(keyAt("U1", pinnedBucket-2), encode(1, 0, 0, 0))
+
+	items, ok, err := search.Search(context.Background(), "U1", 1)
+
+	if err != nil || ok || items != nil {
+		t.Errorf("got %v, %v, %v; want a clean miss", items, ok, err)
 	}
 }

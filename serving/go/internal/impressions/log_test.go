@@ -73,6 +73,7 @@ func record() service.Record {
 		Propensity: []float64{0.9, 0.1, 0.5},
 		UserFeats:  []float32{1, 2, 3, 4},
 		Degraded:   []string{"ranker"},
+		UserFound:  true,
 	}
 }
 
@@ -233,6 +234,9 @@ func TestTheContextCarriesWhatNoFactRowCan(t *testing.T) {
 	}
 	if len(ctx.UserFeats) != 4 {
 		t.Errorf("user_feats has %d entries, want 4", len(ctx.UserFeats))
+	}
+	if !ctx.UserFound {
+		t.Error("user_found dropped: the skew report could not tell measured features from defaults")
 	}
 	if len(ctx.Degraded) != 1 || ctx.Degraded[0] != "ranker" {
 		t.Errorf("degraded %v", ctx.Degraded)
