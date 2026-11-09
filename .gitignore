@@ -21,6 +21,9 @@ htmlcov/
 .idea/
 .vscode/
 
+# Compiled orchestrator (make server-build)
+serving/go/bin/
+
 # Data and artifacts (never commit these)
 data/
 artifacts/

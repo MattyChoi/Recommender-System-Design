@@ -62,6 +62,7 @@ type options struct {
 	tritonAPI    string
 	tritonModel  string
 	conns        int
+	warmWait     time.Duration
 
 	// --- the impression log ---
 	kafkaBrokers     string
@@ -152,15 +153,39 @@ func readColumns(path string) ([]string, error) {
 	return decoded.Features, nil
 }
 
-const warmTimeout = 5 * time.Second
+const (
+	warmTimeout = 5 * time.Second
+	warmRetry   = 250 * time.Millisecond
+)
 
-// warmConnections dials every backend once, before the first real request.
-func warmConnections(ctx context.Context, probes []namedProbe) {
+// warmConnections dials every backend before the first real request.
+//
+// A sidecar that is still loading refuses the connection outright, so a probe
+// fails in milliseconds and warmTimeout never comes into it. With wait > 0 a
+// failed probe is retried every warmRetry until it passes or wait (one budget
+// shared by all probes) runs out; Serve is not called until then, so no
+// request lands on a half-started stack. wait = 0 is a single attempt.
+func warmConnections(ctx context.Context, probes []namedProbe, wait time.Duration) {
+	deadline := time.Now().Add(wait)
 	for _, probe := range probes {
 		started := time.Now()
-		inner, cancel := context.WithTimeout(ctx, warmTimeout)
-		err := probe.check(inner)
-		cancel()
+		var err error
+		for attempt := 0; ; attempt++ {
+			inner, cancel := context.WithTimeout(ctx, warmTimeout)
+			err = probe.check(inner)
+			cancel()
+			if err == nil || ctx.Err() != nil || !time.Now().Before(deadline) {
+				break
+			}
+			if attempt == 0 {
+				log.Printf("  warm       %-9s not up yet; retrying for up to %v",
+					probe.name, time.Until(deadline).Round(time.Second))
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(warmRetry):
+			}
+		}
 
 		took := time.Since(started).Round(time.Millisecond)
 		if err != nil {
@@ -228,6 +253,8 @@ func parse() options {
 	flag.IntVar(&o.conns, "conns", 8,
 		"HTTP/2 connections per upstream, split evenly over its addresses; "+
 			"one connection serialises every stream on it")
+	flag.DurationVar(&o.warmWait, "warm-wait", 0,
+		"at startup, keep retrying backends that are not up yet for this long before serving; 0 tries once")
 	flag.StringVar(&o.tritonModel, "triton-model", "ranker", "triton model name")
 
 	flag.StringVar(&o.kafkaBrokers, "kafka", "localhost:9092",
@@ -571,7 +598,7 @@ func run(o options) error {
 		{"features", gateway.Ready},
 		{"retrieval", index.Ready},
 		{"triton", ranker.Ready},
-	})
+	}, o.warmWait)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
