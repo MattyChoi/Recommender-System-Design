@@ -49,21 +49,24 @@ type Config struct {
 }
 
 type Service struct {
-	Retrievers []Retriever
-	Store      UserStore
-	Features   FeatureBuilder
-	Ranker     Ranker
-	Seen       SeenList
-	Catalogue  Catalogue
-	Fallback   Fallback
-	Config     Config
-	Now        func() time.Time
+	Retrievers  []Retriever
+	Store       UserStore
+	Features    FeatureBuilder
+	Ranker      Ranker
+	Seen        SeenList
+	Impressions ImpressionLog
+	Catalogue   Catalogue
+	Fallback    Fallback
+	Config      Config
+	Now         func() time.Time
 }
 
 type Request struct {
 	UserID     string
 	Surface    string
 	NumResults int
+	Variant    string
+	RequestID  string
 	// Exclude is what the CALLER has already rendered, on top of the server's
 	// own seen-list.
 	Exclude []int32
@@ -187,6 +190,23 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	// --- step 5: add to the seen-list ---
 	if s.Seen != nil {
 		_ = s.Seen.Record(ctx, userID, slate.Items)
+	}
+
+	// -- step 6: log impressions asynchronously
+	if s.Impressions != nil {
+		s.Impressions.EmitAsync(Record{
+			UserID:     userID,
+			Surface:    request.Surface,
+			Variant:    request.Variant,
+			RequestID:  request.RequestID,
+			ServedAt:   s.now(),
+			ItemIDs:    slate.Items,
+			Objective:  slate.Objective,
+			Scores:     result.Scores,
+			Propensity: slate.Propensity,
+			UserFeats:  user.Feats,
+			Degraded:   result.DegradedSources,
+		})
 	}
 
 	tracing.Degraded(span, result.DegradedSources)

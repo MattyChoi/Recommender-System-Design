@@ -13,19 +13,17 @@ about whether the streaming logic is correct.
 from __future__ import annotations
 
 import itertools
-import re
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
 
+from common.pb import events_pb2
 from data_pipeline.replay.pacing import LatenessInjector, drift_seconds
 from data_pipeline.replay.producer import DryRunSink, replay
-from data_pipeline.replay.records import WIRE_FIELDS, to_record
+from data_pipeline.replay.records import KNOWN_EMPTY, to_record
 
 T0 = datetime(2019, 11, 14, 9, 0, 0)
-PROTO = Path("serving/proto/events.proto")
 
 
 def _rows(n: int, step_seconds: int = 60) -> list[dict[str, Any]]:
@@ -65,41 +63,67 @@ def _drive(rows: list[dict[str, Any]], injector: LatenessInjector) -> list[tuple
 # --- the wire contract -----------------------------------------------------
 
 
-def test_wire_fields_match_the_proto() -> None:
-    """The .proto stays the single definition of the field set.
+def test_every_declared_field_is_assigned_or_declared_empty() -> None:
+    """The mapper cannot silently miss a field added to the proto.
 
-    JSON on the wire means nothing enforces the schema at runtime, so the
-    agreement has to be checked here instead. Add a field to the proto without
-    teaching the producer to emit it and this goes red -- which is the alarm
-    you want, because the Flink DDL is written against the proto.
+    This is the gap protobuf does not close. A new field in events.proto that
+    to_record never sets arrives at its default and is indistinguishable from
+    real data -- a propensity of 0.0 on every record, say. Accounting for every
+    declared field either as assigned or as deliberately empty makes adding one
+    a decision rather than an omission.
     """
-    if not PROTO.exists():
-        pytest.skip("run from the repository root")
-    declared = re.findall(r"^\s+\w+\s+(\w+)\s*=\s*\d+;", PROTO.read_text(), flags=re.M)
-    assert tuple(declared) == WIRE_FIELDS
+    row = _rows(6)[1]
+    # A row whose assigned values are ALL non-default, and ingest_ms != 0,
+    # because ListFields reports only fields that are SET -- and a proto3
+    # scalar set to its zero value is not set. With _rows(6)[0] the slot is 0,
+    # position would vanish from `assigned`, and this test would fail for a
+    # reason that has nothing to do with its hypothesis.
+    assert row["slot"] != 0, "pick a row whose position is non-default"
+
+    record = to_record(row, ingest_ms=1)
+    declared = {field.name for field in events_pb2.InteractionEvent.DESCRIPTOR.fields}
+    assigned = {field.name for field, _ in record.ListFields()}
+
+    unaccounted = declared - assigned - set(KNOWN_EMPTY)
+    assert not unaccounted, (
+        f"fields declared in events.proto but neither assigned by to_record nor "
+        f"listed in KNOWN_EMPTY: {sorted(unaccounted)}"
+    )
+    # And the inverse, so KNOWN_EMPTY cannot keep naming a field that was
+    # removed from the proto or has since been mapped.
+    assert not (set(KNOWN_EMPTY) & assigned)
+    assert set(KNOWN_EMPTY) <= declared
 
 
-def test_a_record_carries_every_field_even_when_empty() -> None:
-    """Absent fields are emitted at their zero values, not omitted.
+def test_a_parsed_record_exposes_every_field_at_its_default() -> None:
+    """Absent fields are readable, not missing.
 
-    A consumer that branches on whether a key exists is a consumer that breaks
-    the day the field starts arriving. Emitting "" and 0 keeps the shape
-    stable across the whole life of the dataset.
+    The JSON version emitted "" and 0 so a consumer never had to branch on
+    whether a key exists. Protobuf writes nothing for them and the GENERATED
+    READER materialises the defaults -- the same contract, held by the schema
+    instead of by the producer.
+
+    Asserted through a serialize/parse round trip rather than on the constructed
+    message, because it is the READER's view the contract is about, and only the
+    round trip proves the bytes carry it.
     """
-    record = to_record(_rows(1)[0], ingest_ms=0)
+    wire = to_record(_rows(1)[0], ingest_ms=0).SerializeToString()
+    parsed = events_pb2.InteractionEvent()
+    parsed.ParseFromString(wire)
 
-    assert tuple(record) == WIRE_FIELDS
-    assert record["session_id"] == ""  # bronze is pre-sessionization
-    assert record["dwell_ms"] == 0  # MIND ships no dwell
-    assert record["propensity"] == 0.0  # MIND logs no propensity
-    assert record["request_id"] == "1000"  # impression_id IS the request
+    # Read, not HasField: HasField raises on a proto3 scalar without explicit
+    # presence, which is all five of these.
+    for name in KNOWN_EMPTY:
+        assert not getattr(parsed, name), name
+
+    assert parsed.request_id == "1000"  # impression_id IS the request
 
 
 def test_event_type_follows_the_label() -> None:
     """MIND collapses impression and click into one labelled row."""
     shown, clicked = _rows(6)[1], _rows(6)[5]
-    assert to_record(shown, 0)["event_type"] == "impression"
-    assert to_record(clicked, 0)["event_type"] == "click"
+    assert to_record(shown, 0).event_type == "impression"
+    assert to_record(clicked, 0).event_type == "click"
 
 
 # --- lateness --------------------------------------------------------------

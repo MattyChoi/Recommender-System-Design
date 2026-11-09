@@ -99,6 +99,11 @@ type SeenList interface {
 	Record(ctx context.Context, userID string, itemIDs []int32) error
 }
 
+// ImpressionLog is the pipeline's WRITE-ONLY view of the impression log.
+type ImpressionLog interface {
+	EmitAsync(rec Record)
+}
+
 // Catalogue supplies the per-item attributes the policy layer needs.
 type Catalogue interface {
 	// Vectors are L2-normalised content vectors for MMR. Returning nil disables

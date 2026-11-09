@@ -24,6 +24,7 @@ import (
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/catalogue"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/experiments"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/features"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/impressions"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/index"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/metrics"
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
@@ -61,6 +62,12 @@ type options struct {
 	tritonAPI    string
 	tritonModel  string
 	conns        int
+
+	// --- the impression log ---
+	kafkaBrokers     string
+	schemaRegistry   string
+	impressions      string
+	impressionBuffer int
 
 	// --- deadline budgets ---
 	deadline     time.Duration
@@ -222,6 +229,15 @@ func parse() options {
 		"HTTP/2 connections per upstream, split evenly over its addresses; "+
 			"one connection serialises every stream on it")
 	flag.StringVar(&o.tritonModel, "triton-model", "ranker", "triton model name")
+
+	flag.StringVar(&o.kafkaBrokers, "kafka", "localhost:9092",
+		"Kafka bootstrap servers for the impression log; empty disables logging")
+	flag.StringVar(&o.schemaRegistry, "schema-registry", "http://localhost:8081",
+		"Schema Registry URL; required when -kafka is set")
+	flag.StringVar(&o.impressions, "impressions", "",
+		"directory for a LOCAL newline-delimited JSON impression log; an alternative to -kafka")
+	flag.IntVar(&o.impressionBuffer, "impression-buffer", 4096,
+		"records buffered before EmitAsync starts dropping")
 
 	flag.StringVar(&o.sourceName, "source-name", "two_tower", "the retriever's name in quotas")
 	flag.IntVar(&o.candidates, "candidates", 400, "candidates entering the ranker")
@@ -394,6 +410,74 @@ func run(o options) error {
 	}
 	defer func() { _ = ranker.Close() }()
 
+	var impressionLog service.ImpressionLog
+	var async *service.AsyncLog
+	var sink *impressions.Log
+
+	switch {
+	case o.kafkaBrokers != "" && o.impressions != "":
+		return fmt.Errorf("-kafka and -impressions are alternatives; pass one, not both")
+
+	case o.kafkaBrokers != "" && o.schemaRegistry == "":
+		return fmt.Errorf("-kafka is set without -schema-registry")
+
+	case o.kafkaBrokers != "":
+		producer, err := impressions.NewKafkaProducer(
+			o.kafkaBrokers, o.schemaRegistry,
+			impressions.TopicEvents, impressions.TopicContext)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := producer.Close(); err != nil {
+				log.Printf("impression log: %v", err)
+			}
+		}()
+
+		sink = impressions.New(producer, ids)
+
+		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Namespace: metrics.Namespace, Name: "impression_delivery_failures_total",
+			Help: "Impression records librdkafka accepted but never delivered.",
+		}, func() float64 { return float64(producer.Failed()) }))
+
+	case o.impressions != "":
+		producer, err := impressions.NewFileProducer(o.impressions)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := producer.Close(); err != nil {
+				log.Printf("impression log: %v", err)
+			}
+		}()
+		sink = impressions.New(producer, ids)
+
+		log.Printf("impression log -> %s (LOCAL files, not the topic any consumer reads)",
+			o.impressions)
+
+	default:
+		log.Printf("impression log DISABLED (no -kafka)")
+	}
+
+	if sink != nil {
+		async = service.NewAsyncLog(sink, o.impressionBuffer)
+		defer async.Close()
+		impressionLog = async
+	}
+
+	if async != nil {
+		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Namespace: metrics.Namespace, Name: "impression_drops_total",
+			Help: "Impression records discarded: a full buffer, or a sink write that failed.",
+		}, func() float64 { return float64(async.Drops()) }))
+
+		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Namespace: metrics.Namespace, Name: "impression_unmapped_total",
+			Help: "Served items with no external id. Non-zero means item_map.json and the index disagree.",
+		}, func() float64 { return float64(sink.Unmapped()) }))
+	}
+
 	pipeline := &service.Service{
 		Retrievers: []service.Retriever{index},
 		Store:      gateway,
@@ -402,10 +486,11 @@ func run(o options) error {
 			Catalogue: catalog,
 			Names:     columns,
 		},
-		Ranker:    ranker,
-		Seen:      seen,
-		Catalogue: catalog,
-		Fallback:  fallback,
+		Ranker:      ranker,
+		Seen:        seen,
+		Catalogue:   catalog,
+		Fallback:    fallback,
+		Impressions: impressionLog,
 		Config: service.Config{
 			// one source, the whole quota
 			Quotas:          []int{o.candidates},

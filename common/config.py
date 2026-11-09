@@ -188,10 +188,35 @@ class ReplayConfig(BaseModel):
 
     topic: str = "impressions"
     bootstrap_servers: str = "localhost:9092"
+    schema_registry: str = "http://localhost:8081"
     speed: float = 3600.0
     max_lateness_seconds: int = 30
     late_fraction: float = 0.02
     seed: int = 0
+
+
+class ImpressionsConfig(BaseModel):
+    """Serving-side impression log (``serving/go/internal/impressions``).
+
+    The Go server takes these as flags and does not read this file.
+    Attributes:
+        topic: InteractionEvent stream. SHARED with ``replay.topic`` -- the
+            serving producer and the replay harness write the same message to
+            one stream.
+        context_topic: ImpressionContext stream, registered as its own subject
+            (``impression_context-value``).
+        bootstrap_servers: ``localhost:9092`` from the host, ``kafka:29092``
+            from inside the compose network.
+        schema_registry: ``http://localhost:8081`` from the host,
+            ``http://schema-registry:8081`` from inside.
+        buffer: Records held before the async log starts dropping.
+    """
+
+    topic: str = "impressions"
+    context_topic: str = "impression_context"
+    bootstrap_servers: str = "localhost:9092"
+    schema_registry: str = "http://localhost:8081"
+    buffer: int = 4096
 
 
 class FilterConfig(BaseModel):
@@ -252,6 +277,7 @@ class Settings(BaseSettings):
         split: Optional; temporal split parameters.
         session: Optional; sessionization parameters.
         replay: Optional; Kafka replay harness parameters.
+        impressions: Optional; serving impression log topics and registry.
         filter: Optional; corpus filters.
         mlflow: Optional; where training runs are recorded.
     """
@@ -267,6 +293,7 @@ class Settings(BaseSettings):
     split: SplitConfig = SplitConfig()
     session: SessionConfig = SessionConfig()
     replay: ReplayConfig = ReplayConfig()
+    impressions: ImpressionsConfig = ImpressionsConfig()
     filter: FilterConfig = FilterConfig()
     mlflow: MLflowConfig = MLflowConfig()
 

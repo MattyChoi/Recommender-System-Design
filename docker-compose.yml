@@ -198,6 +198,33 @@ services:
       retries: 6
       start_period: 20s
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:8.1.0
+    container_name: recsys-schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      # The INTERNAL listener, because this reaches the broker from inside the
+      # compose network. localhost:9092 is the host-side address and here would
+      # resolve to the registry container itself.
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      # BACKWARD_TRANSITIVE, not the BACKWARD default. BACKWARD checks a new
+      # schema against the PREVIOUS version only, which is enough when readers
+      # see recent data only. This log is retained and replayed from the
+      # beginning, so a reader meets EVERY historical schema and the check has
+      # to be transitive or it is checking the wrong thing.
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD_TRANSITIVE
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 # Named volumes. An empty value means "use the default local driver".
 volumes:
   minio:

@@ -29,14 +29,40 @@ sense against a target:
 
 | Stage | Candidates in | Candidates out | Budget (p99) | Actual |
 |---|---|---|---|---|
-| Experiment assignment | — | — | 2 ms | `TODO` |
-| Feature fetch (Redis, pipelined) | — | — | 8 ms | `TODO` |
-| Retrieval fan-out (5 sources, parallel) | ~160K | 800–1200 | 25 ms | `TODO` |
-| Filtering (seen, blocked, inventory, age-gate) | 800–1200 | 400–600 | 3 ms | `TODO` |
-| Ranking (batch 400) | 400–600 | 100 | 35 ms | `TODO` |
-| Re-ranking (MMR, caps, exploration) | 100 | 20 | 5 ms | `TODO` |
-| Serialization + network | — | — | 12 ms | `TODO` |
-| **Total** | | | **90 ms** | `TODO` |
+| Experiment assignment | — | — | 2 ms | not timed separately — in-process hash |
+| Feature fetch (Redis, pipelined) | — | — | 8 ms | 1 ms p50 — `GetUser`, item cache warm |
+| Retrieval fan-out (5 sources, parallel) | ~160K | 800–1200 | 25 ms | 2 ms p50 — per-source deadline |
+| Filtering (seen, blocked, inventory, age-gate) | 800–1200 | 400–600 | 3 ms | ~0 ms p50 — one Redis `GET` + in-process bit tests |
+| Ranking (batch 400) | 400–600 | 100 | 35 ms | 4 ms p50 — `GetItems` + Triton `ModelInfer` |
+| Re-ranking (MMR, caps, exploration) | 100 | 20 | 5 ms | ~0 ms p50 — in-process; Lambda 1.0, so MMR is a no-op |
+| Serialization + network | — | — | 12 ms | not timed separately |
+| **Total** | | | **90 ms** | **7 ms p50** (stages); **13.4 ms p99** end to end at 300 rps |
+
+**Measured regime — these numbers are only valid inside it.** Warm (step 27's
+warm-up run first); one box, with the orchestrator, both Python sidecars, Triton
+on GPU, Redis and the ghz load generator all co-resident and talking over
+loopback; 400 ranked candidates; MMR off (Lambda 1.0). The orchestrator ran
+under `go run`, not a built binary, so treat every figure as provisional until
+it is re-measured from a build.
+
+**The stage figures are p50, the budgets are p99.** Per-stage p99 was not
+recorded. The only measured p99 is end to end, from the `make bench` sweep:
+
+| offered rps | p50 | p95 | p99 | degraded |
+|---:|---:|---:|---:|---:|
+| 100 | 7.9 ms | 9.9 ms | 11.3 ms | 0.00% |
+| 200 | 8.1 ms | 10.7 ms | 12.7 ms | 0.02% |
+| 300 | 8.0 ms | 10.4 ms | 13.4 ms | 0.02% |
+| 400 | 8.6 ms | 29.8 ms | 31.9 ms | 0.68% |
+| 500 | 26.3 ms | 31.9 ms | 33.9 ms | 37.24% |
+
+**Latency is not the binding constraint — degradation is.** p99 stays inside the
+90 ms budget at every rate tested, while from 500 rps the two-tower source
+misses its 25 ms deadline on over a third of requests, which then ship the
+popularity fallback. So saturation sits at 300–400 rps (under 1% degraded), and
+it is bounded by four loopback hops per request on one shared kernel, not by
+any single stage. Every component measured alone has headroom against these
+budgets.
 
 Retrieval sources: two-tower + HNSW, co-visitation, trending, recently-viewed,
 content-similarity. Union, dedupe, source-tagged so per-source contribution is measurable.

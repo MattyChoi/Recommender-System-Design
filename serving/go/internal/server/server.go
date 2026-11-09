@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -70,6 +73,8 @@ func (r *Recommender) GetRecommendations(ctx context.Context, request *pb.Recomm
 		UserID:     request.GetUserId(),
 		Surface:    request.GetSurface(),
 		NumResults: numResults,
+		Variant:    variant,
+		RequestID:  requestID(ctx),
 		Exclude:    r.itemIndices(request.GetExcludeItemIds()),
 	})
 	if err != nil {
@@ -170,6 +175,17 @@ func (r *Recommender) itemIndices(itemIDs []string) []int32 {
 		}
 	}
 	return item_idx
+}
+
+func requestID(ctx context.Context) string {
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		return sc.TraceID().String()
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 func sourcesAt(sources [][]string, position int) []string {
