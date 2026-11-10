@@ -20,8 +20,8 @@ from typing import Any
 # is exactly what lets a forgotten copy share a port without an error.
 EXCLUSIVE_PORT = [("grpc.so_reuseport", 0)]
 
-# 10, not 1: the sidecars' base ports are adjacent (retrieval 50052, features
-# 50053), so consecutive ports would collide
+# 10, not 1: the sidecars' base ports are adjacent (retrieval 15052, features
+# 15053), so consecutive ports would collide
 PORT_STRIDE = 10
 
 

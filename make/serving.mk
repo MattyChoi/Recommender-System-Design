@@ -15,16 +15,23 @@ SERVE_ARGS ?= -content-stem ../../$(CONTENT_STEM)
 FEATURES_PROCESSES ?= 4
 RETRIEVAL_PROCESSES ?= 4
 PORT_STRIDE := 10
-# $(call addresses,<base port>,<processes>) -> localhost:<base>,localhost:<base+10>,...
-addresses = $(shell seq -s, -f 'localhost:%.0f' $(1) $(PORT_STRIDE) $$(( $(1) + $(PORT_STRIDE) * ($(2) - 1) )))
+
+# Where the orchestrator looks for each sidecar. localhost when all three run
+# on the host; the compose SERVICE NAME when the sidecars are containerised and
+# the orchestrator is on the same network (see make/docker.mk's image-run).
+FEATURES_HOST ?= localhost
+RETRIEVAL_HOST ?= localhost
+
+# $(call addresses,<host>,<base port>,<processes>) -> <host>:<base>,<host>:<base+10>,...
+addresses = $(shell seq -s, -f '$(1):%.0f' $(2) $(PORT_STRIDE) $$(( $(2) + $(PORT_STRIDE) * ($(3) - 1) )))
 
 SERVER_BIN ?= bin/recsys-server
 
-features-serve:  ## Run the Feast gateway sidecar on :50053 (+10 per extra process)
+features-serve:  ## Run the Feast gateway sidecar on :15053 (+10 per extra process)
 	uv run --extra serving python -m serving.features \
 	    --port $(FEATURES_PORT) --processes $(FEATURES_PROCESSES) $(FEATURES_ARGS)
 
-retrieval-serve:  ## Run the FAISS + user-tower sidecar on :50052 (+10 per extra process)
+retrieval-serve:  ## Run the FAISS + user-tower sidecar on :15052 (+10 per extra process)
 	uv run --extra serving python -m serving.retrieval \
 	    --port $(RETRIEVAL_PORT) --processes $(RETRIEVAL_PROCESSES) $(RETRIEVAL_ARGS)
 
@@ -32,7 +39,7 @@ server-build:  ## Compile the orchestrator binary to serving/go/$(SERVER_BIN)
 	cd $(GO_DIR) && $(GO) build -trimpath -o $(SERVER_BIN) ./cmd/server
 
 # Run `make server-build` first
-serve:  ## Run the gRPC orchestrator on :50051
+serve:  ## Run the gRPC orchestrator on :15051
 	@test -f "$(ITEM_MAP)"       || { echo 'run: make item-map';  exit 1; }
 	@test -f "$(CATALOGUE)"      || { echo 'run: make catalogue'; exit 1; }
 	@test -f "$(POPULAR)"        || { echo 'run: make popular';   exit 1; }
@@ -43,8 +50,8 @@ serve:  ## Run the gRPC orchestrator on :50051
 	    -item-map ../../$(ITEM_MAP) -catalogue ../../$(CATALOGUE) \
 	    -popular ../../$(POPULAR) -columns ../../$(RANKER_COLUMNS) \
 	    -index-stem ../../$(INDEX_STEM) \
-	    -features $(call addresses,$(FEATURES_PORT),$(FEATURES_PROCESSES)) \
-	    -retrieval $(call addresses,$(RETRIEVAL_PORT),$(RETRIEVAL_PROCESSES)) \
+	    -features $(call addresses,$(FEATURES_HOST),$(FEATURES_PORT),$(FEATURES_PROCESSES)) \
+	    -retrieval $(call addresses,$(RETRIEVAL_HOST),$(RETRIEVAL_PORT),$(RETRIEVAL_PROCESSES)) \
 	    $(SERVE_ARGS)
 
 serve-all: export PYTHONUNBUFFERED = 1
@@ -55,7 +62,7 @@ serve-all: server-build  ## Run both sidecars and the orchestrator together; Ctr
 	( $(MAKE) --no-print-directory serve SERVE_ARGS='$(SERVE_ARGS) -warm-wait 60s' 2>&1 | sed -u 's/^/[serve]     /'; kill 0 ) & \
 	wait
 
-BENCH_TARGET ?= localhost:50051
+BENCH_TARGET ?= localhost:15051
 BENCH_ARGS ?=
 bench:  ## Sweep the orchestrator to saturation with ghz
 	uv run python -m scripts.writeups.bench_serving --target $(BENCH_TARGET) $(BENCH_ARGS)

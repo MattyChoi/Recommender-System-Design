@@ -24,12 +24,12 @@ func targetsOf(t *testing.T, target string, count int) []string {
 }
 
 func TestOneTargetKeepsTheOldBehaviour(t *testing.T) {
-	got := targetsOf(t, "localhost:50052", 3)
+	got := targetsOf(t, "localhost:15052", 3)
 	if len(got) != 3 {
 		t.Fatalf("%d connections, want 3", len(got))
 	}
 	for _, target := range got {
-		if target != "localhost:50052" {
+		if target != "localhost:15052" {
 			t.Errorf("connection to %q", target)
 		}
 	}

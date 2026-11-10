@@ -36,6 +36,7 @@ sharded = ["torchrec==1.8.0", "fbgemm-gpu==1.8.0"]
 # the index DAG, not to train or to serve, so it stays out of the base install.
 orchestration = ["apache-airflow>=3.0"]
 serving = [
+    "grpcio>=1.83.1",
     "onnx>=1.23.0",
     "onnxruntime>=1.30.0",
     "onnxscript>=0.7.2",

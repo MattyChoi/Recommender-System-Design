@@ -222,7 +222,7 @@ func parseVariants(spec string) ([]experiments.Variant, error) {
 func parse() options {
 	var o options
 
-	flag.IntVar(&o.port, "port", 50051, "gRPC port")
+	flag.IntVar(&o.port, "port", 15051, "gRPC port")
 	flag.StringVar(&o.metricsAddr, "metrics", ":9102", "Prometheus scrape address")
 
 	flag.StringVar(&o.itemMap, "item-map", "serving/artifacts/item_map.json",
@@ -245,9 +245,9 @@ func parse() options {
 	flag.Float64Var(&o.seenRate, "seen-fp-rate", 0.01, "target false-positive rate")
 	flag.DurationVar(&o.seenTTL, "seen-ttl", sources.SeenTTL, "how long \"recently shown\" lasts")
 
-	flag.StringVar(&o.featuresAPI, "features", "localhost:50053",
+	flag.StringVar(&o.featuresAPI, "features", "localhost:15053",
 		"the Feast gateway; comma-separate one address per sidecar process")
-	flag.StringVar(&o.retrievalAPI, "retrieval", "localhost:50052",
+	flag.StringVar(&o.retrievalAPI, "retrieval", "localhost:15052",
 		"the FAISS sidecar; comma-separate one address per sidecar process")
 	flag.StringVar(&o.tritonAPI, "triton", "localhost:8001", "Triton's gRPC port, NOT 8000")
 	flag.IntVar(&o.conns, "conns", 8,

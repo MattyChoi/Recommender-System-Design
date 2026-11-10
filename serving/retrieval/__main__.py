@@ -1,4 +1,4 @@
-"""The FAISS + user-tower sidecar, on :50052."""
+"""The FAISS + user-tower sidecar, on :15052."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from serving.retrieval.cache import DEFAULT_TTL, REDIS_URL
 from serving.retrieval.server import serve
 
 load_dotenv()
-DEFAULT_PORT = int(os.getenv("RETRIEVAL_PORT", 50052))
+DEFAULT_PORT = int(os.getenv("RETRIEVAL_PORT", 15052))
 DEFAULT_PROCESSES = int(os.getenv("RETRIEVAL_PROCESSES", 4))
 DEFAULT_WORKERS = 8
 

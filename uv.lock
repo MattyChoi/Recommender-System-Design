@@ -4690,6 +4690,7 @@ orchestration = [
     { name = "apache-airflow" },
 ]
 serving = [
+    { name = "grpcio" },
     { name = "onnx" },
     { name = "onnxruntime" },
     { name = "onnxscript" },
@@ -4723,6 +4724,7 @@ requires-dist = [
     { name = "faiss-cpu", specifier = ">=1.9.0" },
     { name = "fbgemm-gpu", marker = "extra == 'sharded'", specifier = "==1.8.0" },
     { name = "feast", extras = ["redis"], specifier = ">=0.66.0" },
+    { name = "grpcio", marker = "extra == 'serving'", specifier = ">=1.83.1" },
     { name = "huggingface-hub", specifier = ">=1.29.0" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "lightgbm", specifier = ">=4.5.0" },

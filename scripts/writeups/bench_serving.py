@@ -420,7 +420,7 @@ def render(rows: Sequence[Row], target: str) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sweep the orchestrator to saturation.")
-    parser.add_argument("--target", default="localhost:50051")
+    parser.add_argument("--target", default="localhost:15051")
     parser.add_argument("--rates", type=int, nargs="+", default=list(DEFAULT_RATES))
     parser.add_argument("--duration", default="20s")
     parser.add_argument("--concurrency", type=int, default=50)

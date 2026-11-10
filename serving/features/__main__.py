@@ -11,7 +11,7 @@ from serving.processes import supervise
 
 load_dotenv()
 
-DEFAULT_PORT = int(os.getenv("FEATURES_PORT", 50053))
+DEFAULT_PORT = int(os.getenv("FEATURES_PORT", 15053))
 DEFAULT_PROCESSES = int(os.getenv("FEATURES_PROCESSES", 4))
 DEFAULT_WORKERS = 8
 
