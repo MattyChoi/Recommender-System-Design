@@ -233,7 +233,9 @@ services:
     command: ["python", "-m", "serving.features"]
     depends_on:
       redis: {condition: service_healthy}
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       # redis:6379 from inside the network. feature_store.yaml reads this.
       REDIS_URL: redis:6379
@@ -265,7 +267,9 @@ services:
     command: ["python", "-m", "serving.retrieval"]
     depends_on:
       redis: {condition: service_healthy}
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       REDIS_URL: redis:6379
       RETRIEVAL_PROCESSES: "4"

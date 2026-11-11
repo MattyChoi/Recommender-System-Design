@@ -111,6 +111,7 @@ testpaths = ["tests", "data_pipeline/tests", "evaluation/tests", "models/tests",
 addopts = "-q --strict-markers"
 markers = [
     "slow: long-running tests, deselect with -m 'not slow'",
+    "integration: needs a built image or a running stack; skips unless its env var is set",
 ]
 # feast 0.66 builds its null-timestamp sentinel with np.datetime64("NaT"), whose
 # generic unit numpy 2.5 deprecates; it wants an explicit unit. Third-party and
@@ -119,6 +120,20 @@ markers = [
 # ever appears in our own code. Drop this when feast stops emitting it.
 filterwarnings = [
     "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning:feast.type_map",
+]
+
+# A bare `--cov` defers to the source list below, so the set of measured
+# packages lives here rather than in a CI argument string that drifts from it.
+[tool.coverage.run]
+source = ["common", "data_pipeline", "models", "indexing", "evaluation"]
+omit = ["common/pb/*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
 ]
 
 [dependency-groups]

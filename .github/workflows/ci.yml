@@ -26,7 +26,7 @@ jobs:
           enable-cache: true
 
       - name: Install Python and dependencies
-        run: uv sync --dev
+        run: uv sync --dev --extra serving
 
       - name: Lint
         run: uv run ruff check --output-format=github .
@@ -46,7 +46,9 @@ jobs:
         # Redundant with the fixture, which pins it too but writing for visibility
         env:
           RECSYS_STORAGE__BACKEND: local
-        run: uv run pytest
+        # The floor has to be measured before it can be pinned
+        # TODO(coverage): pin the floor, i.e. append --cov-fail-under=<floor>.
+        run: uv run pytest --cov --cov-report=term-missing
 
       - name: Pre-commit hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
@@ -69,3 +71,41 @@ jobs:
         working-directory: serving/go
       - run: go test ./...
         working-directory: serving/go
+
+  # The orchestrator image, run with every backend deliberately absent. This is
+  # the only part of the stack that fits a hosted runner: triton reserves an
+  # NVIDIA device and its image alone would not fit the disk. The ranked-slate
+  # smoke needs artifacts and a GPU, so it lives on the self-hosted runner.
+  smoke:
+    name: orchestrator image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [go]          # don't spend a build on code that does not compile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/serving.Dockerfile
+          tags: recsys/serving:ci
+          load: true          # into the local daemon, not a registry
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --dev --extra serving
+
+      # Catches a broken compose file here rather than on a developer's machine.
+      # Both sidecars declare .env as not required, so this parses on a clone
+      # that has no .env -- which is every clone, since .env is gitignored.
+      - name: Compose file is valid
+        run: docker compose config -q
+
+      - name: Smoke
+        env:
+          RECSYS_SMOKE_IMAGE: recsys/serving:ci
+        run: uv run pytest -m integration tests/test_serving_smoke.py
