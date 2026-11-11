@@ -5,7 +5,7 @@
 # than in a container entrypoint keeps the bucket names in one place and lets
 # `make up` be idempotent.
 
-.PHONY: up down clean
+.PHONY: up down clean image image-size image-run sidecar-image sidecars-up sidecars-down
 
 
 export HOST_IP := $(shell hostname -I 2>/dev/null | awk '{print $$1}')
@@ -26,3 +26,77 @@ down:  ## Stop and remove containers, keeping data
 # every published artifact lives. There is no undo.
 clean:  ## Stop everything and DESTROY all volumes
 	docker compose down -v
+
+
+# ----------------------------------------------------------------- the images
+
+IMAGE         ?= recsys/serving:dev
+SIDECAR_IMAGE ?= recsys/sidecars:dev
+
+COMPOSE_PROJECT ?= $(notdir $(CURDIR))
+COMPOSE_NETWORK ?= $(COMPOSE_PROJECT)_default
+
+serving-image:  ## Build the orchestrator image
+	docker build -f infra/docker/serving.Dockerfile -t $(IMAGE) .
+
+# ONE image for both Python sidecars; the compose service picks the module.
+sidecar-image:  ## Build the Python sidecar image (features + retrieval)
+	docker build -f infra/docker/sidecars.Dockerfile -t $(SIDECAR_IMAGE) .
+
+image:
+	$(MAKE) serving-image
+	$(MAKE) sidecar-image
+image-size:  ## Report both image sizes
+	@docker images --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' $(IMAGE)
+	@docker images --format '  {{.Repository}}:{{.Tag}}  {{.Size}}' $(SIDECAR_IMAGE)
+
+# The two sidecars sit behind the `sidecars` profile so a plain `make up` does
+# not start them: the host-run workflow via `make serve-all` stays the default
+# and nothing silently takes their ports.
+sidecars-up: up  ## Start the whole stack plus the containerised sidecars
+	docker compose --profile sidecars up -d --wait
+
+sidecars-down:  ## Stop the containerised sidecars, leaving the stack up
+	docker compose --profile sidecars stop features retrieval
+
+# Run the orchestrator image against the compose stack. The artifacts are
+# mounted at the paths the binary's own defaults already name -- see WORKDIR in
+# serving.Dockerfile -- so item-map, catalogue, popular and columns need no
+# flags. The two OPTIONAL stems do, because their defaults are empty.
+IMAGE_FEATURES_HOST  ?= features
+IMAGE_RETRIEVAL_HOST ?= retrieval
+IMAGE_STEMS = \
+  $(if $(wildcard $(INDEX_STEM).json),-index-stem $(INDEX_STEM),) \
+  $(if $(wildcard $(CONTENT_STEM).json),-content-stem $(CONTENT_STEM),)
+
+image-run:  ## Run the orchestrator image against the compose stack
+	@test -f serving/artifacts/item_map.json \
+	  || { echo "  serving/artifacts is empty -- run 'make artifacts' first"; exit 1; }
+	@test -f serving/triton/ranker/1/model.columns.json \
+	  || { echo "  model.columns.json missing -- run 'make onnx' first"; exit 1; }
+	@test -n "$(wildcard $(INDEX_STEM).json)" \
+	  || echo "  note: no $(INDEX_STEM).json -- exact search fallback disabled (run: make index-vectors)"
+	@test -n "$(wildcard $(CONTENT_STEM).json)" \
+	  || echo "  note: no $(CONTENT_STEM).json -- MMR disabled (run: make content-vectors)"
+	@for c in recsys-kafka recsys-triton recsys-schema-registry recsys-redis \
+	          recsys-features recsys-retrieval; do \
+	  docker inspect -f '{{.State.Running}}' $$c 2>/dev/null | grep -q true \
+	    || { echo "  $$c is not running -- run 'make sidecars-up' first"; exit 1; }; \
+	done
+	docker run --rm -it \
+	    --name recsys-orchestrator \
+	    --network $(COMPOSE_NETWORK) \
+	    --add-host recsys-host:$(or $(HOST_IP),host-gateway) \
+	    -p $(RECSYS_PORT):$(RECSYS_PORT) -p 9102:9102 \
+	    -v "$(CURDIR)/serving/artifacts:/repo/serving/artifacts:ro" \
+	    -v "$(CURDIR)/serving/triton/ranker/1:/repo/serving/triton/ranker/1:ro" \
+	    $(IMAGE) \
+	      -port $(RECSYS_PORT) \
+	      -features $(call addresses,$(IMAGE_FEATURES_HOST),$(FEATURES_PORT),$(FEATURES_PROCESSES)) \
+	      -retrieval $(call addresses,$(IMAGE_RETRIEVAL_HOST),$(RETRIEVAL_PORT),$(RETRIEVAL_PROCESSES)) \
+	      $(IMAGE_STEMS) \
+	      -triton triton:8001 \
+	      -redis redis://redis:6379 \
+	      -kafka kafka:29092 \
+	      -schema-registry http://schema-registry:8081 \
+	      -warm-wait 60s

@@ -147,6 +147,9 @@ def promote(pointer: Path, version: str) -> Path:
     """
     pointer.parent.mkdir(parents=True, exist_ok=True)
     handle, staged = tempfile.mkstemp(dir=pointer.parent, suffix=".tmp")
+    # mkstemp creates the file 0600, and the rename keeps that mode -- which
+    # locks out a reader running as another uid, e.g. the retrieval container.
+    os.fchmod(handle, 0o644)
     with os.fdopen(handle, "w") as out:
         out.write(version)
     Path(staged).replace(pointer)

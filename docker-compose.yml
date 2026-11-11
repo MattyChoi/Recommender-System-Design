@@ -225,6 +225,66 @@ services:
       timeout: 5s
       retries: 12
 
+  # Python sidecars
+  features:
+    profiles: ["sidecars"]
+    image: recsys/sidecars:dev
+    container_name: recsys-features
+    command: ["python", "-m", "serving.features"]
+    depends_on:
+      redis: {condition: service_healthy}
+    env_file: .env
+    environment:
+      # redis:6379 from inside the network. feature_store.yaml reads this.
+      REDIS_URL: redis:6379
+      # Absolute: Feast resolves a RELATIVE registry path against repo_path
+      # (the feature_repo dir), so a repo-relative value gets doubled.
+      FEAST_REGISTRY: /repo/data_pipeline/features/recsys_store/feature_repo/registry.db
+      RECSYS_STORAGE__ENDPOINT_URL: http://minio:9000
+      FEATURES_PROCESSES: "4"
+    volumes:
+      - ./serving/artifacts:/repo/serving/artifacts:ro
+      - ./data_pipeline/features/recsys_store:/repo/data_pipeline/features/recsys_store:ro
+    ports: ["15053:15053", "15063:15063", "15073:15073", "15083:15083"]
+    healthcheck:
+      # All FOUR copies, not just the first. `supervise` binds one process per
+      # strided port, so a probe that only asks :15053 reports healthy while
+      # three of the four are dead -- and the orchestrator round-robins into
+      # them.
+      test: ["CMD", "python", "-c",
+             "import os,grpc;from common.pb import features_pb2 as p,features_pb2_grpc as g;b=int(os.environ['FEATURES_PORT']);[g.FeaturesStub(grpc.insecure_channel(f'localhost:{b+10*i}')).Health(p.FeaturesHealthRequest(),timeout=3) for i in range(int(os.environ['FEATURES_PROCESSES']))]"]
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 90s
+
+  retrieval:
+    profiles: ["sidecars"]
+    image: recsys/sidecars:dev
+    container_name: recsys-retrieval
+    command: ["python", "-m", "serving.retrieval"]
+    depends_on:
+      redis: {condition: service_healthy}
+    env_file: .env
+    environment:
+      REDIS_URL: redis:6379
+      RETRIEVAL_PROCESSES: "4"
+    volumes:
+      # Read-only, and `data/` is in .dockerignore, so these are never baked.
+      - ./data/index:/repo/data/index:ro
+      - ./data/checkpoints:/repo/data/checkpoints:ro
+      # load_item_tables reads ONE parquet file from the local gold layer --
+      # settings.paths.gold, not the storage backend, so this is never S3.
+      - ./data/gold/item_content:/repo/data/gold/item_content:ro
+    ports: ["15052:15052", "15062:15062", "15072:15072", "15082:15082"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import os,grpc;from common.pb import retrieval_pb2 as p,retrieval_pb2_grpc as g;b=int(os.environ['RETRIEVAL_PORT']);[g.RetrievalStub(grpc.insecure_channel(f'localhost:{b+10*i}')).Health(p.RetrievalHealthRequest(),timeout=3) for i in range(int(os.environ['RETRIEVAL_PROCESSES']))]"]
+      interval: 10s
+      timeout: 15s
+      retries: 24
+      start_period: 240s
+
 # Named volumes. An empty value means "use the default local driver".
 volumes:
   minio:
