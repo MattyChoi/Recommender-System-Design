@@ -4,7 +4,7 @@
 # Every run writes a JSON result card under evaluation/results/. docs/baselines.md
 # is regenerated from those cards and never hand-edited.
 
-.PHONY: eval sweep coverage compare baselines results
+.PHONY: eval sweep coverage compare baselines results quality-gate
 
 MODELS ?= random popularity recency content covisit als als_item
 MODEL ?= random
@@ -54,3 +54,15 @@ baselines:  ## Re-score every baseline and rebuild docs/baselines.md from one co
 # JSON it quotes is worse than no table. Pure stdlib, so no cluster is needed.
 results:  ## Rebuild docs/baselines.md from evaluation/results/*.json
 	uv run python -m evaluation.offline.results_table
+
+
+# The promotion gate. Pure arithmetic over committed cards -- no Spark, no GPU,
+# no corpus -- so it runs anywhere, CI included. Producing the CANDIDATE cards is
+# the half that needs the corpus, and that is `make eval` and the retrieval and
+# ranking evaluate targets. Exits non-zero on a refusal.
+CANDIDATE_POINTER ?= evaluation/results/CANDIDATE.json
+
+quality-gate:  ## Refuse a promotion that regresses quality (make quality-gate CANDIDATE_POINTER=...)
+	@test -f $(CANDIDATE_POINTER) \
+	  || { echo "  no $(CANDIDATE_POINTER): copy PRODUCTION.json and point it at the new cards"; exit 1; }
+	uv run python -m evaluation.offline.gate --candidate $(CANDIDATE_POINTER)
