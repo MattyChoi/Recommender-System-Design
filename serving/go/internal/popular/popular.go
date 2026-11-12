@@ -14,7 +14,7 @@ type Popular struct {
 	version string
 }
 
-// payload mirrors what scripts/artifacts/dump_popular.py writes
+// payload mirrors what data_pipeline/serving_artifacts/dump_popular.py writes
 type payload struct {
 	Version string  `json:"version"`
 	Items   []int32 `json:"items"`

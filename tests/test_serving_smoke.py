@@ -23,6 +23,7 @@ from pathlib import Path
 
 import grpc
 import pytest
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from common.pb import recsys_pb2 as pb
 from common.pb import recsys_pb2_grpc as pb_grpc
@@ -46,6 +47,11 @@ KNOWN_IDS = {f"N{i}" for i in ITEM_INDICES}
 PORT = 15099  # not 15051: a dev box usually has the real thing on it
 METRICS = ":9199"  # ditto 9102
 READY_TIMEOUT = 60.0
+
+# Must match readinessService in serving/go/cmd/server/main.go. Two languages
+# with nothing to share a constant through, so it is written down once here and
+# asserted against a running server rather than assumed.
+READINESS_SERVICE = "recsys.v1.Recommender"
 
 
 def _docker(*args: str) -> str:
@@ -115,8 +121,13 @@ def artifacts(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="module")
-def stub(artifacts: Path) -> Iterator[pb_grpc.RecommenderStub]:
-    """The image, with every backend deliberately absent."""
+def channel(artifacts: Path) -> Iterator[grpc.Channel]:
+    """The image, with every backend deliberately absent.
+
+    Yields the CHANNEL rather than one stub: the health contract is served by
+    grpc.health.v1.Health, not by Recommender, and both are wanted against the
+    same container.
+    """
     flags = {
         "-port": str(PORT),
         "-metrics": METRICS,
@@ -148,14 +159,19 @@ def stub(artifacts: Path) -> Iterator[pb_grpc.RecommenderStub]:
     # the teardown below to read its log, which is the only account of why.
     container = subprocess.run(command, check=True, capture_output=True, text=True).stdout.strip()
     try:
-        with grpc.insecure_channel(f"localhost:{PORT}") as channel:
-            _await_ready(container, channel)
-            yield pb_grpc.RecommenderStub(channel)
+        with grpc.insecure_channel(f"localhost:{PORT}") as connection:
+            _await_ready(container, connection)
+            yield connection
     finally:
         # Printed unconditionally; pytest shows captured output only on failure,
         # and a container smoke that fails without its logs is unfixable in CI.
         print(_docker("logs", container))
         _docker("rm", "-f", container)
+
+
+@pytest.fixture(scope="module")
+def stub(channel: grpc.Channel) -> pb_grpc.RecommenderStub:
+    return pb_grpc.RecommenderStub(channel)
 
 
 def test_the_slate_is_never_empty(stub: pb_grpc.RecommenderStub) -> None:
@@ -194,7 +210,35 @@ def test_exclusions_are_honoured_on_the_fallback_path(stub: pb_grpc.RecommenderS
 
 def test_health_admits_it_is_not_ready(stub: pb_grpc.RecommenderStub) -> None:
     """Serving and ready are different states. This is the property N2's k8s
-    readiness probe will depend on, so it is worth a gate now."""
+    readiness probe depends on, so it is worth a gate now."""
     health = stub.Health(pb.HealthRequest(), timeout=5)
     assert not health.ready
     assert health.detail, "an unready service must say which probe failed"
+
+
+def test_the_standard_health_service_separates_liveness_from_readiness(
+    channel: grpc.Channel,
+) -> None:
+    """**What Kubernetes actually probes**, as opposed to the RPC above.
+
+    `readinessProbe.grpc` speaks grpc.health.v1 and nothing else, so the
+    Recommender.Health verdict above is invisible to it. The two names must mean
+    different things:
+
+    * "" is LIVENESS and stays SERVING however bad the backends are. A dead
+      Triton that restarted every pod would turn a degraded dependency into a
+      restart loop, which is worse than serving the fallback slate.
+    * READINESS_SERVICE tracks the backends, so a pod that cannot serve is taken
+      out of the Service's endpoints while the process is left alone.
+
+    Before the readiness poller, health.NewServer's default meant BOTH answered
+    SERVING -- so Kubernetes would have routed traffic to this very container,
+    which is answering from popular.json with every backend absent.
+    """
+    health = health_pb2_grpc.HealthStub(channel)
+
+    overall = health.Check(health_pb2.HealthCheckRequest(service=""), timeout=5)
+    assert overall.status == health_pb2.HealthCheckResponse.SERVING
+
+    readiness = health.Check(health_pb2.HealthCheckRequest(service=READINESS_SERVICE), timeout=5)
+    assert readiness.status == health_pb2.HealthCheckResponse.NOT_SERVING

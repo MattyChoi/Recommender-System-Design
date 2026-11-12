@@ -21,7 +21,7 @@ type Catalogue struct {
 	vectors *matrix.Matrix
 }
 
-// payload mirrors what scripts/artifacts/dump_catalogue.py writes. `category`
+// payload mirrors what data_pipeline/serving_artifacts/dump_catalogue.py writes. `category`
 // and `subcategory` are ARRAYS positional by item_idx rather than objects keyed
 // by it: the position IS the key, so an object would cost a parse and a map for
 // nothing.

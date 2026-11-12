@@ -83,12 +83,18 @@ class StorageConfig(BaseModel):
             compose network would use ``http://minio:9000``.
         gold_prefix: Key prefix under the bucket, mirroring the local layout so
             the two backends are diffable.
+        artifacts_prefix: Key prefix for the published serving artifacts. The
+            dumpers write to disk for a Go server that loads from disk, which
+            holds while the two share a filesystem; a pod has no host to mount
+            from, so ``data_pipeline.serving_artifacts.publish`` versions them under here and
+            an init container pulls the version ``CURRENT`` names.
     """
 
     backend: Literal["local", "s3"] = "s3"
     bucket: str = "recsys"
     endpoint_url: str = "http://localhost:9000"
     gold_prefix: str = "gold"
+    artifacts_prefix: str = "serving-artifacts"
 
 
 class SparkConfig(BaseModel):

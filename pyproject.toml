@@ -37,6 +37,10 @@ sharded = ["torchrec==1.8.0", "fbgemm-gpu==1.8.0"]
 orchestration = ["apache-airflow>=3.0"]
 serving = [
     "grpcio>=1.83.1",
+    # The generated grpc_health.v1 stubs. Needed only to ASSERT the health
+    # contract from Python -- the Kubernetes probes carry that descriptor
+    # compiled in and need nothing installed.
+    "grpcio-health-checking>=1.83.1",
     "onnx>=1.23.0",
     "onnxruntime>=1.30.0",
     "onnxscript>=0.7.2",
@@ -75,6 +79,7 @@ warn_unreachable = true
 module = [
     "pyarrow.*",
     "confluent_kafka.*",
+    "grpc_health.*",
     "s3fs.*",
     "fsspec.*",
     "sentence_transformers.*",
