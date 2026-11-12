@@ -99,6 +99,10 @@ func (l *Log) Emit(rec service.Record) error {
 			UserFeats:  rec.UserFeats,
 			Degraded:   rec.Degraded,
 			UserFound:  rec.UserFound,
+			// Nil stays nil: proto3 writes an absent repeated field, which is
+			// what distinguishes "no shadow ran" from "the shadow scored zero".
+			ShadowScores: rec.ShadowScores,
+			ShadowModel:  rec.ShadowModel,
 		}); err != nil {
 		return fmt.Errorf("producing context %s: %w", rec.RequestID, err)
 	}

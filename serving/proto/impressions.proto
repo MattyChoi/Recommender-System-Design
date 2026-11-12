@@ -30,4 +30,11 @@ message ImpressionContext {
   // Whether the store had a row for this user. False means user_feats are the
   // zero defaults, not measured values
   bool user_found = 10;
+
+  // --- shadow mode ---
+  // A second model, scored on the SAME feature matrix as `scores` and never
+  // served. ALIGNED with item_ids, like scores and objective.
+  repeated double shadow_scores = 11;
+  // Which model produced shadow_scores. Empty whenever shadow_scores is.
+  string shadow_model = 12;
 }

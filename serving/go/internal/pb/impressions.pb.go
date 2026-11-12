@@ -45,7 +45,13 @@ type ImpressionContext struct {
 	Degraded []string `protobuf:"bytes,9,rep,name=degraded,proto3" json:"degraded,omitempty"`
 	// Whether the store had a row for this user. False means user_feats are the
 	// zero defaults, not measured values
-	UserFound     bool `protobuf:"varint,10,opt,name=user_found,json=userFound,proto3" json:"user_found,omitempty"`
+	UserFound bool `protobuf:"varint,10,opt,name=user_found,json=userFound,proto3" json:"user_found,omitempty"`
+	// --- shadow mode ---
+	// A second model, scored on the SAME feature matrix as `scores` and never
+	// served. ALIGNED with item_ids, like scores and objective.
+	ShadowScores []float64 `protobuf:"fixed64,11,rep,packed,name=shadow_scores,json=shadowScores,proto3" json:"shadow_scores,omitempty"`
+	// Which model produced shadow_scores. Empty whenever shadow_scores is.
+	ShadowModel   string `protobuf:"bytes,12,opt,name=shadow_model,json=shadowModel,proto3" json:"shadow_model,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -150,11 +156,25 @@ func (x *ImpressionContext) GetUserFound() bool {
 	return false
 }
 
+func (x *ImpressionContext) GetShadowScores() []float64 {
+	if x != nil {
+		return x.ShadowScores
+	}
+	return nil
+}
+
+func (x *ImpressionContext) GetShadowModel() string {
+	if x != nil {
+		return x.ShadowModel
+	}
+	return ""
+}
+
 var File_impressions_proto protoreflect.FileDescriptor
 
 const file_impressions_proto_rawDesc = "" +
 	"\n" +
-	"\x11impressions.proto\x12\trecsys.v1\"\xb2\x02\n" +
+	"\x11impressions.proto\x12\trecsys.v1\"\xfa\x02\n" +
 	"\x11ImpressionContext\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x17\n" +
@@ -170,7 +190,9 @@ const file_impressions_proto_rawDesc = "" +
 	"\bdegraded\x18\t \x03(\tR\bdegraded\x12\x1d\n" +
 	"\n" +
 	"user_found\x18\n" +
-	" \x01(\bR\tuserFoundBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3"
+	" \x01(\bR\tuserFound\x12#\n" +
+	"\rshadow_scores\x18\v \x03(\x01R\fshadowScores\x12!\n" +
+	"\fshadow_model\x18\f \x01(\tR\vshadowModelBJZHgithub.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pbb\x06proto3"
 
 var (
 	file_impressions_proto_rawDescOnce sync.Once

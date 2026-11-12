@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -49,16 +50,20 @@ type Config struct {
 }
 
 type Service struct {
-	Retrievers  []Retriever
-	Store       UserStore
-	Features    FeatureBuilder
-	Ranker      Ranker
-	Seen        SeenList
-	Impressions ImpressionLog
-	Catalogue   Catalogue
-	Fallback    Fallback
-	Config      Config
-	Now         func() time.Time
+	Retrievers    []Retriever
+	Store         UserStore
+	Features      FeatureBuilder
+	Ranker        Ranker
+	Seen          SeenList
+	Impressions   ImpressionLog
+	Catalogue     Catalogue
+	Fallback      Fallback
+	Config        Config
+	Now           func() time.Time
+	Shadow        Ranker
+	ShadowModel   string
+	shadowLogged  atomic.Uint64
+	shadowDropped atomic.Uint64
 }
 
 type Request struct {
@@ -83,6 +88,14 @@ type Result struct {
 	StageCounts     map[string]int
 	StageLatency    map[string]time.Duration
 	TotalLatency    time.Duration
+}
+
+// scored is the rank stage's output.
+type scored struct {
+	scores     []float64
+	ranked     bool
+	incomplete int
+	shadow     <-chan []float64
 }
 
 func (s *Service) Recommend(ctx context.Context, userID string, numResults int) (Result, error) {
@@ -139,30 +152,28 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	result.StageCounts["unblocked"] = countUnblocked(blocked, len(candidates))
 
 	// --- step 3: ranking ---
-	var scores []float64
-	var ranked bool
-	var incomplete int
+	var ranked scored
 	s.stage(ctx, "rank", &result, func(inner context.Context) {
-		scores, ranked, incomplete = s.score(inner, BuildInput{
+		ranked = s.score(inner, BuildInput{
 			User:  user,
 			Items: candidates,
 			Ranks: ranksByName(blended),
 			Model: model,
 		})
 	})
-	if !ranked {
+	if !ranked.ranked {
 		result.DegradedSources = append(result.DegradedSources, degradedRanker)
 	}
-	if incomplete > 0 {
-		result.StageCounts["incomplete_rows"] = incomplete
+	if ranked.incomplete > 0 {
+		result.StageCounts["incomplete_rows"] = ranked.incomplete
 		result.DegradedSources = append(result.DegradedSources, degradedColumns)
 	}
-	result.StageCounts["scored"] = len(scores)
+	result.StageCounts["scored"] = len(ranked.scores)
 
 	// --- step 4: Re-rank ---
 	var slate rerank.Slate
 	s.stage(ctx, "rerank", &result, func(inner context.Context) {
-		slate, err = rerank.Select(scores, candidates, numResults, rerank.Options{
+		slate, err = rerank.Select(ranked.scores, candidates, numResults, rerank.Options{
 			Vectors:      s.Catalogue.Vectors(candidates),
 			Lambda:       s.Config.Lambda,
 			Categories:   s.Catalogue.Subcategories(candidates),
@@ -184,7 +195,7 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	result.Sources = sourcesFor(blended, slate.Rows)
 	result.Scores = make([]float64, len(slate.Rows))
 	for index, row := range slate.Rows {
-		result.Scores[index] = scores[row]
+		result.Scores[index] = ranked.scores[row]
 	}
 
 	// --- step 5: add to the seen-list ---
@@ -194,19 +205,22 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 
 	// -- step 6: log impressions asynchronously
 	if s.Impressions != nil {
+		shadowScores, shadowModel := s.shadowAt(ranked.shadow, slate.Rows)
 		s.Impressions.EmitAsync(Record{
-			UserID:     userID,
-			Surface:    request.Surface,
-			Variant:    request.Variant,
-			RequestID:  request.RequestID,
-			ServedAt:   s.now(),
-			ItemIDs:    slate.Items,
-			Objective:  slate.Objective,
-			Scores:     result.Scores,
-			Propensity: slate.Propensity,
-			UserFeats:  user.Feats,
-			UserFound:  user.Found,
-			Degraded:   result.DegradedSources,
+			UserID:       userID,
+			Surface:      request.Surface,
+			Variant:      request.Variant,
+			RequestID:    request.RequestID,
+			ServedAt:     s.now(),
+			ItemIDs:      slate.Items,
+			Objective:    slate.Objective,
+			Scores:       result.Scores,
+			Propensity:   slate.Propensity,
+			UserFeats:    user.Feats,
+			UserFound:    user.Found,
+			Degraded:     result.DegradedSources,
+			ShadowScores: shadowScores,
+			ShadowModel:  shadowModel,
 		})
 	}
 
@@ -385,15 +399,16 @@ func (s *Service) blocked(
 	return merged
 }
 
-// score runs the ranker under its own deadline, reporting whether it ran.
-func (s *Service) score(ctx context.Context, in BuildInput) ([]float64, bool, int) {
+// score runs the ranker under its own deadline, reporting whether it ran, and
+// starts the shadow on the same built matrix.
+func (s *Service) score(ctx context.Context, in BuildInput) scored {
 	items := in.Items
 	descending := make([]float64, len(items))
 	for index := range items {
 		descending[index] = float64(len(items) - index)
 	}
 	if s.Ranker == nil || s.Features == nil {
-		return descending, false, 0
+		return scored{scores: descending}
 	}
 
 	// Feature construction shares the ranker's deadline
@@ -403,15 +418,70 @@ func (s *Service) score(ctx context.Context, in BuildInput) ([]float64, bool, in
 	// fetch the item features from the feature gateway
 	built, err := s.Features.Build(rankCtx, in)
 	if err != nil || len(built.Rows) != len(items) {
-		return descending, false, 0
+		return scored{scores: descending}
 	}
+
+	shadow := s.startShadow(ctx, built, len(items))
 
 	scores, err := s.Ranker.Score(rankCtx, built)
 	if err != nil || len(scores) != len(items) {
-		return descending, false, 0
+		return scored{scores: descending, shadow: shadow}
 	}
-	return scores, true, built.Incomplete
+	return scored{scores: scores, ranked: true, incomplete: built.Incomplete, shadow: shadow}
 }
+
+// startShadow scores `built` with the shadow model, off the request's path.
+func (s *Service) startShadow(ctx context.Context, built Features, want int) <-chan []float64 {
+	if s.Shadow == nil {
+		return nil
+	}
+
+	out := make(chan []float64, 1)
+	shadowCtx, cancel := context.WithTimeout(ctx, s.Config.RankDeadline)
+	// Use a goroutine to avoid blocking the request path
+	go func() {
+		defer cancel()
+		scores, err := s.Shadow.Score(shadowCtx, built)
+		if err != nil || len(scores) != want {
+			out <- nil
+			return
+		}
+		out <- scores
+	}()
+	return out
+}
+
+// shadowAt reindexes the shadow's candidate scores onto the SERVED slots.
+func (s *Service) shadowAt(ch <-chan []float64, rows []int) ([]float64, string) {
+	if ch == nil {
+		return nil, ""
+	}
+
+	select {
+	case scores := <-ch:
+		if scores == nil {
+			s.shadowDropped.Add(1)
+			return nil, ""
+		}
+		out := make([]float64, len(rows))
+		for index, row := range rows {
+			if row >= 0 && row < len(scores) {
+				out[index] = scores[row]
+			}
+		}
+		s.shadowLogged.Add(1)
+		return out, s.ShadowModel
+	default:
+		s.shadowDropped.Add(1)
+		return nil, ""
+	}
+}
+
+// ShadowLogged counts shadow scores that reached a served slate.
+func (s *Service) ShadowLogged() uint64 { return s.shadowLogged.Load() }
+
+// ShadowDropped counts shadow runs that missed the slate.
+func (s *Service) ShadowDropped() uint64 { return s.shadowDropped.Load() }
 
 // ranksByName flattens the blend's per-source ranks for the feature builder.
 func ranksByName(blended retrieval.Blended) map[string][]int32 {

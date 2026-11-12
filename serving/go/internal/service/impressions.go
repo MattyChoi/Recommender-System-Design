@@ -39,6 +39,13 @@ type Record struct {
 	// What degraded, so off-policy evaluation can exclude or weight the
 	// requests where the logging policy was not the policy under study.
 	Degraded []string
+
+	// ShadowScores are a second model's scores for the SAME slots, aligned with
+	// ItemIDs. Nil when no shadow ran or it missed the rank deadline -- nil, not
+	// a zero-filled slice, because zeros read as a model that scored nothing.
+	ShadowScores []float64
+	// ShadowModel names what produced them. Empty whenever ShadowScores is nil.
+	ShadowModel string
 }
 
 type AsyncLog struct {
@@ -90,6 +97,7 @@ func (r Record) clone() Record {
 	r.Propensity = append([]float64(nil), r.Propensity...)
 	r.UserFeats = append([]float32(nil), r.UserFeats...)
 	r.Degraded = append([]string(nil), r.Degraded...)
+	r.ShadowScores = append([]float64(nil), r.ShadowScores...)
 	return r
 }
 
