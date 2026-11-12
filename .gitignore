@@ -50,7 +50,6 @@ logs.txt
 notebooks/*
 .ipynb_checkpoints/
 scripts/*
-!scripts/artifacts/
 !scripts/writeups/
 /tmp
 

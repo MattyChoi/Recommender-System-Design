@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/catalogue"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/experiments"
@@ -39,8 +40,10 @@ import (
 
 type options struct {
 	// --- transport ---
-	port        int
-	metricsAddr string
+	port             int
+	metricsAddr      string
+	drainDelay       time.Duration
+	enableReflection bool
 
 	// --- artifacts ---
 	itemMap     string
@@ -159,6 +162,13 @@ const (
 	warmRetry   = 250 * time.Millisecond
 )
 
+const (
+	readinessService = "recsys.v1.Recommender"
+
+	// readinessPeriod is how often the backends are probed.
+	readinessPeriod = 2 * time.Second
+)
+
 // warmConnections dials every backend before the first real request.
 //
 // A sidecar that is still loading refuses the connection outright, so a probe
@@ -198,6 +208,47 @@ func warmConnections(ctx context.Context, probes []namedProbe, wait time.Duratio
 	}
 }
 
+// watchReadiness polls the backends and publishes the verdict on the standard
+// gRPC health service
+func watchReadiness(
+	ctx context.Context,
+	server *health.Server,
+	ready func(context.Context) error,
+	period time.Duration,
+) {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+
+	serving := false
+
+	for {
+		check, cancel := context.WithTimeout(ctx, period)
+		err := ready(check)
+		cancel()
+
+		if now := err == nil; now != serving {
+			serving = now
+			status := healthpb.HealthCheckResponse_NOT_SERVING
+			if serving {
+				status = healthpb.HealthCheckResponse_SERVING
+			}
+			server.SetServingStatus(readinessService, status)
+
+			if serving {
+				log.Printf("readiness SERVING")
+			} else {
+				log.Printf("readiness NOT_SERVING: %v", err)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // parseVariants reads "control:50,treatment:50".
 //
 // must follow this string convention
@@ -225,6 +276,10 @@ func parse() options {
 
 	flag.IntVar(&o.port, "port", 15051, "gRPC port")
 	flag.StringVar(&o.metricsAddr, "metrics", ":9102", "Prometheus scrape address")
+	flag.DurationVar(&o.drainDelay, "drain-delay", 0,
+		"after SIGTERM, fail readiness and keep serving this long before draining")
+	flag.BoolVar(&o.enableReflection, "reflection", false,
+		"serve the gRPC reflection API, so grpcurl and ghz need no local .proto")
 
 	flag.StringVar(&o.itemMap, "item-map", "serving/artifacts/item_map.json",
 		"string id to internal index, from `make item-map`")
@@ -592,19 +647,32 @@ func run(o options) error {
 		grpc.UnaryInterceptor(recorder.Interceptor()),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
+	probe := healthProbe{
+		gateway:  gateway,
+		ranker:   ranker,
+		index:    index,
+		efSearch: int32(o.efSearch),
+	}
+
 	pb.RegisterRecommenderServer(grpcServer, &server.Recommender{
-		Service: pipeline,
-		IDs:     ids,
-		Probe: healthProbe{
-			gateway:  gateway,
-			ranker:   ranker,
-			index:    index,
-			efSearch: int32(o.efSearch),
-		},
+		Service:    pipeline,
+		IDs:        ids,
+		Probe:      probe,
 		Experiment: experiment,
 		Observer:   recorder,
 	})
-	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
+
+	healthServer := health.NewServer()
+	healthpb.RegisterHealthServer(grpcServer, healthServer)
+	healthServer.SetServingStatus(readinessService, healthpb.HealthCheckResponse_NOT_SERVING)
+
+	readinessCtx, stopReadiness := context.WithCancel(context.Background())
+	defer stopReadiness()
+	go watchReadiness(readinessCtx, healthServer, probe.Ready, readinessPeriod)
+
+	if o.enableReflection {
+		reflection.Register(grpcServer)
+	}
 
 	log.Printf("orchestrator on :%d, metrics on %s", o.port, o.metricsAddr)
 	log.Printf("  runtime    GOMAXPROCS %d of %d CPUs, go %s",
@@ -618,6 +686,14 @@ func run(o options) error {
 	log.Printf("  retrieval  %s", o.retrievalAPI)
 	log.Printf("  features   %s", o.featuresAPI)
 	log.Printf("  triton     %s/%s", o.tritonAPI, o.tritonModel)
+	log.Printf("  readiness  %q every %v; liveness is the overall service, which never flips",
+		readinessService, readinessPeriod)
+	if o.drainDelay > 0 {
+		log.Printf("  drain      fail readiness, serve %v, then stop accepting", o.drainDelay)
+	}
+	if o.enableReflection {
+		log.Printf("  reflection ON; grpcurl and ghz need no local .proto")
+	}
 	if o.shadowModel == "" {
 		log.Printf("  shadow     off")
 	} else {
@@ -651,6 +727,16 @@ func run(o options) error {
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-stop
+
+		healthServer.SetServingStatus(readinessService, healthpb.HealthCheckResponse_NOT_SERVING)
+		stopReadiness()
+
+		if o.drainDelay > 0 {
+			log.Printf("readiness NOT_SERVING; still serving for %v while endpoints propagate",
+				o.drainDelay)
+			time.Sleep(o.drainDelay)
+		}
+
 		// GracefulStop rather than Stop: in-flight requests finish. A deploy
 		// that severs them turns every rollout into a burst of client errors.
 		log.Print("draining")
