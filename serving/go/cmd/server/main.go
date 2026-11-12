@@ -61,6 +61,7 @@ type options struct {
 	retrievalAPI string
 	tritonAPI    string
 	tritonModel  string
+	shadowModel  string
 	conns        int
 	warmWait     time.Duration
 
@@ -256,6 +257,8 @@ func parse() options {
 	flag.DurationVar(&o.warmWait, "warm-wait", 0,
 		"at startup, keep retrying backends that are not up yet for this long before serving; 0 tries once")
 	flag.StringVar(&o.tritonModel, "triton-model", "ranker", "triton model name")
+	flag.StringVar(&o.shadowModel, "shadow-triton-model", "",
+		"a second triton model scored on the SAME columns and never served; empty disables")
 
 	flag.StringVar(&o.kafkaBrokers, "kafka", "localhost:9092",
 		"Kafka bootstrap servers for the impression log; empty disables logging")
@@ -437,6 +440,23 @@ func run(o options) error {
 	}
 	defer func() { _ = ranker.Close() }()
 
+	var shadow service.Ranker
+	var shadowReady func(context.Context) error
+	if o.shadowModel != "" {
+		if o.shadowModel == o.tritonModel {
+			return fmt.Errorf("-shadow-triton-model %q equals -triton-model; that shadows nothing",
+				o.shadowModel)
+		}
+		// Same `columns`: the shadow is scored from the live model's feature
+		// matrix, so it tests a different MODEL and not a different feature set.
+		client, err := ranking.Dial(o.tritonAPI, o.shadowModel, columns, o.conns)
+		if err != nil {
+			return fmt.Errorf("dialling the shadow model: %w", err)
+		}
+		defer func() { _ = client.Close() }()
+		shadow, shadowReady = client, client.Ready
+	}
+
 	var impressionLog service.ImpressionLog
 	var async *service.AsyncLog
 	var sink *impressions.Log
@@ -520,6 +540,8 @@ func run(o options) error {
 			Names:     columns,
 		},
 		Ranker:      ranker,
+		Shadow:      shadow,
+		ShadowModel: o.shadowModel,
 		Seen:        seen,
 		Catalogue:   catalog,
 		Fallback:    fallback,
@@ -536,6 +558,21 @@ func run(o options) error {
 			ModelVersion:    o.modelVersion,
 			IndexVersion:    o.indexVersion,
 		},
+	}
+
+	if shadow != nil {
+		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Namespace: metrics.Namespace, Name: "shadow_logged_total",
+			Help: "Shadow scores reindexed onto a served slate and logged.",
+		}, func() float64 { return float64(pipeline.ShadowLogged()) }))
+
+		// The one to alert on. A shadow that stops finishing inside the rank
+		// deadline goes silent, and a log that simply stops carrying the column
+		// looks exactly like a shadow nobody configured.
+		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Namespace: metrics.Namespace, Name: "shadow_dropped_total",
+			Help: "Shadow runs that missed the slate, or returned an unusable score vector.",
+		}, func() float64 { return float64(pipeline.ShadowDropped()) }))
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", o.port))
@@ -581,6 +618,12 @@ func run(o options) error {
 	log.Printf("  retrieval  %s", o.retrievalAPI)
 	log.Printf("  features   %s", o.featuresAPI)
 	log.Printf("  triton     %s/%s", o.tritonAPI, o.tritonModel)
+	if o.shadowModel == "" {
+		log.Printf("  shadow     off")
+	} else {
+		log.Printf("  shadow     %s, same columns, scored and logged but never served",
+			o.shadowModel)
+	}
 	log.Printf("  conns      %d per backend (1 = one loopyWriter, the measured limit)", o.conns)
 	log.Printf("  catalogue  %s (%d rows, %s)", o.catalogue, catalog.Size(), catalog.Version())
 	log.Printf("  columns    %d, from %s", len(columns), o.columns)
@@ -594,11 +637,15 @@ func run(o options) error {
 			experiment.ID, experiment.Names(), experiment.Allocated())
 	}
 
-	warmConnections(context.Background(), []namedProbe{
+	probes := []namedProbe{
 		{"features", gateway.Ready},
 		{"retrieval", index.Ready},
 		{"triton", ranker.Ready},
-	}, o.warmWait)
+	}
+	if shadowReady != nil {
+		probes = append(probes, namedProbe{"shadow", shadowReady})
+	}
+	warmConnections(context.Background(), probes, o.warmWait)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)

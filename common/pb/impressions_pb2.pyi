@@ -37,6 +37,8 @@ class ImpressionContext(_message.Message):
     USER_FEATS_FIELD_NUMBER: _builtins.int
     DEGRADED_FIELD_NUMBER: _builtins.int
     USER_FOUND_FIELD_NUMBER: _builtins.int
+    SHADOW_SCORES_FIELD_NUMBER: _builtins.int
+    SHADOW_MODEL_FIELD_NUMBER: _builtins.int
     request_id: _builtins.str
     """joins to InteractionEvent.request_id"""
     user_id: _builtins.str
@@ -48,6 +50,8 @@ class ImpressionContext(_message.Message):
     """Whether the store had a row for this user. False means user_feats are the
     zero defaults, not measured values
     """
+    shadow_model: _builtins.str
+    """Which model produced shadow_scores. Empty whenever shadow_scores is."""
     @_builtins.property
     def item_ids(self) -> _containers.RepeatedScalarFieldContainer[_builtins.int]:
         """ALIGNED: with each other, and with the `position` of the InteractionEvent
@@ -72,6 +76,13 @@ class ImpressionContext(_message.Message):
         where the logging policy was not the policy under study.
         """
 
+    @_builtins.property
+    def shadow_scores(self) -> _containers.RepeatedScalarFieldContainer[_builtins.float]:
+        """--- shadow mode ---
+        A second model, scored on the SAME feature matrix as `scores` and never
+        served. ALIGNED with item_ids, like scores and objective.
+        """
+
     def __init__(
         self,
         *,
@@ -85,10 +96,12 @@ class ImpressionContext(_message.Message):
         user_feats: _abc.Iterable[_builtins.float] | None = ...,
         degraded: _abc.Iterable[_builtins.str] | None = ...,
         user_found: _builtins.bool = ...,
+        shadow_scores: _abc.Iterable[_builtins.float] | None = ...,
+        shadow_model: _builtins.str = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["degraded", b"degraded", "item_ids", b"item_ids", "objective", b"objective", "request_id", b"request_id", "scores", b"scores", "served_ts_ms", b"served_ts_ms", "user_feats", b"user_feats", "user_found", b"user_found", "user_id", b"user_id", "variant", b"variant"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["degraded", b"degraded", "item_ids", b"item_ids", "objective", b"objective", "request_id", b"request_id", "scores", b"scores", "served_ts_ms", b"served_ts_ms", "shadow_model", b"shadow_model", "shadow_scores", b"shadow_scores", "user_feats", b"user_feats", "user_found", b"user_found", "user_id", b"user_id", "variant", b"variant"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
