@@ -12,6 +12,7 @@
 #   make/rerank.mk     MMR / caps / freshness / exploration, seen lists
 #   make/index.mk      ANN index recall/QPS curve
 #   make/serving.mk    ONNX export, orchestrator, demo
+#   make/k8s.mk        the orchestrator on a local kind cluster
 #   make/quality.mk    lint, types, tests
 #
 # A new stage gets a new fragment and one line in the include block at the
@@ -63,4 +64,5 @@ include make/rerank.mk
 include make/index.mk
 include make/serving_artifacts.mk
 include make/serving.mk
+include make/k8s.mk
 include make/quality.mk

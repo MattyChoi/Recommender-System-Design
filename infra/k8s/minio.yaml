@@ -1,0 +1,153 @@
+# MinIO in-cluster, so the orchestrator's init container has an object store to
+# pull from and the cluster depends on nothing on the host.
+#
+# Credentials come from the same `recsys-minio` Secret the orchestrator's init
+# container reads, so there is one place to set them:
+#   kubectl create secret generic recsys-minio \
+#     --from-literal=accesskey=... --from-literal=secretkey=...
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: recsys-minio-data
+  labels:
+    app.kubernetes.io/name: recsys-minio
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+  # No storageClassName: kind installs a default StorageClass and provisions
+  # this automatically. Naming one would tie the file to kind.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-minio
+  labels:
+    app.kubernetes.io/name: recsys-minio
+spec:
+  replicas: 1
+  # Recreate, not the RollingUpdate default: a ReadWriteOnce volume can only be
+  # mounted by one node, so a rolling update deadlocks with the new pod waiting
+  # for a volume the old pod still holds.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recsys-minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-minio
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: recsys-minio-data
+      containers:
+        - name: minio
+          # Built from source and side-loaded: make minio-image-kind
+          image: recsys/minio:RELEASE.2025-09-07T16-13-09Z
+          imagePullPolicy: IfNotPresent
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            # MinIO's own admin account, which doubles as the S3 access key and
+            # secret key -- which is why one Secret serves both this and the
+            # client that reads from it.
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: accesskey}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: secretkey}
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet: {path: /minio/health/live, port: api}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: api}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "1", memory: "1Gi"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-minio
+  labels:
+    app.kubernetes.io/name: recsys-minio
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recsys-minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: console
+      port: 9001
+      targetPort: console
+---
+# Create the bucket
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: recsys-minio-bucket
+  labels:
+    app.kubernetes.io/name: recsys-minio
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-minio
+    spec:
+      # OnFailure, not the Never default: the retry loop below handles a MinIO
+      # that is slow to come up, but a crash should still be retried.
+      restartPolicy: OnFailure
+      containers:
+        - name: mb
+          # Built from source and side-loaded: make minio-image-kind
+          image: recsys/minio:RELEASE.2025-09-07T16-13-09Z
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Jobs have no ordering against Deployments, so wait rather than
+              # assume. The Service resolves before any pod is ready, so this
+              # retries on a refused connection too.
+              until mc alias set store "$ENDPOINT" "$ACCESS_KEY" "$SECRET_KEY" >/dev/null 2>&1; do
+                echo "waiting for $ENDPOINT"
+                sleep 2
+              done
+              mc mb --ignore-existing "store/$BUCKET"
+              echo "bucket $BUCKET ready"
+          env:
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: endpoint}
+            - name: BUCKET
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: bucket}
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: accesskey}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: secretkey}
+          # One `mc mb` and a retry loop: tiny. The limit is a ceiling, not a
+          # reservation, so being generous costs the node nothing.
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits: {cpu: "500m", memory: "128Mi"}

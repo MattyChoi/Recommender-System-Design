@@ -52,6 +52,7 @@ READY_TIMEOUT = 60.0
 # with nothing to share a constant through, so it is written down once here and
 # asserted against a running server rather than assumed.
 READINESS_SERVICE = "recsys.v1.Recommender"
+UPSTREAMS_SERVICE = "recsys.v1.Recommender.upstreams"
 
 
 def _docker(*args: str) -> str:
@@ -216,29 +217,33 @@ def test_health_admits_it_is_not_ready(stub: pb_grpc.RecommenderStub) -> None:
     assert health.detail, "an unready service must say which probe failed"
 
 
-def test_the_standard_health_service_separates_liveness_from_readiness(
-    channel: grpc.Channel,
-) -> None:
+def test_readiness_does_not_route_on_upstream_health(channel: grpc.Channel) -> None:
     """**What Kubernetes actually probes**, as opposed to the RPC above.
 
     `readinessProbe.grpc` speaks grpc.health.v1 and nothing else, so the
-    Recommender.Health verdict above is invisible to it. The two names must mean
-    different things:
+    Recommender.Health verdict above is invisible to it. Three names, two
+    meanings, asserted against a pod with every backend absent:
 
-    * "" is LIVENESS and stays SERVING however bad the backends are. A dead
-      Triton that restarted every pod would turn a degraded dependency into a
-      restart loop, which is worse than serving the fallback slate.
-    * READINESS_SERVICE tracks the backends, so a pod that cannot serve is taken
-      out of the Service's endpoints while the process is left alone.
+    * "" is LIVENESS. SERVING, because the process is fine.
+    * READINESS_SERVICE is SERVING too -- this container answers from
+      popular.json, as test_the_slate_is_never_empty proves on the same fixture,
+      and a pod that can answer belongs in the Service's endpoints.
+    * UPSTREAMS_SERVICE carries the all-three verdict. NOT_SERVING here, and
+      nothing routes on it.
 
-    Before the readiness poller, health.NewServer's default meant BOTH answered
-    SERVING -- so Kubernetes would have routed traffic to this very container,
-    which is answering from popular.json with every backend absent.
+    Routing on upstream health would mean a Triton outage flipped every pod at
+    once, kubelet emptied the endpoints, and a service that could still answer
+    returned nothing instead -- a degraded dependency promoted to a total
+    outage. This container is the proof that the fallback works, so it is the
+    right place to assert the probe does not throw it away.
     """
     health = health_pb2_grpc.HealthStub(channel)
 
-    overall = health.Check(health_pb2.HealthCheckRequest(service=""), timeout=5)
-    assert overall.status == health_pb2.HealthCheckResponse.SERVING
+    liveness = health.Check(health_pb2.HealthCheckRequest(service=""), timeout=5)
+    assert liveness.status == health_pb2.HealthCheckResponse.SERVING
 
     readiness = health.Check(health_pb2.HealthCheckRequest(service=READINESS_SERVICE), timeout=5)
-    assert readiness.status == health_pb2.HealthCheckResponse.NOT_SERVING
+    assert readiness.status == health_pb2.HealthCheckResponse.SERVING
+
+    upstreams = health.Check(health_pb2.HealthCheckRequest(service=UPSTREAMS_SERVICE), timeout=5)
+    assert upstreams.status == health_pb2.HealthCheckResponse.NOT_SERVING
