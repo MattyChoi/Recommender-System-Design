@@ -1,6 +1,7 @@
 # Training/serving skew report
 
-**Status: the job exists; it has not been run against live traffic yet.** The
+**Status: run 2026-11-11, against traffic put through the orchestrator with
+`-kafka` set. The Measured table below is from that run.** The
 orchestrator now logs the feature vectors it served (`ImpressionContext.user_feats`
 on the `impression_context` topic, with `user_found` beside them), and
 `scripts/writeups/skew_report.py` compares them against what training read. The

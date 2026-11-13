@@ -12,13 +12,15 @@ from concurrent import futures
 
 import grpc
 import pytest
-from grpc_health.v1 import health_pb2, health_pb2_grpc
+from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from serving.health import add_health, serving
 
+Server = tuple[grpc.Server, health.HealthServicer, int]
+
 
 @pytest.fixture
-def server() -> Iterator[tuple[grpc.Server, object, int]]:
+def server() -> Iterator[Server]:
     srv = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
     servicer = add_health(srv)
     port = srv.add_insecure_port("127.0.0.1:0")
@@ -31,16 +33,17 @@ def server() -> Iterator[tuple[grpc.Server, object, int]]:
 def check(port: int) -> int:
     with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
         stub = health_pb2_grpc.HealthStub(channel)
-        return stub.Check(health_pb2.HealthCheckRequest(service=""), timeout=3).status
+        # The generated stub is untyped; the status enum is an int underneath.
+        return int(stub.Check(health_pb2.HealthCheckRequest(service=""), timeout=3).status)
 
 
-def test_serving_once_started(server: tuple[grpc.Server, object, int]) -> None:
+def test_serving_once_started(server: Server) -> None:
     _, _, port = server
     assert check(port) == health_pb2.HealthCheckResponse.SERVING
 
 
 def test_not_serving_during_drain_while_port_still_answers(
-    server: tuple[grpc.Server, object, int],
+    server: Server,
 ) -> None:
     _, servicer, port = server
     servicer.enter_graceful_shutdown()  # what both sidecars' SIGTERM handler does first

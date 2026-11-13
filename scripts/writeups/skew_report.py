@@ -41,12 +41,14 @@ import argparse
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 
 from common.features import USER_FEATURES, USER_FLAGS
+from common.tracking import git_revision
 
 BEGIN = "<!-- skew-report:begin -->"
 END = "<!-- skew-report:end -->"
@@ -179,7 +181,12 @@ def compare(train: npt.NDArray[np.float64], served: npt.NDArray[np.float64]) -> 
 
 
 def render(
-    rows: list[Row], served: Served, train_found: int, train_requests: int, split: str
+    rows: list[Row],
+    served: Served,
+    train_found: int,
+    train_requests: int,
+    split: str,
+    source: Path,
 ) -> str:
     lines = [
         f"Served: {served.requests:,} requests parsed; {served.found:,} with a stored user "
@@ -214,6 +221,17 @@ def render(
         f"**Coverage** (`has_user_features` / `user_found`): train {train_rate:.1%}, "
         f"served {serve_rate:.1%}. Rows without a stored user are excluded above, "
         "so a coverage gap shows here and not as a shifted mean.",
+    ]
+
+    # Provenance, for the reason the evaluation cards carry `generated` and
+    # `git_sha`: a generated table that cannot say when it was produced, from
+    # which commit, or over which capture cannot be attributed afterwards. The
+    # prose AROUND this block has already gone stale once -- it claimed the job
+    # had never run while quoting the results of a run.
+    lines += [
+        "",
+        f"_Generated {datetime.now(UTC).isoformat(timespec='seconds')} "
+        f"from `{git_revision()['code_hash']}`, over `{source}`._",
     ]
     return "\n".join(lines)
 
@@ -273,7 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     train, train_requests = load_training(args.split)
     rows = compare(train, served.feats)
-    body = render(rows, served, len(train), train_requests, args.split)
+    body = render(rows, served, len(train), train_requests, args.split, args.served)
 
     args.out.write_text(splice(args.out.read_text(), body))
     print(body)
