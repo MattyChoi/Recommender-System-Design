@@ -163,10 +163,19 @@ const (
 )
 
 const (
+	// readinessService means "can serve a slate, and not draining" -- NOT "every
+	// backend is healthy". The pipeline degrades to popular.json with all three
+	// down, so routing on their health would pull every pod from the Service
+	// during a Triton outage and make a degraded dependency a total outage.
 	readinessService = "recsys.v1.Recommender"
 
-	// readinessPeriod is how often the backends are probed.
-	readinessPeriod = 2 * time.Second
+	// upstreamsService carries the all-three verdict. NOTHING ROUTES ON IT: it
+	// is for a dashboard, a canary or grpc-health-probe, and it is where a
+	// degradation alert belongs.
+	upstreamsService = "recsys.v1.Recommender.upstreams"
+
+	// upstreamsPeriod is how often the backends are probed.
+	upstreamsPeriod = 2 * time.Second
 )
 
 // warmConnections dials every backend before the first real request.
@@ -208,11 +217,11 @@ func warmConnections(ctx context.Context, probes []namedProbe, wait time.Duratio
 	}
 }
 
-// watchReadiness polls the backends and publishes the verdict on the standard
-// gRPC health service
-func watchReadiness(
+// watchUpstreams polls the backends and publishes the verdict under `service`.
+func watchUpstreams(
 	ctx context.Context,
 	server *health.Server,
+	service string,
 	ready func(context.Context) error,
 	period time.Duration,
 ) {
@@ -232,12 +241,12 @@ func watchReadiness(
 			if serving {
 				status = healthpb.HealthCheckResponse_SERVING
 			}
-			server.SetServingStatus(readinessService, status)
+			server.SetServingStatus(service, status)
 
 			if serving {
-				log.Printf("readiness SERVING")
+				log.Printf("upstreams SERVING")
 			} else {
-				log.Printf("readiness NOT_SERVING: %v", err)
+				log.Printf("upstreams NOT_SERVING: %v", err)
 			}
 		}
 
@@ -665,10 +674,11 @@ func run(o options) error {
 	healthServer := health.NewServer()
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus(readinessService, healthpb.HealthCheckResponse_NOT_SERVING)
+	healthServer.SetServingStatus(upstreamsService, healthpb.HealthCheckResponse_NOT_SERVING)
 
-	readinessCtx, stopReadiness := context.WithCancel(context.Background())
-	defer stopReadiness()
-	go watchReadiness(readinessCtx, healthServer, probe.Ready, readinessPeriod)
+	upstreamsCtx, stopUpstreams := context.WithCancel(context.Background())
+	defer stopUpstreams()
+	go watchUpstreams(upstreamsCtx, healthServer, upstreamsService, probe.Ready, upstreamsPeriod)
 
 	if o.enableReflection {
 		reflection.Register(grpcServer)
@@ -686,8 +696,9 @@ func run(o options) error {
 	log.Printf("  retrieval  %s", o.retrievalAPI)
 	log.Printf("  features   %s", o.featuresAPI)
 	log.Printf("  triton     %s/%s", o.tritonAPI, o.tritonModel)
-	log.Printf("  readiness  %q every %v; liveness is the overall service, which never flips",
-		readinessService, readinessPeriod)
+	log.Printf("  readiness  %q: serving and not draining, NOT upstream health", readinessService)
+	log.Printf("  upstreams  %q every %v; nothing routes on it",
+		upstreamsService, upstreamsPeriod)
 	if o.drainDelay > 0 {
 		log.Printf("  drain      fail readiness, serve %v, then stop accepting", o.drainDelay)
 	}
@@ -723,13 +734,15 @@ func run(o options) error {
 	}
 	warmConnections(context.Background(), probes, o.warmWait)
 
+	healthServer.SetServingStatus(readinessService, healthpb.HealthCheckResponse_SERVING)
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-stop
 
 		healthServer.SetServingStatus(readinessService, healthpb.HealthCheckResponse_NOT_SERVING)
-		stopReadiness()
+		stopUpstreams()
 
 		if o.drainDelay > 0 {
 			log.Printf("readiness NOT_SERVING; still serving for %v while endpoints propagate",

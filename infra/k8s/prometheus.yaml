@@ -1,0 +1,167 @@
+# Prometheus in-cluster, scraping pods by annotation.
+#
+# Hand-written rather than kube-prometheus-stack on purpose. That chart runs the
+# prometheus-operator and discovers targets through ServiceMonitor/PodMonitor
+# CRDs, ignoring the `prometheus.io/scrape` annotations already on the
+# orchestrator's pod template -- so it would mean an operator, a set of CRDs and
+# about eight images, plus replacing those annotations. This is one image and
+# one config for the one metric the HPA needs.
+#
+# In a real cluster this file does not exist: Prometheus is already there, and
+# what matters is the annotations on the workload and the adapter rule.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+---
+# Discovery is an API call, so Prometheus needs read access to the objects it
+# discovers from. RBAC is deny-by-default: without this the scrape config finds
+# nothing and says so only in Prometheus's own logs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    # Must match where this is applied. A ClusterRoleBinding is cluster-scoped,
+    # but the ServiceAccount it names is not.
+    namespace: default
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  labels:
+    app.kubernetes.io/name: prometheus
+data:
+  prometheus.yml: |
+    global:
+      # 15s rather than the 1m default: an HPA reacting to p99 needs more than
+      # a handful of samples in its window, and this cluster scrapes two pods.
+      scrape_interval: 15s
+
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+
+        relabel_configs:
+          # Opt in by annotation. Everything else discovered is dropped, so
+          # adding a workload to this Prometheus is an annotation on that
+          # workload rather than an edit here.
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+
+          # Rewrite the target port to the annotated one. Discovery offers the
+          # pod IP with its first declared container port, which for the
+          # orchestrator is 15051 (gRPC) and not 9102 (metrics).
+          - source_labels:
+              [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
+          # LOAD-BEARING for the HPA, not cosmetic. prometheus-adapter maps a
+          # series back to a Kubernetes object by its `namespace` and `pod`
+          # labels; without them the custom-metrics API can resolve nothing and
+          # the HPA reports <unknown> with no other explanation.
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        # prom/prometheus runs as nobody. fsGroup so the TSDB directory on the
+        # emptyDir below is writable by it.
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: tsdb
+          # Deliberately ephemeral: this exists to feed an HPA for the length of
+          # a demo, not to retain history. Losing it costs one scrape interval.
+          emptyDir:
+            sizeLimit: 2Gi
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.14.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            # Two hours is far more than an HPA window and keeps the emptyDir
+            # small enough to be uninteresting.
+            - --storage.tsdb.retention.time=2h
+          ports:
+            - name: http
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: tsdb
+              mountPath: /prometheus
+          # Prometheus's own endpoints. /-/ready answers once it has loaded its
+          # config and opened the TSDB; /-/healthy once the process is up.
+          livenessProbe:
+            httpGet: {path: /-/healthy, port: http}
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: {path: /-/ready, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "1", memory: "1Gi"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http

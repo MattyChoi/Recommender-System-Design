@@ -1,0 +1,66 @@
+# Scale on p99 LATENCY, not CPU.
+#
+# The reasoning the guide gives, and it is right: the queue builds long before
+# CPU saturates, so a CPU-triggered HPA scales out after users have already felt
+# it. Latency is the thing being promised, so latency is the thing to scale on.
+#
+# Requires prometheus-adapter to be serving custom.metrics.k8s.io. Without it
+# this object applies cleanly, reports <unknown>, and never scales -- see
+# prometheus-adapter.yaml.
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: recsys-api
+  labels:
+    app.kubernetes.io/name: recsys-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: recsys-api
+
+  # Floor of 2, not 1: one replica means a rollout or a node drain is an outage,
+  # and the readiness/drain work in main.go only buys anything if there is
+  # somewhere else for traffic to go.
+  minReplicas: 2
+  maxReplicas: 10
+
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: recsys_request_duration_p99_seconds
+        target:
+          # SECONDS, and Kubernetes quantities take no decimals, so 50ms is
+          # written "50m" (milli) and NOT "0.05". A target of "0.05" is parsed
+          # as 50 milli-seconds only by accident of rounding; write the suffix.
+          #
+          # 50ms against the service's 90ms end-to-end budget: scale out at
+          # ~55% of the promise, so there is room to absorb the new pods' warm-up
+          # before the budget is actually breached. Measured p99 on the full
+          # pipeline is 13.4ms at 300rps (docs/design.md), so this is roughly 4x
+          # headroom over normal and well clear of noise.
+          type: AverageValue
+          averageValue: "50m"
+
+  # Latency is noisier than CPU, so the default behaviour flaps.
+  behavior:
+    scaleUp:
+      # Short window: a latency breach is already user-visible, so waiting to be
+      # sure wastes the time that mattered.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      # Long window, deliberately asymmetric. Scaling in on a lull and then
+      # immediately back out costs a warm-up on every cycle, and the cost of
+      # holding a spare replica for five minutes is far lower than the cost of
+      # being short of one.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60

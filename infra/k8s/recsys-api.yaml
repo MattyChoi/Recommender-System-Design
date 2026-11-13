@@ -1,0 +1,202 @@
+# The orchestrator on Kubernetes: artifacts pulled at startup, gRPC probes that
+# distinguish liveness from readiness, and a drain that removes the pod from the
+# Service before it stops accepting.
+#
+# Apply with `kubectl apply -f infra/k8s/recsys-api.yaml`. No namespace is set,
+# so `-n <ns>` works and the default namespace is the default.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: recsys-artifacts
+  labels:
+    app.kubernetes.io/name: recsys-api
+data:
+  endpoint: "http://recsys-minio:9000"
+  bucket: "recsys"
+  prefix: "serving-artifacts"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-api
+  labels:
+    app.kubernetes.io/name: recsys-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recsys-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-api
+      annotations:
+        # Scraped by an in-cluster Prometheus, which is also what
+        # prometheus-adapter reads to serve the HPA's p99 metric.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
+    spec:
+      # Above -drain-delay plus the request budget, or the pod is killed
+      # mid-drain and the flip-then-wait below buys nothing.
+      terminationGracePeriodSeconds: 30
+
+      volumes:
+        - name: artifacts
+          emptyDir:
+            # The content and index vectors are the bulk; the JSON is bytes.
+            sizeLimit: 1Gi
+
+      initContainers:
+        # Pulls the version CURRENT names, not "the latest files". Publishing
+        # uploads a whole version prefix and only then flips the pointer, so
+        # reading the pointer first is what makes a pod that starts during a
+        # publish load one coherent version instead of a mixture of two.
+        - name: pull-artifacts
+          # Built from source and side-loaded: make minio-image-kind
+          image: recsys/minio:RELEASE.2025-09-07T16-13-09Z
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              mc alias set store "$ENDPOINT" "$ACCESS_KEY" "$SECRET_KEY" >/dev/null
+              version="$(mc cat "store/$BUCKET/$PREFIX/CURRENT")"
+              if [ -z "$version" ]; then
+                echo "CURRENT is empty at $BUCKET/$PREFIX; run 'make artifacts-push'" >&2
+                exit 1
+              fi
+              echo "pulling $version"
+              mc mirror --overwrite "store/$BUCKET/$PREFIX/$version" /artifacts
+              ls -l /artifacts
+          env:
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: endpoint}
+            - name: BUCKET
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: bucket}
+            - name: PREFIX
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: prefix}
+            # Never in this file. Created out of band:
+            #   kubectl create secret generic recsys-minio \
+            #     --from-literal=accesskey=... --from-literal=secretkey=...
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: accesskey}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: secretkey}
+          # `mc mirror` streams objects to disk, so memory stays small whatever
+          # the artifact size. An init container's request does not ADD to the
+          # pod's: the scheduler takes the larger of it and the app containers'.
+          resources:
+            requests: {cpu: "100m", memory: "64Mi"}
+            limits: {cpu: "1", memory: "256Mi"}
+          volumeMounts:
+            - name: artifacts
+              mountPath: /artifacts
+
+      containers:
+        - name: orchestrator
+          image: recsys/serving:dev
+          # kind has no registry; the image is side-loaded with
+          #   kind load docker-image recsys/serving:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - -port=15051
+            - -metrics=:9102
+            - -columns=/repo/serving/artifacts/model.columns.json
+            - -index-stem=/repo/serving/artifacts/items
+            - -content-stem=/repo/serving/artifacts/content
+            - -features=recsys-features:15053
+            - -retrieval=recsys-retrieval:15052
+            - -triton=recsys-triton:8001
+            - -redis=redis://recsys-redis:6379
+            - -kafka=recsys-kafka:29092
+            - -schema-registry=http://recsys-schema-registry:8081
+            - -drain-delay=5s
+          ports:
+            - name: grpc
+              containerPort: 15051
+            - name: metrics
+              containerPort: 9102
+          volumeMounts:
+            - name: artifacts
+              mountPath: /repo/serving/artifacts
+              readOnly: true
+
+          # Three probes, two meanings.
+          #
+          # startupProbe covers artifact loading, which happens before Serve, so
+          # until it finishes the port refuses connections. Liveness must not be
+          # the thing that waits for that, or a slow load looks like a hang.
+          startupProbe:
+            grpc:
+              port: 15051
+            periodSeconds: 2
+            failureThreshold: 30 # 60s to load and listen
+
+          # LIVENESS asks for the overall service "", which main.go marks SERVING
+          # once the listener is open and never flips. It deliberately does NOT
+          # track the upstreams: a dead Triton that restarted every pod would
+          # turn a degraded dependency into a total outage, when the pod can
+          # still serve the popularity fallback.
+          livenessProbe:
+            grpc:
+              port: 15051
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # READINESS asks for the named service, which means "serving and not
+          # draining" -- NOT upstream health. Its only two transitions are
+          # startup and the drain above, which is what a readiness probe is for.
+          # A pod degraded to the fallback slate stays in the endpoints.
+          readinessProbe:
+            grpc:
+              port: 15051
+              service: recsys.v1.Recommender
+            periodSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              # Go 1.25+ reads the cgroup CPU limit for GOMAXPROCS, and the
+              # startup log prints what it chose -- check it against this.
+              cpu: "2"
+              memory: "1Gi"
+
+          securityContext:
+            # distroless/static:nonroot is uid 65532. Named here too so the pod
+            # is still correct if the image's default user ever changes.
+            runAsNonRoot: true
+            runAsUser: 65532
+            # The binary is static and writes nothing; the one mount it needs is
+            # read-only above.
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-api
+  labels:
+    app.kubernetes.io/name: recsys-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recsys-api
+  ports:
+    - name: grpc
+      port: 15051
+      targetPort: grpc
+    - name: metrics
+      port: 9102
+      targetPort: metrics

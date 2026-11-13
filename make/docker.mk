@@ -5,12 +5,16 @@
 # than in a container entrypoint keeps the bucket names in one place and lets
 # `make up` be idempotent.
 
-.PHONY: up down clean image image-size image-run sidecar-image sidecars-up sidecars-down
+.PHONY: up down clean image image-size image-run sidecar-image sidecars-up sidecars-down \
+        minio-image minio-image-kind
 
 
 export HOST_IP := $(shell hostname -I 2>/dev/null | awk '{print $$1}')
 
+# MinIO is built from source (no more published images -- see
+# infra/docker/minio.Dockerfile), so `up` builds it the first time it is missing.
 up:  ## Start the local stack and create the MinIO buckets
+	@docker image inspect $(MINIO_IMAGE) >/dev/null 2>&1 || $(MAKE) minio-image
 	@test -n "$(HOST_IP)" || echo "  warning: HOST_IP is empty; Prometheus will fall back to host-gateway"
 	docker compose up -d --wait
 	docker exec recsys-minio sh -c 'mc alias set local http://localhost:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null && mc mb --ignore-existing local/mlflow local/recsys'
@@ -100,3 +104,21 @@ image-run:  ## Run the orchestrator image against the compose stack
 	      -kafka kafka:29092 \
 	      -schema-registry http://schema-registry:8081 \
 	      -warm-wait 60s
+
+# The server tag names the image; the mc tag rides along inside it. Bump both
+# here, and the image name in docker-compose.yml and infra/k8s/*.yaml with them.
+MINIO_TAG   ?= RELEASE.2025-09-07T16-13-09Z
+MC_TAG      ?= RELEASE.2025-04-16T18-13-26Z
+MINIO_IMAGE ?= recsys/minio:$(MINIO_TAG)
+KIND_CLUSTER ?= recsys
+
+# `- <` sends the Dockerfile with NO build context: it clones what it needs, so
+# there is nothing in the repo worth shipping to the daemon.
+minio-image:  ## Build MinIO + mc from source (~1 min first time)
+	docker build -t $(MINIO_IMAGE) \
+	  --build-arg MINIO_TAG=$(MINIO_TAG) --build-arg MC_TAG=$(MC_TAG) \
+	  - < infra/docker/minio.Dockerfile
+
+# kind nodes have no registry behind them, so the image is side-loaded.
+minio-image-kind: minio-image  ## Build MinIO and load it into the kind cluster
+	kind load docker-image $(MINIO_IMAGE) --name $(KIND_CLUSTER)
