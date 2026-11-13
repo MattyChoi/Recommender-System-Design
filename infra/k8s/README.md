@@ -50,11 +50,30 @@ nothing on the host. In a real cluster that file does not exist and only the
 ConfigMap's `endpoint` changes.
 
 ```bash
+make kind-all     # everything below, in order, then proves it serves real slates
+```
+
+`kind-all` first runs `kind-preflight`, which takes seconds. It checks the
+tools, `.env`, every dumped artifact, and the gold tables Feast materialises
+from, so a missing input fails before ten minutes of image loading rather than
+after. Every step is idempotent, so after a failure fix the cause and re-run
+`kind-all`; it resumes. The steps on their own:
+
+```bash
 make kind-up      # cluster, MinIO image, the secret from .env, every manifest
-make kind-load    # build the orchestrator image and side-load it
-make kind-push    # publish artifacts into the cluster's MinIO, then roll the pods
+make kind-load    # build orchestrator + sidecar images, side-load them and Triton
+make kind-push    # publish BOTH bundles into the cluster's MinIO, then roll the pods
+make kind-feast   # materialise Feast into the cluster's Redis (starts the compose MinIO)
+make kind-smoke   # 3 consecutive slates with no fallback and no degraded source
 make kind-status
 ```
+
+`kind-smoke` is stricter than readiness on purpose. A pod is Ready on the
+popularity fallback, and a slate is "not the fallback" even with the two-tower
+retriever down, because trending, co-visitation and content still fill it. It
+only passes when `degradedSources` is empty: `two_tower` means
+`recsys-retrieval` is down, `features` means `recsys-features`, and `ranker`
+means `recsys-triton`.
 
 `make/k8s.mk` holds these. Four things they do that are easy to get wrong by
 hand:
@@ -68,10 +87,11 @@ hand:
   the value. Written with `create --dry-run=client | apply`, the idempotent form
   — plain `create` fails on an existing secret, so re-running `kind-up` would
   break.
-- **Both images are side-loaded, not pulled.** kind nodes are containers with no
+- **Every image is side-loaded, not pulled.** kind nodes are containers with no
   registry behind them. MinIO goes in during `kind-up` because it changes once
-  per cluster; the orchestrator goes in during `kind-load`, which you re-run
-  after every rebuild.
+  per cluster; the orchestrator and sidecars go in during `kind-load`, which you
+  re-run after every rebuild. Triton (~20 GB) is loaded by `kind-load` too, but
+  only the first time is slow — `kind load` skips an image the node already has.
 - **`kind-push` rolls the pods.** The init container reads `CURRENT` once, at
   pod start, so publishing on its own changes nothing that is already running.
 
@@ -112,9 +132,9 @@ kubectl logs deploy/recsys-api -c pull-artifacts   # which version it pulled
 kubectl logs deploy/recsys-api                     # the startup banner
 ```
 
-Both Pods should reach `Running` and `READY 1/1`. **They go Ready with no
-sidecars and no Triton deployed** — readiness means "can serve a slate", and
-these answer from `popular.json`. That is the behaviour to expect, not a
+Both Pods should reach `Running` and `READY 1/1`. **They would go Ready even
+with no backends deployed** — readiness means "can serve a slate", and without
+backends they answer from `popular.json`. That is the behaviour to expect, not a
 misconfiguration; see the probe section below.
 
 To confirm the distinction holds in-cluster:
@@ -131,6 +151,54 @@ upstream health, why the pointer is read before the files, why 61.9 MB. This
 explains the Kubernetes mechanics those decisions are expressed in. Put a
 reason next to the field it justifies; put an explanation of a Kubernetes
 concept here.
+
+## The backends
+
+`features.yaml`, `retrieval.yaml`, `triton.yaml` and `redis.yaml` are what the
+orchestrator's `-features`, `-retrieval`, `-triton` and `-redis` flags already
+name. Each backend pulls its files the same way `recsys-api` does — an init
+container resolves `CURRENT` and mirrors that version — but from a **second
+bundle**, `backend-artifacts` (the ConfigMap's `backend_prefix`):
+
+```
+backend-artifacts/<version>/
+  retrieval/  tower.pt, index/{CURRENT,<v>/index.faiss}, gold/item_content/part-00000.parquet
+  features/   registry.db, item_map.json, category_map.json
+  triton/     ranker/{config.pbtxt, 1/model.onnx, 1/model.onnx.data}
+```
+
+Separate from `serving-artifacts` so the orchestrator's init container never
+downloads the ~700 MB it never reads; one directory per backend so each pulls
+only its slice. `make backend-bundle` stages it as symlinks under
+`build/backend-bundle/` and `kind-push` publishes it with the same versioned,
+pointer-flipped publisher.
+
+Things that differ from compose, on purpose:
+
+- **One process per pod.** Compose runs each sidecar as four processes on
+  strided ports; here it is `--processes=1` and `replicas: 2`. The in-image
+  supervisor never restarts a dead child; the kubelet does.
+- **Triton runs on CPU.** Handing a kind node the GPU needs the NVIDIA runtime
+  as Docker's default, a kind config mounting the devices and the NVIDIA device
+  plugin, and under WSL the GPU is `/dev/dxg`, which most of that tooling does
+  not expect. The published `config.pbtxt` is the real one with `KIND_GPU`
+  rewritten to `KIND_CPU`; `backend-bundle` refuses to publish if the rewrite
+  matched nothing.
+- **gRPC probes on the sidecars.** Both register `grpc.health.v1`
+  (`serving/health.py`), which goes NOT_SERVING the moment a drain starts.
+
+**Features need `make kind-feast`.** The gateway goes Ready with Redis empty and
+answers every row `found=false`, zero-filled — so a working slate does not mean
+real features. Materialisation runs on the host, through a forward to the
+cluster's Redis, because it reads the gold feature tables from the **compose**
+stack's object store, which the cluster deliberately cannot reach. It writes
+against a copy of the registry (`build/kind-registry.db`), leaving the host's
+own untouched. Feast's Redis keys expire after seven days
+(`key_ttl_seconds`), so re-run it after a week.
+
+**The first requests after a roll fall back.** Each of the orchestrator's
+connections pays setup on its first retrieval call, which can blow the
+retrieval budget; within a handful of requests every response is a real slate.
 
 ---
 
@@ -368,10 +436,10 @@ refusals.
 
 ## Not here yet
 
-- **The upstreams.** `recsys-features`, `recsys-retrieval`, `recsys-triton`,
-  `recsys-redis`, Kafka and the Schema Registry have no manifests. The
-  orchestrator dials them lazily and readiness does not track them, so a Pod
-  without any of them still joins the Service and answers from `popular.json`.
+- **Kafka and the Schema Registry** have no manifests, so impression logging is
+  off in-cluster. The orchestrator dials them lazily and readiness does not
+  track them.
+- **Triton on the GPU** — see "The backends" for what it would take.
 - **prometheus-adapter.** `prometheus.yaml` now scrapes the orchestrator, so the
   histogram is in the cluster — but the HPA reads the custom-metrics API, not
   Prometheus. The adapter is what serves that API, and its rule is what turns

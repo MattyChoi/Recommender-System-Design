@@ -15,6 +15,10 @@ data:
   endpoint: "http://recsys-minio:9000"
   bucket: "recsys"
   prefix: "serving-artifacts"
+  # The backends' bundle: retrieval's index + tower + item table, Feast's
+  # registry, Triton's model repository. Its own prefix and its own CURRENT, so
+  # the orchestrator's init container never downloads the ~700MB it never reads.
+  backend_prefix: "backend-artifacts"
 ---
 apiVersion: apps/v1
 kind: Deployment
