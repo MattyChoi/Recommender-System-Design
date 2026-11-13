@@ -190,7 +190,7 @@
       "id": 4,
       "type": "stat",
       "title": "Server error rate",
-      "description": "RecsysErrorRate pages past 1%. InvalidArgument is excluded here and tracked on its own, because a malformed-request spike is a caller bug, not an outage.",
+      "description": "RecsysErrorRate pages past 1%. InvalidArgument is excluded here and tracked on its own, because a malformed-request spike is a caller bug, not an outage. The numerator is `or vector(0)`-ed: recsys_requests_total is labelled by code, so with no errors the selector matches NO series and sum() over nothing is empty, not zero -- which Grafana renders as 'No data', indistinguishable from the metric having disappeared.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -244,7 +244,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(recsys_requests_total{code!~\"OK|InvalidArgument\"}[5m]))\n  / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)",
+          "expr": "(sum(rate(recsys_requests_total{code!~\"OK|InvalidArgument\"}[5m])) or vector(0))\n  / clamp_min(sum(rate(recsys_requests_total[5m])), 0.001)",
           "legendFormat": "Server error rate",
           "refId": "A",
           "editorMode": "code",
@@ -256,7 +256,7 @@
       "id": 5,
       "type": "stat",
       "title": "Feature store age",
-      "description": "Seconds behind the stalest materialised Feast view, from the gateway's readiness probe. 0 means no reading yet, NOT fresh. §16.1 wants an alert past 10 minutes.",
+      "description": "Seconds behind the stalest materialised Feast view, from the gateway's readiness probe. 0 means no reading yet, NOT fresh. §16.1 wants an alert past 10 minutes. ⚠️ ON MIND THIS READS ~7 YEARS AND IS CORRECT: the corpus's event timestamps are from 2019 and this is measured against wall-clock now. Same event-time-vs-wall-clock gap as the retention.ms=-1 decision in make/kafka.mk. The §16.1 alert therefore CANNOT be enabled on this corpus without either measuring against the corpus's own max timestamp or pinning a reference clock -- an unresolved decision, not a panel bug.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -718,7 +718,7 @@
       "id": 10,
       "type": "bargauge",
       "title": "Median candidates surviving each stage",
-      "description": "A funnel is magnitude across ordered stages, so bars beat lines. unblocked below 1 for 10m is RecsysSeenFilterSaturated: the seen-list is blocking everything. incomplete_rows above 0 means retrieval fell to rung 2.",
+      "description": "A funnel is magnitude across ordered stages, so bars beat lines. ONE QUERY PER STAGE, in pipeline order, which is the whole reason for four targets: a single `by (stage)` query returns series sorted ALPHABETICALLY, so the bars read retrieved/scored/served/unblocked, and a funnel whose bars are out of order is not conveying a funnel. unblocked below 1 for 10m is RecsysSeenFilterSaturated: the seen-list is blocking everything. incomplete_rows is not a funnel stage and lives on the degradation panel.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -772,9 +772,42 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, stage) (rate(recsys_stage_candidates_bucket[10m])))",
-          "legendFormat": "{{stage}}",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(recsys_stage_candidates_bucket{stage=\"retrieved\"}[10m])))",
+          "legendFormat": "retrieved",
           "refId": "A",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(recsys_stage_candidates_bucket{stage=\"unblocked\"}[10m])))",
+          "legendFormat": "unblocked",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(recsys_stage_candidates_bucket{stage=\"scored\"}[10m])))",
+          "legendFormat": "scored",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(recsys_stage_candidates_bucket{stage=\"served\"}[10m])))",
+          "legendFormat": "served",
+          "refId": "D",
           "editorMode": "code",
           "range": true
         }
