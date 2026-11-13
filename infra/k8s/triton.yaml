@@ -1,0 +1,137 @@
+# Triton serving the ONNX ranker -- on CPU here.
+#
+# CPU, not GPU, deliberately: a kind node is a container, and handing it the
+# GPU needs the NVIDIA runtime as Docker's DEFAULT runtime, a kind config that
+# mounts the devices in, and the NVIDIA device plugin in the cluster. Under
+# WSL the GPU is /dev/dxg rather than /dev/nvidia*, which most of that tooling
+# does not expect. The ranker takes 11 features and is ~860KB, so CPU is fine
+# for a dev cluster; compose keeps the GPU.
+#
+# The model config is NOT a second copy: `make kind-push` publishes
+# serving/triton/ranker/config.pbtxt with KIND_GPU rewritten to KIND_CPU, and
+# fails if that rewrite matched nothing. One source of truth, one difference.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-triton
+  labels:
+    app.kubernetes.io/name: recsys-triton
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recsys-triton
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-triton
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+    spec:
+      volumes:
+        - name: models
+          emptyDir:
+            sizeLimit: 256Mi
+        # Docker's 64MB /dev/shm is below what Triton's docs call for; compose
+        # sets shm_size: 1gb. Memory-backed and counted against the pod's limit.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+      initContainers:
+        - name: pull-model
+          # Built from source and side-loaded: make minio-image-kind
+          image: recsys/minio:RELEASE.2025-09-07T16-13-09Z
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              mc alias set store "$ENDPOINT" "$ACCESS_KEY" "$SECRET_KEY" >/dev/null
+              version="$(mc cat "store/$BUCKET/$PREFIX/CURRENT")"
+              test -n "$version" || { echo "no backend bundle; run 'make kind-push'" >&2; exit 1; }
+              echo "pulling $version/triton"
+              # The MODEL REPOSITORY: /models/ranker/{config.pbtxt,1/model.onnx...}
+              mc mirror --overwrite "store/$BUCKET/$PREFIX/$version/triton" /models
+              ls -lR /models
+          env:
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: endpoint}
+            - name: BUCKET
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: bucket}
+            - name: PREFIX
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: backend_prefix}
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: accesskey}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: secretkey}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits: {cpu: "500m", memory: "128Mi"}
+      containers:
+        - name: triton
+          image: nvcr.io/nvidia/tritonserver:25.12-py3
+          # ~20GB. Side-loaded by make kind-load; IfNotPresent so a missing
+          # image is a slow pull from nvcr.io rather than a failure.
+          imagePullPolicy: IfNotPresent
+          args: ["tritonserver", "--model-repository=/models"]
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: grpc
+              containerPort: 8001
+            - name: metrics
+              containerPort: 8002
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+          # /v2/health/ready is 200 only once the model repository has LOADED,
+          # so readiness means "the ranker is servable", not "the process is up".
+          startupProbe:
+            httpGet: {path: /v2/health/live, port: http}
+            periodSeconds: 5
+            failureThreshold: 36 # 180s
+          readinessProbe:
+            httpGet: {path: /v2/health/ready, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /v2/health/live, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: "500m", memory: "1Gi"}
+            limits: {cpu: "4", memory: "4Gi"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-triton
+  labels:
+    app.kubernetes.io/name: recsys-triton
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recsys-triton
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+    - name: grpc
+      port: 8001
+      targetPort: grpc
+    - name: metrics
+      port: 8002
+      targetPort: metrics

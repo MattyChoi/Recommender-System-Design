@@ -125,6 +125,8 @@ services:
     volumes: 
       - "./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
       - "./serving/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"
+    extra_hosts:
+      - "recsys-host:${HOST_IP:-host-gateway}"
 
   grafana:
     image: grafana/grafana:13.2.0        # Grafana 13.2.0, released 2026-08-18

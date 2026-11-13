@@ -17,6 +17,7 @@ import grpc
 import torch
 
 from common.pb import retrieval_pb2_grpc
+from serving.health import add_health, serving
 from serving.processes import EXCLUSIVE_PORT
 from serving.retrieval.cache import UserEmbeddingCache, connect
 from serving.retrieval.index import load_index
@@ -50,6 +51,7 @@ def serve(args: argparse.Namespace) -> None:
     retrieval_pb2_grpc.add_RetrievalServicer_to_server(
         RetrievalServicer(loaded, embeddings_cache), server
     )
+    health = add_health(server)
     server.add_insecure_port(f"[::]:{args.port}")
 
     print(
@@ -60,10 +62,13 @@ def serve(args: argparse.Namespace) -> None:
 
     def drain(signum: int, frame: FrameType | None) -> None:
         print("retrieval sidecar draining")
+        # NOT_SERVING first, so readiness drops before the grace period starts.
+        health.enter_graceful_shutdown()
         server.stop(GRACE_SECONDS)
 
     signal.signal(signal.SIGTERM, drain)
     signal.signal(signal.SIGINT, drain)
 
     server.start()
+    serving(health)
     server.wait_for_termination()

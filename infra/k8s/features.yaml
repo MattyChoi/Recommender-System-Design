@@ -1,0 +1,125 @@
+# The Feast gateway: online feature reads from Redis db 0.
+#
+# Starts and serves WITHOUT materialised data -- every row comes back
+# found=false and zero-filled, and Health still answers -- so a pod that is
+# Ready here does not mean features are real. `make kind-feast` is what fills
+# Redis; until then the ranker scores on zeros.
+#
+# One process per pod, for the reason given in retrieval.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-features
+  labels:
+    app.kubernetes.io/name: recsys-features
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recsys-features
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-features
+    spec:
+      terminationGracePeriodSeconds: 20
+      volumes:
+        - name: artifacts
+          emptyDir:
+            sizeLimit: 256Mi # item map, category map, registry: all small
+      initContainers:
+        - name: pull-artifacts
+          # Built from source and side-loaded: make minio-image-kind
+          image: recsys/minio:RELEASE.2025-09-07T16-13-09Z
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              mc alias set store "$ENDPOINT" "$ACCESS_KEY" "$SECRET_KEY" >/dev/null
+              version="$(mc cat "store/$BUCKET/$PREFIX/CURRENT")"
+              test -n "$version" || { echo "no backend bundle; run 'make kind-push'" >&2; exit 1; }
+              echo "pulling $version/features"
+              mc mirror --overwrite "store/$BUCKET/$PREFIX/$version/features" /artifacts
+              ls -l /artifacts
+          env:
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: endpoint}
+            - name: BUCKET
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: bucket}
+            - name: PREFIX
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: backend_prefix}
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: accesskey}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: secretkey}
+          volumeMounts:
+            - name: artifacts
+              mountPath: /artifacts
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits: {cpu: "500m", memory: "128Mi"}
+      containers:
+        - name: features
+          image: recsys/sidecars:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "serving.features", "--processes=1", "--port=15053"]
+          env:
+            # feature_store.yaml substitutes both. REDIS_URL is bare host:port.
+            - name: REDIS_URL
+              value: recsys-redis:6379
+            # Absolute, into the pulled bundle. Feast resolves a RELATIVE path
+            # against the feature repo, which would find the stale copy baked
+            # into the image instead.
+            - name: FEAST_REGISTRY
+              value: /repo/serving/artifacts/registry.db
+          ports:
+            - name: grpc
+              containerPort: 15053
+          volumeMounts:
+            # store.py reads serving/artifacts/{item,category}_map.json relative
+            # to WORKDIR /repo, with no override -- so the bundle goes THERE.
+            - name: artifacts
+              mountPath: /repo/serving/artifacts
+              readOnly: true
+          startupProbe:
+            grpc: {port: 15053}
+            periodSeconds: 5
+            failureThreshold: 36 # 180s: Feast import plus warm-up reads
+          readinessProbe:
+            grpc: {port: 15053}
+            periodSeconds: 5
+          livenessProbe:
+            grpc: {port: 15053}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: "250m", memory: "512Mi"}
+            limits: {cpu: "2", memory: "2Gi"}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-features
+  labels:
+    app.kubernetes.io/name: recsys-features
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recsys-features
+  ports:
+    - name: grpc
+      port: 15053
+      targetPort: grpc

@@ -18,6 +18,7 @@ from common.pb import features_pb2_grpc
 from serving.features.cache import ItemFeatureCache
 from serving.features.service import FeaturesServicer
 from serving.features.store import Store
+from serving.health import add_health, serving
 from serving.processes import EXCLUSIVE_PORT
 
 GRACE_SECONDS = 10.0
@@ -36,6 +37,7 @@ def serve(args: argparse.Namespace) -> None:
         futures.ThreadPoolExecutor(max_workers=args.workers), options=EXCLUSIVE_PORT
     )
     features_pb2_grpc.add_FeaturesServicer_to_server(FeaturesServicer(store), server)
+    health = add_health(server)
     server.add_insecure_port(f"[::]:{args.port}")
 
     print(
@@ -52,10 +54,13 @@ def serve(args: argparse.Namespace) -> None:
 
     def drain(signum: int, frame: FrameType | None) -> None:
         print("features gateway draining")
+        # NOT_SERVING first, so readiness drops before the grace period starts.
+        health.enter_graceful_shutdown()
         server.stop(GRACE_SECONDS)
 
     signal.signal(signal.SIGTERM, drain)
     signal.signal(signal.SIGINT, drain)
 
     server.start()
+    serving(health)
     server.wait_for_termination()

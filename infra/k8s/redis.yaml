@@ -1,0 +1,80 @@
+# Redis in-cluster: three tenants on one instance, as under compose.
+#   db 0  Feast's online store -- read by recsys-features, written ONLY by
+#         `make kind-feast` (materialisation from the host, see the README)
+#   db 1  the orchestrator's seen-lists (-redis=redis://recsys-redis:6379)
+#   db 2  retrieval's user-embedding cache, written by recsys-retrieval
+#
+# A PVC with appendonly, because the Feast rows are the one thing here that is
+# NOT rebuilt by a pod restart: losing them means re-running materialisation.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: recsys-redis-data
+  labels:
+    app.kubernetes.io/name: recsys-redis
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-redis
+  labels:
+    app.kubernetes.io/name: recsys-redis
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: an RWO volume cannot be mounted by the new pod
+  # while the old one still holds it, so a rolling update would deadlock.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recsys-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-redis
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: recsys-redis-data
+      containers:
+        - name: redis
+          image: redis:7.4.11-alpine # same tag as docker-compose.yml
+          args: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 10
+          resources:
+            requests: {cpu: "100m", memory: "128Mi"}
+            limits: {cpu: "1", memory: "1Gi"}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-redis
+  labels:
+    app.kubernetes.io/name: recsys-redis
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recsys-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
