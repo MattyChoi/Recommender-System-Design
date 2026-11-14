@@ -1,5 +1,6 @@
-# Serving: the ONNX export Triton loads, the orchestrator, and the two things
-# that have to work from a clean clone.
+# Serving: the ONNX export Triton loads, the orchestrator, and the three things
+# that run against it -- bench, demo and the ranked smoke test. All three need a
+# stack that is already up; none of them starts one.
 
 .PHONY: serve serve-all features-serve retrieval-serve server-build bench demo smoke-ranked
 
@@ -81,7 +82,26 @@ BENCH_ARGS ?=
 bench:  ## Sweep the orchestrator to saturation with ghz
 	uv run python -m scripts.writeups.bench_serving --target $(BENCH_TARGET) $(BENCH_ARGS)
 
-# Runs against the LOCAL gold layer on purpose.
+DEMO_USER ?= U13740
+DEMO_ARGS ?=
+
+# RECSYS_STORAGE__BACKEND=local on purpose: the gold layer is read from disk, so
+# this needs no MinIO. It does need the ONLINE stack -- Redis behind the feature
+# gateway, Triton behind the ranker -- which is what the container guard is for.
+# "Needs no container" was never true of this target; it is true of the test
+# fixtures, which build their own artifacts and expect every backend to be absent.
+#
+# Guards rather than prerequisites, deliberately. `artifacts` re-dumps all seven
+# outputs including the ONNX export, and `data` would reach for the gated
+# download -- so a demo that depended on them would rebuild the world, or fail
+# deep inside a target nobody asked for. Each guard names the one command.
 demo: export RECSYS_STORAGE__BACKEND = local
-demo:  ## End-to-end demo; must work from a clean clone, with nothing running
-	@echo "TODO: demo"; exit 1
+demo: server-build  ## One request through the full path, printed (make up && make serve-all first)
+	@test -f "$(ITEM_MAP)"       || { echo 'run: make artifacts'; exit 1; }
+	@test -f "$(CATALOGUE)"      || { echo 'run: make artifacts'; exit 1; }
+	@test -f "$(POPULAR)"        || { echo 'run: make artifacts'; exit 1; }
+	@test -f "$(RANKER_COLUMNS)" || { echo 'run: make onnx';      exit 1; }
+	@docker inspect -f '{{.State.Running}}' recsys-triton 2>/dev/null | grep -q true \
+	  || { echo '  recsys-triton is not running -- run: make up'; exit 1; }
+	uv run python -m scripts.demo \
+	    --target $(BENCH_TARGET) --user $(DEMO_USER) $(DEMO_ARGS)

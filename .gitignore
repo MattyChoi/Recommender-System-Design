@@ -53,6 +53,7 @@ notebooks/*
 scripts/*
 !scripts/writeups/
 !scripts/__init__.py
+!scripts/demo.py
 /tmp
 
 # defer tracking for now
