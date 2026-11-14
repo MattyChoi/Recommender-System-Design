@@ -53,9 +53,7 @@ jobs:
         # Redundant with the fixture, which pins it too but writing for visibility
         env:
           RECSYS_STORAGE__BACKEND: local
-        # The floor has to be measured before it can be pinned
-        # TODO(coverage): pin the floor, i.e. append --cov-fail-under=<floor>.
-        run: uv run pytest --cov --cov-report=term-missing
+        run: make test-cov
 
       - name: Pre-commit hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
@@ -168,14 +166,24 @@ jobs:
           # push rather than a second compile. No cache-to: smoke owns writing it.
           cache-from: type=gha
 
-      # NOT the sidecar image, and the reason is measured rather than cautious.
-      # It is 4.68GB -- torch 750MB, pyspark 483MB, ray 233MB, transformers
-      # 114MB, none of which serving/features or serving/retrieval import --
-      # against a hosted runner with roughly 14GB of free disk shared between
-      # the wheel downloads, the layers and the buildkit cache.
+      # NOT the sidecar image, and the reason is the CACHE, not the disk.
       #
-      # Unblocking it is the dependency split, not a CI change: [project]
-      # dependencies is currently the TRAINING set and serving inherits all of
-      # it. Moving the training-only packages into their own extras takes the
-      # image to roughly 2GB, at which point this job can push it too. Until
-      # then the sidecar image is built on BigBox.
+      # Disk is surmountable: a free-disk-space step reclaims tens of GB on a
+      # hosted runner, and `push` without `load` streams layers to the registry
+      # rather than materialising a tarball. The binding limit is the Actions
+      # cache: 10GB per REPOSITORY. `cache-to: type=gha,mode=max` on a 4.68GB
+      # image blows past it, and eviction is LRU across the whole repo -- so the
+      # sidecar's cache would evict the serving image's above, making the fast
+      # build slow without reliably making the slow build fast.
+      #
+      # No cache means a cold ~4.7GB wheel install on every push to main, for an
+      # image whose inputs (pyproject.toml, uv.lock, sidecars.Dockerfile, the
+      # Python packages) change far more rarely than the Go orchestrator does.
+      # Republishing a byte-identical image for ten minutes a commit is the
+      # waste, independent of whether it fits.
+      #
+      # If this is picked up: gate it on those paths (dorny/paths-filter, or a
+      # second workflow with a `paths:` filter) so it builds only when something
+      # that affects it changed. The dependency split -- [project] dependencies
+      # is the TRAINING set and serving inherits all of it -- would take the
+      # image to roughly 2GB and make the question easier either way.

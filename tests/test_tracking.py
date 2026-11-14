@@ -38,12 +38,38 @@ def _settings(gold: Path) -> Settings:
     return local
 
 
+def _repository(root: Path) -> None:
+    """A one-commit repository that does not depend on the machine's git setup.
+
+    The identity is set here because CI runners (and act's containers) have no
+    user.name/user.email, and `git commit` exits 128 without one. Signing is
+    forced off for the same reason in the other direction: a developer with
+    commit.gpgsign=true would otherwise need their key to run the tests.
+    """
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=recsys tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+        cwd=root,
+        check=True,
+    )
+
+
 class TestTheGitRevision:
     def test_a_clean_checkout_reports_clean(self, tmp_path: Path) -> None:
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp_path, check=True
-        )
+        _repository(tmp_path)
 
         got = git_revision(tmp_path)
 
@@ -53,10 +79,7 @@ class TestTheGitRevision:
     def test_an_edited_tree_reports_dirty(self, tmp_path: Path) -> None:
         """The whole reason the flag exists: the SHA below is unchanged and no
         longer describes what would run."""
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp_path, check=True
-        )
+        _repository(tmp_path)
         (tmp_path / "changed.py").write_text("x = 1\n")
 
         assert git_revision(tmp_path)["git_dirty"] == "true"
@@ -73,13 +96,8 @@ class TestTheCodeHash:
     """Written after two runs scoring 0.1040 and 0.1172 shared a name, a commit,
     a dirty flag and a checkpoint path -- the second overwrote the first."""
 
-    @staticmethod
-    def _repository(root: Path) -> None:
-        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "x"], cwd=root, check=True)
-
     def test_a_clean_tree_names_its_commit(self, tmp_path: Path) -> None:
-        self._repository(tmp_path)
+        _repository(tmp_path)
 
         got = git_revision(tmp_path)
 
@@ -89,7 +107,7 @@ class TestTheCodeHash:
         """**The bug, as a test.** Both states below share a SHA and a dirty
         flag, so a name built from either would collide. Only a digest of the
         working tree separates them."""
-        self._repository(tmp_path)
+        _repository(tmp_path)
         edited = tmp_path / "tracked.py"
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
@@ -105,7 +123,7 @@ class TestTheCodeHash:
     def test_an_untracked_file_counts(self, tmp_path: Path) -> None:
         """The edit that caused the collision was in a file git had never seen,
         so `git diff HEAD` alone would not have noticed it."""
-        self._repository(tmp_path)
+        _repository(tmp_path)
         before = git_revision(tmp_path)
 
         (tmp_path / "torchrec_block.py").write_text("x = 1\n")
@@ -116,7 +134,7 @@ class TestTheCodeHash:
     def test_editing_an_untracked_file_counts_too(self, tmp_path: Path) -> None:
         """The control. Hashing only the FILE NAMES would pass the test above
         and still miss every edit to a new module."""
-        self._repository(tmp_path)
+        _repository(tmp_path)
         new = tmp_path / "torchrec_block.py"
 
         new.write_text("init_fn = None\n")
@@ -128,7 +146,7 @@ class TestTheCodeHash:
     def test_an_unchanged_dirty_tree_is_stable(self, tmp_path: Path) -> None:
         """A digest that moved on its own would make every rerun a new run and
         turn the overwrite bug into an infinite pile of checkpoints."""
-        self._repository(tmp_path)
+        _repository(tmp_path)
         (tmp_path / "changed.py").write_text("x = 1\n")
 
         assert git_revision(tmp_path)["code_hash"] == git_revision(tmp_path)["code_hash"]

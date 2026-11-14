@@ -23,11 +23,12 @@ from pathlib import Path
 
 import grpc
 import pytest
-from grpc_health.v1 import health_pb2, health_pb2_grpc
+from grpc_health.v1 import health_pb2
 
 from common.pb import recsys_pb2 as pb
 from common.pb import recsys_pb2_grpc as pb_grpc
 from models.ranking.dataset import FEATURES
+from tests._health import check
 
 # Defaulted to "" rather than None so the image name is a str for mypy: the
 # skipif below guarantees it is non-empty by the time anything uses it, but a
@@ -237,13 +238,6 @@ def test_readiness_does_not_route_on_upstream_health(channel: grpc.Channel) -> N
     outage. This container is the proof that the fallback works, so it is the
     right place to assert the probe does not throw it away.
     """
-    health = health_pb2_grpc.HealthStub(channel)
-
-    liveness = health.Check(health_pb2.HealthCheckRequest(service=""), timeout=5)
-    assert liveness.status == health_pb2.HealthCheckResponse.SERVING
-
-    readiness = health.Check(health_pb2.HealthCheckRequest(service=READINESS_SERVICE), timeout=5)
-    assert readiness.status == health_pb2.HealthCheckResponse.SERVING
-
-    upstreams = health.Check(health_pb2.HealthCheckRequest(service=UPSTREAMS_SERVICE), timeout=5)
-    assert upstreams.status == health_pb2.HealthCheckResponse.NOT_SERVING
+    assert check(channel) == health_pb2.HealthCheckResponse.SERVING
+    assert check(channel, READINESS_SERVICE) == health_pb2.HealthCheckResponse.SERVING
+    assert check(channel, UPSTREAMS_SERVICE) == health_pb2.HealthCheckResponse.NOT_SERVING
