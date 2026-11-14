@@ -198,7 +198,9 @@ so **MinIO must be running** — `make up` starts it and creates the bucket.
 Two clients reach the same bucket by different routes, which is why the config carries a scheme:
 Spark writes through Hadoop's S3A client (`s3a://`, magic committer), Feast reads through pyarrow
 (`s3://`, `s3_endpoint_override`). `RECSYS_STORAGE__BACKEND=local` puts everything back on disk —
-which is what `make demo` and the test fixtures do, so neither needs a container.
+which is what the test fixtures do, so they need no container at all. `make demo` sets it too, so it
+reads gold from disk rather than MinIO, but it still needs the **online** stack: Redis behind the
+feature gateway and Triton behind the ranker.
 
 Feast resolves these paths **at `feast apply` time** and bakes them into its registry, so running
 `make feast` under a different backend than the one you built with produces a registry pointing at

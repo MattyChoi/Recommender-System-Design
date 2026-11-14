@@ -19,7 +19,8 @@ from pyspark.sql import functions as f
 from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
-from evaluation.offline.report import default_cohorts, report_card
+from evaluation.offline import slates
+from evaluation.offline.report import Card, card_with_slates, default_cohorts
 from models.retrieval.baselines.als import score_als, score_als_item
 from models.retrieval.baselines.content import score_content
 from models.retrieval.baselines.covisit import score_covisit
@@ -150,8 +151,8 @@ def evaluate(
     seed: int,
     half_life: float = 3.0,
     max_gap_seconds: float = 3600.0,
-) -> dict[str, Any]:
-    """Build one report card end to end."""
+) -> Card:
+    """Build one report card end to end, with the rows behind it."""
     examples = read_gold(spark, settings, f"training_examples/{split}")
     train = read_gold(spark, settings, "training_examples/train")
 
@@ -190,7 +191,7 @@ def evaluate(
     # The FULL item map, not the items dev happened to show.
     catalogue_size = spark.read.parquet(str(settings.paths.bronze / "item_map")).count()
 
-    return report_card(
+    return card_with_slates(
         model_name=model,
         scores=rows["score"].to_numpy(),
         labels=rows["clicked"].astype(int).to_numpy(),
@@ -208,13 +209,24 @@ def evaluate(
     )
 
 
-def write_card(card: dict[str, Any], destination: Path) -> dict[str, Any]:
-    """Persist one card and echo its headline. Returns the overall cohort."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(card, indent=2) + "\n")
+def write_card(card: Card, destination: Path) -> dict[str, Any]:
+    """Persist one card and the per-slate rows behind it, and echo the headline.
 
-    overall: dict[str, Any] = card["cohorts"]["overall"]
+    The rows go first. A card is what ``PRODUCTION.json`` points at and what the
+    gate reads its GAUC from, so the invariant worth holding is that a card is
+    never newer than the rows beside it -- otherwise a half-finished rerun
+    leaves the gate pairing this run's numbers under the last run's provenance.
+    Rows with no card is the harmless direction.
+
+    Returns the overall cohort.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    rows = slates.save(destination.stem, card.slates, destination.parent / slates.SLATES.name)
+    destination.write_text(json.dumps(card.report, indent=2) + "\n")
+
+    overall: dict[str, Any] = card.report["cohorts"]["overall"]
     print(f"wrote {destination}")
+    print(f"  per-slate rows {rows}")
     print(
         f"  overall: GAUC {overall['gauc']} · NDCG@10 {overall['ndcg@10']} "
         f"· {overall['impressions']:,} impressions, "

@@ -24,6 +24,8 @@ from evaluation.offline.gate import (
     load_pointer,
     render,
 )
+from evaluation.offline.slates import SlateRows
+from evaluation.offline.slates import save as save_slates
 from evaluation.offline.stats import PairedResult
 
 TOLERANCE = 0.005
@@ -49,6 +51,23 @@ def card(path: Path, gauc: dict[str, float]) -> Path:
     body = {"cohorts": {name: {"gauc": value} for name, value in gauc.items()}}
     path.write_text(json.dumps(body))
     return path
+
+
+def rows(card_path: Path, auc: dict[str, list[float]], users: list[str]) -> Path:
+    """Per-slate rows beside a card, one slate per user.
+
+    One slate each on purpose: it makes the per-user mean equal to the slate's
+    own AUC, so a test states the per-user number it wants rather than a set of
+    slates that happens to average to it.
+    """
+    return save_slates(
+        card_path.stem,
+        {
+            cohort: SlateRows(auc=values, users=users, weight=[1.0] * len(values))
+            for cohort, values in auc.items()
+        },
+        card_path.parent / "slates",
+    )
 
 
 def test_a_drop_past_the_floor_refuses() -> None:
@@ -120,11 +139,81 @@ def test_a_cohort_the_candidate_stopped_emitting_refuses(tmp_path: Path) -> None
 
 
 def test_gauc_reports_its_pairing_as_unavailable_not_as_passed() -> None:
-    """The cards hold one scalar per cohort, so there is no paired test to run.
-    It must read as UNAVAILABLE: a blank would be taken for a clean result."""
+    """A card with no per-slate rows beside it has no paired test to run. It
+    must read as UNAVAILABLE: a blank would be taken for a clean result."""
     got = check("gauc[overall]", 0.60, 0.60, TOLERANCE, None)
     assert got.paired is None
     assert "paired UNAVAILABLE" in render(Verdict((got,)))
+
+
+def test_gauc_pairs_from_the_rows_beside_the_card(tmp_path: Path) -> None:
+    """**The case the floor alone cannot catch, now for GAUC.**
+
+    0.002 is well inside the 0.005 floor, so the floor promotes it -- which is
+    what this gate did for GAUC for as long as the cards held nothing but a
+    scalar. Every user drops by that same 0.002, so the paired interval cannot
+    straddle zero, and the drop is real rather than a wobble.
+    """
+    users = [f"U{index}" for index in range(200)]
+    baseline = card(tmp_path / "base.json", dict.fromkeys(COHORTS, 0.600))
+    candidate = card(tmp_path / "cand.json", dict.fromkeys(COHORTS, 0.598))
+    rows(baseline, {"overall": [0.600] * len(users)}, users)
+    rows(candidate, {"overall": [0.598] * len(users)}, users)
+
+    got = {item.metric: item for item in gauc_checks(candidate, baseline, TOLERANCE)}
+    assert not got["gauc[overall]"].allowed
+    assert "excludes zero" in got["gauc[overall]"].reason
+
+    # Rows were written for one cohort only, and the other four keep the old
+    # behaviour rather than refusing for want of them.
+    assert got["gauc[cold_item]"].allowed
+    assert got["gauc[cold_item]"].paired is None
+
+
+def test_gauc_falls_back_to_the_floor_when_no_rows_were_written(tmp_path: Path) -> None:
+    """Every card scored before the rows existed is in this state, the one
+    PRODUCTION.json points at included. UNAVAILABLE plus the floor, never a
+    refusal: refusing would break every comparison the gate can make today."""
+    baseline = card(tmp_path / "base.json", dict.fromkeys(COHORTS, 0.600))
+    candidate = card(tmp_path / "cand.json", dict.fromkeys(COHORTS, 0.598))
+
+    got = gauc_checks(candidate, baseline, TOLERANCE)
+    assert all(item.allowed for item in got)
+    assert all(item.paired is None for item in got)
+
+
+def test_gauc_measures_over_users_not_over_the_cards_scalar(tmp_path: Path) -> None:
+    """The floor and the interval have to share a unit.
+
+    The card's GAUC is weighted by impression size; the paired test is a mean
+    over users. Where the rows exist BOTH halves come from the rows, so a card
+    claiming no change cannot promote a candidate whose per-user rows
+    collapsed. Taking the floor from the card and the interval from the rows
+    would be ci95_by_impression_DO_NOT_QUOTE wearing a different label.
+    """
+    users = [f"U{index}" for index in range(200)]
+    baseline = card(tmp_path / "base.json", dict.fromkeys(COHORTS, 0.60))
+    candidate = card(tmp_path / "cand.json", dict.fromkeys(COHORTS, 0.60))
+    rows(baseline, {"overall": [0.60] * len(users)}, users)
+    rows(candidate, {"overall": [0.50] * len(users)}, users)
+
+    got = {item.metric: item for item in gauc_checks(candidate, baseline, TOLERANCE)}
+    assert not got["gauc[overall]"].allowed
+    assert "past the" in got["gauc[overall]"].reason
+    assert got["gauc[overall]"].candidate == 0.50
+
+
+def test_gauc_refuses_cards_scored_over_disjoint_users(tmp_path: Path) -> None:
+    """Fail-closed, as recall_check does. Two cards scored over different users
+    have per-user means that compare happily and mean nothing."""
+    baseline = card(tmp_path / "base.json", dict.fromkeys(COHORTS, 0.60))
+    candidate = card(tmp_path / "cand.json", dict.fromkeys(COHORTS, 0.60))
+    rows(baseline, {"overall": [0.60] * 50}, [f"U{index}" for index in range(50)])
+    rows(candidate, {"overall": [0.60] * 50}, [f"V{index}" for index in range(50)])
+
+    got = {item.metric: item for item in gauc_checks(candidate, baseline, TOLERANCE)}
+    assert not got["gauc[overall]"].allowed
+    assert "cannot pair these cards" in got["gauc[overall]"].reason
 
 
 def test_an_empty_verdict_is_not_a_pass() -> None:

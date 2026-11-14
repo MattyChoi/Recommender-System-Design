@@ -62,7 +62,7 @@ def sweep_half_life(
 
     for half_life in values:
         card = evaluate(spark, settings, MODEL, split, seed, half_life)
-        card["half_life_days"] = half_life
+        card.report["half_life_days"] = half_life
         overall = write_card(card, RESULTS / f"{MODEL}_hl{_slug(half_life)}.json")
         summaries.append(
             {

@@ -37,6 +37,7 @@ mlartifacts/
 evaluation/results/retrieval
 evaluation/results/sources
 evaluation/results/ranking
+evaluation/results/slates
 
 # Secrets and local config
 .env
@@ -52,6 +53,7 @@ notebooks/*
 scripts/*
 !scripts/writeups/
 !scripts/__init__.py
+!scripts/demo.py
 /tmp
 
 # defer tracking for now

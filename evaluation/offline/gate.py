@@ -1,5 +1,7 @@
 """The model quality gate: may a candidate replace what is serving?
 
+  `make quality-gate CANDIDATE_POINTER=...`
+
 Deliberately the SAME SHAPE as :mod:`indexing.lifecycle` -- ``(allowed,
 reason)``, fail-closed, and the reason recorded when it passes as well as when
 it refuses, because a gate that explains only its refusals leaves no evidence
@@ -20,9 +22,16 @@ than the gate already running on indexes, and a model is harder to roll back
 than an index.
 
 Where per-row data does not exist the paired half is reported UNAVAILABLE rather
-than assumed to pass. That is GAUC's situation today: the cards hold one scalar
-per cohort. Making GAUC pairable means keeping per-user AUC rows in
-``run_eval``, which is a harness change plus a re-score of every card.
+than assumed to pass. All three metrics can be paired now, GAUC through the
+per-slate rows ``run_eval`` writes beside each card -- but only where those rows
+were actually produced. Every card scored before ``evaluation.offline.slates``
+existed has none, and only a re-score gives it some; those fall back to the
+floor alone, which is what this gate did for GAUC throughout.
+
+GAUC's floor and its paired test are both taken over USERS, not over the
+impression-weighted scalar the card prints. ``ndcg_check`` already works this
+way. A floor in one unit beside an interval in another is two estimands sharing
+one line of output.
 """
 
 from __future__ import annotations
@@ -37,6 +46,8 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
+from evaluation.offline.slates import SLATES, SlateRows
+from evaluation.offline.slates import load as load_slates
 from evaluation.offline.stats import PairedResult, paired_bootstrap, per_user_means
 from indexing.lifecycle import RECALL_TOLERANCE
 from models.ranking.compare import RESULTS as RANKING_RESULTS
@@ -55,6 +66,11 @@ COHORTS = ("overall", "warm_user", "cold_user", "warm_item", "cold_item")
 # measured, and the ci95 the cards carry is on ndcg@10, NOT on GAUC, so quoting
 # it here would be the DO_NOT_QUOTE mistake with a different label. To earn a
 # number: score one model twice under different seeds and look at the gap.
+#
+# The paired test added beside it does NOT earn this number. A significance
+# test catches a real drop that a too-loose floor would wave through; it says
+# nothing about a floor that is too TIGHT, which refuses good candidates and
+# leaves no evidence that it was the threshold's fault.
 GAUC_TOLERANCE = RECALL_TOLERANCE
 
 
@@ -176,6 +192,64 @@ def _gauc_by_cohort(path: Path) -> dict[str, float]:
     }
 
 
+def _slate_rows(card: Path) -> dict[str, SlateRows]:
+    """Per-slate AUC rows beside a card, or empty where they were never written.
+
+    Empty is NOT a failure. Every card scored before
+    ``evaluation.offline.slates`` existed is in that state, the one
+    ``PRODUCTION.json`` points at included, and refusing them would break every
+    comparison this gate can currently make. It means the paired half is
+    UNAVAILABLE and the floor stands alone.
+    """
+    try:
+        return load_slates(card.stem, card.parent / SLATES.name)
+    except FileNotFoundError:
+        return {}
+
+
+def _paired_gauc(
+    cohort: str,
+    baseline: dict[str, SlateRows],
+    candidate: dict[str, SlateRows],
+) -> tuple[float, float, PairedResult] | None:
+    """Per-user GAUC on both sides, and the paired interval between them.
+
+    Both means are taken over the users the INTERVAL is about, not over each
+    side's own users. ``ndcg_check`` gets away with the latter because
+    ``check_aligned`` has already refused a user mismatch upstream; nothing has
+    here, and a mean over one user set beside an interval over another is a
+    number that cannot be checked against its own confidence bound.
+
+    Args:
+        cohort: Which slice to pair.
+        baseline: Rows beside the baseline card.
+        candidate: Rows beside the candidate card.
+
+    Returns:
+        ``(candidate, baseline, paired)`` over the shared users, or None when
+        either side has no rows for this cohort.
+
+    Raises:
+        ValueError: If no user is scored on both sides.
+    """
+    if cohort not in baseline or cohort not in candidate:
+        return None
+
+    baseline_means = per_user_means(baseline[cohort].auc, baseline[cohort].users)
+    candidate_means = per_user_means(candidate[cohort].auc, candidate[cohort].users)
+
+    # First, because it is what refuses a disjoint pair -- after it returns,
+    # the intersection below is known non-empty.
+    paired = paired_bootstrap(baseline_means, candidate_means)
+
+    shared = sorted(set(baseline_means) & set(candidate_means))
+    return (
+        float(np.mean([candidate_means[user] for user in shared])),
+        float(np.mean([baseline_means[user] for user in shared])),
+        paired,
+    )
+
+
 def recall_check(candidate: Path, baseline: Path, tolerance: float = RECALL_TOLERANCE) -> Check:
     """Recall@k on the retrieval cards, floor plus paired test.
 
@@ -254,18 +328,24 @@ def gauc_checks(
     tolerance: float = GAUC_TOLERANCE,
     cohorts: Sequence[str] = COHORTS,
 ) -> list[Check]:
-    """One check per cohort, floor only.
+    """One check per cohort: a floor, plus a paired test where the rows exist.
 
     Per cohort rather than on ``overall`` alone: a model can regress badly on
     cold items while the aggregate holds, and cold items are where the spread
     already is -- recency scores 0.4198 there against 0.6029 on warm items.
 
-    A cohort missing from either side REFUSES rather than being skipped. A
-    candidate that stopped emitting a cohort would otherwise promote by omission,
-    which is the failure this loop exists to prevent.
+    A cohort missing from either CARD refuses rather than being skipped. A
+    candidate that stopped emitting a cohort would otherwise promote by
+    omission, which is the failure this loop exists to prevent. A cohort whose
+    ROWS are missing is a different thing and does not refuse: the floor falls
+    back to the card's impression-weighted scalar and the paired half reads
+    UNAVAILABLE, which is how every card scored before the rows existed is
+    handled.
     """
     candidate_gauc = _gauc_by_cohort(candidate)
     baseline_gauc = _gauc_by_cohort(baseline)
+    candidate_rows = _slate_rows(candidate)
+    baseline_rows = _slate_rows(baseline)
 
     out: list[Check] = []
     for cohort in cohorts:
@@ -284,7 +364,34 @@ def gauc_checks(
                 )
             )
             continue
-        out.append(check(metric, candidate_gauc[cohort], baseline_gauc[cohort], tolerance, None))
+
+        try:
+            pair = _paired_gauc(cohort, baseline_rows, candidate_rows)
+        except ValueError as exc:
+            # Fail-closed, as recall_check does: two cards scored over disjoint
+            # users cannot be compared, and the means would compare happily and
+            # mean nothing.
+            out.append(
+                Check(
+                    metric,
+                    candidate_gauc[cohort],
+                    baseline_gauc[cohort],
+                    tolerance,
+                    None,
+                    False,
+                    f"cannot pair these cards: {exc}",
+                )
+            )
+            continue
+
+        if pair is None:
+            out.append(
+                check(metric, candidate_gauc[cohort], baseline_gauc[cohort], tolerance, None)
+            )
+            continue
+
+        candidate_mean, baseline_mean, paired = pair
+        out.append(check(metric, candidate_mean, baseline_mean, tolerance, paired))
     return out
 
 
