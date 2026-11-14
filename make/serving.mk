@@ -1,7 +1,7 @@
 # Serving: the ONNX export Triton loads, the orchestrator, and the two things
 # that have to work from a clean clone.
 
-.PHONY: serve serve-all features-serve retrieval-serve server-build bench demo
+.PHONY: serve serve-all features-serve retrieval-serve server-build bench demo smoke-ranked
 
 RANKER_COLUMNS ?= $(ONNX_OUT:.onnx=.columns.json)
 
@@ -27,6 +27,9 @@ addresses = $(shell seq -s, -f '$(1):%.0f' $(2) $(PORT_STRIDE) $$(( $(2) + $(POR
 
 SERVER_BIN ?= bin/recsys-server
 
+MODEL_VERSION ?= $(shell cat $(ONNX_OUT) $(ONNX_OUT).data 2>/dev/null | sha256sum | cut -c1-12)
+INDEX_VERSION ?= $(shell cat data/index/CURRENT 2>/dev/null)
+
 features-serve:  ## Run the Feast gateway sidecar on :15053 (+10 per extra process)
 	uv run --extra serving python -m serving.features \
 	    --port $(FEATURES_PORT) --processes $(FEATURES_PROCESSES) $(FEATURES_ARGS)
@@ -44,12 +47,15 @@ serve:  ## Run the gRPC orchestrator on :15051
 	@test -f "$(CATALOGUE)"      || { echo 'run: make catalogue'; exit 1; }
 	@test -f "$(POPULAR)"        || { echo 'run: make popular';   exit 1; }
 	@test -f "$(RANKER_COLUMNS)" || { echo 'run: make onnx';      exit 1; }
+	@test -n "$(INDEX_VERSION)"  || \
+	  echo '  note: no data/index/CURRENT -- index_version will be empty in responses'
 	@test -f "$(INDEX_STEM).json" || \
 	  echo '  note: no $(INDEX_STEM).json -- exact search fallback disabled (run: make index-vectors)'
 	cd $(GO_DIR) && ./$(SERVER_BIN) \
 	    -item-map ../../$(ITEM_MAP) -catalogue ../../$(CATALOGUE) \
 	    -popular ../../$(POPULAR) -columns ../../$(RANKER_COLUMNS) \
 	    -index-stem ../../$(INDEX_STEM) \
+	    -model-version '$(MODEL_VERSION)' -index-version '$(INDEX_VERSION)' \
 	    -features $(call addresses,$(FEATURES_HOST),$(FEATURES_PORT),$(FEATURES_PROCESSES)) \
 	    -retrieval $(call addresses,$(RETRIEVAL_HOST),$(RETRIEVAL_PORT),$(RETRIEVAL_PROCESSES)) \
 	    $(SERVE_ARGS)
@@ -63,6 +69,14 @@ serve-all: server-build  ## Run both sidecars and the orchestrator together; Ctr
 	wait
 
 BENCH_TARGET ?= localhost:15051
+
+# Needs `make serve-all` running, and a GPU for Triton -- which is why this is a
+# make target and not a job in .github/workflows/ci.yml. Its mirror,
+# tests/test_serving_smoke.py, runs hosted because it needs no backends at all.
+smoke-ranked:  ## Assert the full pipeline against a running stack (make serve-all first)
+	RECSYS_SMOKE_TARGET=$(BENCH_TARGET) \
+	  uv run pytest -m integration tests/test_serving_ranked.py -q
+
 BENCH_ARGS ?=
 bench:  ## Sweep the orchestrator to saturation with ghz
 	uv run python -m scripts.writeups.bench_serving --target $(BENCH_TARGET) $(BENCH_ARGS)

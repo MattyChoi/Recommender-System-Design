@@ -1,7 +1,7 @@
 # Lint, types, tests. `check` is exactly what CI runs, in the same order, so a
 # green `make check` locally means a green pipeline.
 
-.PHONY: lint fmt types test check
+.PHONY: lint fmt types test test-cov check
 
 
 ### Python lints, fmts, types, tests
@@ -18,6 +18,12 @@ types:  ## mypy
 
 test:  ## pytest
 	uv run pytest
+
+COVERAGE_FLOOR ?= 54
+
+test-cov:  ## pytest with coverage, gated at COVERAGE_FLOOR -- what CI runs
+	uv run pytest --cov --cov-report=term-missing \
+	  $(if $(COVERAGE_FLOOR),--cov-fail-under=$(COVERAGE_FLOOR),)
 
 
 ### Go lints, fmts, tests, and compile commands
@@ -61,9 +67,9 @@ go-build:  ## Compile the serving orchestrator
 	cd $(GO_DIR) && $(GO) build ./...
 
 
-check:  ## lint + types + test (what CI runs)
+check:  ## lint + types + coverage + go (what CI runs)
 	$(MAKE) lint
 	$(MAKE) types
-	$(MAKE) test
+	$(MAKE) test-cov
 	$(MAKE) go-lint
 	$(MAKE) go-test

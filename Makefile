@@ -27,7 +27,11 @@
 
 
 -include .env
+# Only when it exists: uv treats a missing UV_ENV_FILE as a hard error, and
+# .env is gitignored, so CI runners and fresh clones never have one.
+ifneq ($(wildcard .env),)
 export UV_ENV_FILE=.env
+endif
 
 # `uv run` for everything EXCEPT the Ray drivers -- see retrieval-dist.
 PYTHON ?= uv run python

@@ -12,9 +12,10 @@ from concurrent import futures
 
 import grpc
 import pytest
-from grpc_health.v1 import health, health_pb2, health_pb2_grpc
+from grpc_health.v1 import health, health_pb2
 
 from serving.health import add_health, serving
+from tests._health import check
 
 Server = tuple[grpc.Server, health.HealthServicer, int]
 
@@ -30,16 +31,14 @@ def server() -> Iterator[Server]:
     srv.stop(None)
 
 
-def check(port: int) -> int:
+def status(port: int) -> int:
     with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
-        stub = health_pb2_grpc.HealthStub(channel)
-        # The generated stub is untyped; the status enum is an int underneath.
-        return int(stub.Check(health_pb2.HealthCheckRequest(service=""), timeout=3).status)
+        return check(channel, timeout=3)
 
 
 def test_serving_once_started(server: Server) -> None:
     _, _, port = server
-    assert check(port) == health_pb2.HealthCheckResponse.SERVING
+    assert status(port) == health_pb2.HealthCheckResponse.SERVING
 
 
 def test_not_serving_during_drain_while_port_still_answers(
@@ -47,4 +46,4 @@ def test_not_serving_during_drain_while_port_still_answers(
 ) -> None:
     _, servicer, port = server
     servicer.enter_graceful_shutdown()  # what both sidecars' SIGTERM handler does first
-    assert check(port) == health_pb2.HealthCheckResponse.NOT_SERVING
+    assert status(port) == health_pb2.HealthCheckResponse.NOT_SERVING
