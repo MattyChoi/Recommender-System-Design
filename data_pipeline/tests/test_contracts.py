@@ -494,9 +494,9 @@ def test_silver_never_falls_back_to_oov(silver: DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # The news catalogue
 #
-# news is the sole source of item_map, so a defect here corrupts C3 without
-# implicating itself: the ID-map tests would report the symptom while pointing
-# at the wrong file. These sit upstream of that.
+# news is the sole source of item_map, so a defect here corrupts the ID maps
+# without implicating itself: the ID-map tests would report the symptom while
+# pointing at the wrong file. These sit upstream of that.
 # ---------------------------------------------------------------------------
 
 # Present but frequently absent, so a blanket non-null assertion would be
@@ -611,8 +611,8 @@ def test_news_categories_are_a_small_closed_vocabulary(
 # ---------------------------------------------------------------------------
 # Referential integrity and the history snapshot
 #
-# Guide C4's remaining contracts. Two of them are adapted rather than copied,
-# and the adaptation is the interesting part -- see
+# The remaining contracts for this group. Two of them are adapted rather than
+# taken as stated, and the adaptation is the interesting part -- see
 # test_history_predates_the_log_window.
 # ---------------------------------------------------------------------------
 
@@ -644,18 +644,18 @@ def _history_pairs(history: DataFrame) -> DataFrame:
 
 
 def test_every_click_sits_inside_an_impression(events: DataFrame) -> None:
-    """Guide C4's orphan-click contract.
+    """The orphan-click contract.
 
     Structurally guaranteed on this schema and asserted anyway. MIND ships one
     row per (impression, item shown) with the click as a BOOLEAN on that row,
     so a click cannot exist without its impression -- there is nowhere for it
-    to live. The guide assumes an event-type model where clicks arrive as
+    to live. The contract assumes an event-type model where clicks arrive as
     separate rows and can genuinely be orphaned.
 
     Kept because the guarantee is a property of the current schema, not of the
-    project: Part Q feeds clicks through Kafka as their own events, and on the
-    day silver is built from that stream instead, this stops being free and
-    starts being the test that catches it.
+    project: the streaming layer feeds clicks through Kafka as their own
+    events, and on the day silver is built from that stream instead, this stops
+    being free and starts being the test that catches it.
     """
     clicks = events.filter(f.col("clicked")).select("impression_id", "item_id")
     shown = events.select("impression_id", "item_id")
@@ -696,8 +696,8 @@ def test_history_is_one_snapshot_per_user(history: dict[str, DataFrame], split: 
 
     The consequence is worth stating plainly: history is STALE for later
     impressions, not leaky. A user's day-6 impression carries their day-1
-    history and knows nothing of the five days between. Part H's sequential
-    model has to top it up from in-window clicks as of each impression.
+    history and knows nothing of the five days between. The sequential model
+    has to top it up from in-window clicks as of each impression.
     """
     if split not in history:
         pytest.skip(f"{split} history not built")
@@ -708,16 +708,16 @@ def test_history_is_one_snapshot_per_user(history: dict[str, DataFrame], split: 
 
 
 def test_history_predates_the_log_window(events: DataFrame, history: dict[str, DataFrame]) -> None:
-    """The leak guard, rewritten -- the guide's version fails on this corpus.
+    """The leak guard, rewritten -- the obvious version fails on this corpus.
 
-    C4 asks for `test_history_predates_its_impression`, asserting that no item
+    It asks for `test_history_predates_its_impression`, asserting that no item
     in a user's history was clicked at or after the impression it hangs off,
     with a hard zero. Run verbatim on MIND-small it reports 5,704 violations,
     and every one of them is benign: an item clicked BEFORE the log window
     (which is what put it in history) and clicked again during it. The test is
     wrong, not the data.
 
-    What the guide is really reaching for is whether the snapshot was taken
+    What the check is really reaching for is whether the snapshot was taken
     before the window or after it. Taken after, a user's history would contain
     the clicks they made during the window, and training on it would leak the
     future wholesale. That is measurable directly, and it degrades gracefully:

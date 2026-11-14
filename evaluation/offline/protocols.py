@@ -67,6 +67,13 @@ class RetrievalResult(NamedTuple):
         k: The cutoff recall was taken at.
         catalogue_size: The pool scored against, recorded so a later reader can
             tell whether this was a full-catalogue run.
+        reach: Share of requests the retriever answered with anything at all.
+            1.0 for a retriever that scores the whole catalogue; below it for a
+            source with limited reach, and that distinction is a finding rather
+            than a defect -- co-visitation on news is the worked example.
+        mean_pool: Mean candidates returned per request. Reported beside
+            ``reach`` so a short pool is visible in the result rather than
+            inferred from a recall that looks low for the wrong reason.
     """
 
     recall: Aggregate
@@ -74,6 +81,8 @@ class RetrievalResult(NamedTuple):
     novelty: float
     k: int
     catalogue_size: int
+    reach: float = 1.0
+    mean_pool: float = float("nan")
 
 
 def evaluate_ranking(
@@ -116,6 +125,7 @@ def evaluate_retrieval(
     catalogue_size: int,
     train_popularity: Mapping[str, float],
     k: int = 100,
+    allow_short_pools: bool = False,
 ) -> RetrievalResult:
     """Score a candidate generator against the whole catalogue.
 
@@ -127,17 +137,18 @@ def evaluate_retrieval(
         catalogue_size: Items the retriever could have returned.
         train_popularity: p(item) on TRAIN ONLY, for novelty.
         k: Cutoff for recall.
+        allow_short_pools: Permit a retriever that returns fewer than ``k``.
 
     Returns:
         A :class:`RetrievalResult`.
 
     Raises:
-        ValueError: If any request's candidate pool is shorter than ``k``, or if
-            ``catalogue_size`` is not a plausible catalogue. The check exists
-            because sampled-negative evaluation produces a perfectly
-            reasonable-looking number that is not comparable to anything -- and
-            the output gives no hint that it happened. A guard that fires is
-            cheaper than a table that has to be retracted.
+        ValueError: If ``catalogue_size`` is not a plausible catalogue, or if a
+            request's pool is shorter than ``k`` and ``allow_short_pools`` is
+            False. The check exists because sampled-negative evaluation produces
+            a perfectly reasonable-looking number that is not comparable to
+            anything -- and the output gives no hint that it happened. A guard
+            that fires is cheaper than a table that has to be retracted.
     """
     if catalogue_size < k:
         raise ValueError(
@@ -149,19 +160,25 @@ def evaluate_retrieval(
     short = {
         request: len(candidates) for request, candidates in retrieved.items() if len(candidates) < k
     }
-    if short:
+    if short and not allow_short_pools:
         example = next(iter(short.items()))
         raise ValueError(
             f"{len(short)} request(s) returned fewer than k={k} candidates "
             f"(e.g. {example[0]!r} returned {example[1]}). Retrieval must be "
-            "scored over the full catalogue, not a sampled pool."
+            "scored over the full catalogue, not a sampled pool. If this is a "
+            "source with genuinely limited reach rather than a sampled pool, "
+            "pass allow_short_pools=True and read `reach` in the result."
         )
 
     recalls: list[float] = []
     served: list[str] = []
+    pools: list[int] = []
+    answered = 0
     for request, candidates in retrieved.items():
         top = list(candidates)[:k]
         served.extend(top)
+        pools.append(len(top))
+        answered += bool(top)
 
         clicked = set(relevant.get(request, ()))
         if not clicked:
@@ -169,10 +186,13 @@ def evaluate_retrieval(
             continue
         recalls.append(len(clicked & set(top)) / len(clicked))
 
+    requests = len(retrieved)
     return RetrievalResult(
         recall=aggregate(recalls),
         coverage=catalog_coverage(served, catalogue_size),
         novelty=novelty(served, train_popularity),
         k=k,
         catalogue_size=catalogue_size,
+        reach=answered / requests if requests else float("nan"),
+        mean_pool=sum(pools) / requests if requests else float("nan"),
     )

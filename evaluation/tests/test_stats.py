@@ -80,7 +80,7 @@ class TestBootstrapCi:
 
 class TestTheResamplingUnitGate:
     def test_resampling_impressions_gives_a_falsely_narrow_interval(self) -> None:
-        """THE gate of E3, as an assertion rather than a warning.
+        """THE resampling-unit gate, as an assertion rather than a warning.
 
         Identical data. Resampling 1,200 correlated impressions instead of 60
         users inflates the effective sample size by roughly the impressions per

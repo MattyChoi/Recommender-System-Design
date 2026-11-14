@@ -10,7 +10,7 @@ does.
 `data_pipeline/features/asof.py` implements the offline join directly in Spark: union
 labels with features, order by `(_ts, _is_label)` over
 `rowsBetween(unboundedPreceding, 0)`, and carry the last non-null value forward. Four
-joins — item, user, user×category, category. It is the join D4's leakage gate is written
+joins — item, user, user×category, category. It is the join the leakage gate is written
 against, and the one that produced the measured 6,262 rows dropped as unknowable.
 
 Feast also has an offline store (`DaskOfflineStore`, via `type: dask`) whose
@@ -26,7 +26,7 @@ only offline. So one PIT implementation is the right number, not a shortfall.
 What the split actually creates is a **freshness** seam, not a correctness one. Training
 reads "the last bucket that closed before `ts`". Serving reads "the most recent bucket
 materialised, subject to the FeatureView TTL". Those differ by materialisation lag, and
-that difference is what D4 measures.
+that difference is what the skew report measures.
 
 Both paths read the **same** gold Parquet. One producer, two readers.
 
@@ -53,8 +53,8 @@ Three reasons, in order of weight:
 1. **The Feast offline store is dead surface.** It is configured, it works, and nothing
    exercises it. A reader may reasonably ask why a feature store is present with half of
    it unused.
-2. **Nothing automatically proves the two readers agree.** D4's skew report is the proof,
-   and it is blocked on Part M, so the seam is currently unmeasured rather than
+2. **Nothing automatically proves the two readers agree.** The skew report is the proof,
+   and it is blocked on the Go service, so the seam is currently unmeasured rather than
    measured-and-small.
 3. **The feature list exists twice** — the constants in `asof.py` and the `Field`s in
    `definition.py`. `test_feature_store_schema.py` covers the shape; it does not cover
@@ -62,7 +62,7 @@ Three reasons, in order of weight:
 4. **Context features are declared once but still computed twice.** `hour_of_day` and
    `day_of_week` now have a single written definition — the `context_features` on-demand
    view — and `test_context_features.py` drives it and Spark over the same instants and
-   asserts they agree. Whether Part M's Go service calls that transformation or
+   asserts they agree. Whether the Go service calls that transformation or
    reimplements it against the spec is still open; until that is settled, agreement is
    enforced by a test rather than by construction.
 
@@ -72,7 +72,7 @@ Three reasons, in order of weight:
   The strongest argument for it — one code path, so no seam — is weakened by the fact that
   the seam is between offline and *online* reads, which this would not remove.
 - **Drop Feast, have Spark write Redis directly.** Simpler, and honest about what is
-  actually used. Rejected: it discards the PushSource path that Part Q's Flink job needs,
+  actually used. Rejected: it discards the PushSource path that the Flink job needs,
   the TTL and entity-key semantics, and the FeatureService as a serving contract.
 - **Make the two agree by construction, by materialising from the training join's
   output.** Rejected as circular: it would serve features stamped at training time rather

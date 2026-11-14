@@ -15,7 +15,7 @@ normally pairs that scope with MIND or Amazon Reviews 2023 at real scale.
 ## Decision
 
 Use **MovieLens-25M as the only dataset**, for both the development loop and final numbers.
-Stack per the guide's §1 defaults: Python 3.13, PyTorch, LightGBM, FAISS, Feast, Kafka,
+Stack per the standard defaults: Python 3.13, PyTorch, LightGBM, FAISS, Feast, Kafka,
 Redis, Go serving, Docker Compose + kind, GitHub Actions, Prometheus/Grafana.
 
 ## Consequences — accepted downsides
@@ -27,7 +27,7 @@ These are real and should be stated in the README rather than discovered by an i
    position-bias correction has no ground truth to correct against. Mitigation: be explicit
    about the sampling distribution, apply logQ correction, and describe what would change
    with real impressions.
-2. **62K items is below the scale where ANN is necessary.** The guide targets 100K–2M items
+2. **62K items is below the scale where ANN is necessary.** The usual range is 100K–2M items
    precisely so that brute-force search is too slow to be viable. At 62K × 128 dims, exact
    search is a few milliseconds, so HNSW is a demonstration rather than a requirement. The
    recall/QPS benchmark is still worth building, but it must be labelled as such.

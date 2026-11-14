@@ -1,0 +1,260 @@
+# prometheus-adapter: serves custom.metrics.k8s.io from Prometheus.
+#
+# The HPA does NOT read Prometheus. It reads the Kubernetes custom metrics API,
+# and nothing serves that API out of the box. This registers an aggregated API
+# server for it: the main API server proxies /apis/custom.metrics.k8s.io to this
+# Deployment, which translates each request into a PromQL query.
+#
+# That indirection is why an HPA on a custom metric fails silently without this
+# -- the HPA reports <unknown> and nothing says the API it asked is unserved.
+#
+# Most of this file is RBAC, and the three bindings at the bottom of the RBAC
+# section are the ones nobody can reconstruct from memory. Each is commented.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custom-metrics-apiserver
+  labels:
+    app.kubernetes.io/name: prometheus-adapter
+---
+# What the adapter reads to resolve a series into an object: a series labelled
+# namespace="default", pod="recsys-api-xyz" is only meaningful if it can confirm
+# that pod exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: custom-metrics-resource-reader
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custom-metrics-resource-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: custom-metrics-resource-reader
+subjects:
+  - kind: ServiceAccount
+    name: custom-metrics-apiserver
+    namespace: default
+---
+# BINDING 1 of 3. An aggregated API server receives requests the main API server
+# has already authenticated, and must ask it "who is this, and may they?".
+# system:auth-delegator is the built-in role that permits those SubjectAccessReview
+# and TokenReview calls. Without it every request arrives and is refused as
+# unauthenticated, which looks like a networking fault.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custom-metrics-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: custom-metrics-apiserver
+    namespace: default
+---
+# BINDING 2 of 3. A RoleBinding, not a ClusterRoleBinding, and in kube-system
+# rather than here: the adapter needs to read the extension-apiserver-authentication
+# ConfigMap, which holds the CA that signs the client certs the main API server
+# proxies with. It lives in kube-system, so the grant has to be there too.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: custom-metrics-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: custom-metrics-apiserver
+    namespace: default
+---
+# BINDING 3 of 3. The other direction: this lets the HPA CONTROLLER read the API
+# the adapter serves. The controller runs as the user system:kube-controller-manager,
+# which has no standing access to an API group that did not exist when the
+# cluster was built.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: custom-metrics-server-resources
+rules:
+  - apiGroups: ["custom.metrics.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hpa-controller-custom-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: custom-metrics-server-resources
+subjects:
+  - kind: User
+    name: system:kube-controller-manager
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adapter-config
+  labels:
+    app.kubernetes.io/name: prometheus-adapter
+data:
+  config.yaml: |
+    rules:
+      # seriesQuery selects which Prometheus series this rule covers. The
+      # _bucket series, not _sum or _count: histogram_quantile needs the `le`
+      # label, and only the buckets carry it.
+      #
+      # The namespace!="",pod!="" matchers are a guard, not decoration. A series
+      # missing either label cannot be mapped to an object, and excluding it
+      # here is better than discovering it as a silent gap later.
+      - seriesQuery: 'recsys_request_duration_seconds_bucket{namespace!="",pod!=""}'
+
+        # Which Prometheus label corresponds to which Kubernetes resource. This
+        # is the join that the relabel rules in prometheus.yaml exist to make
+        # possible.
+        resources:
+          overrides:
+            namespace: {resource: namespace}
+            pod: {resource: pod}
+
+        # The name the HPA will ask for. recsys_request_duration_seconds_bucket
+        # becomes recsys_request_duration_p99_seconds.
+        name:
+          matches: "^(.*)_seconds_bucket$"
+          as: "${1}_p99_seconds"
+
+        # The query the adapter runs per request. The three templates are filled
+        # in by the adapter: <<.Series>> the metric name, <<.LabelMatchers>> the
+        # pods the HPA asked about, <<.GroupBy>> the grouping label (pod).
+        #
+        # `by (le, <<.GroupBy>>)` is the part that is easy to get wrong -- drop
+        # `le` and histogram_quantile has no buckets to interpolate between and
+        # returns NaN, which surfaces as <unknown> on the HPA.
+        #
+        # rate over 2m is eight samples at the 15s scrape interval: enough to be
+        # stable, short enough that a latency spike is not averaged away.
+        metricsQuery: |
+          histogram_quantile(
+            0.99,
+            sum(rate(<<.Series>>{<<.LabelMatchers>>}[2m])) by (le, <<.GroupBy>>)
+          )
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-metrics-apiserver
+  labels:
+    app.kubernetes.io/name: prometheus-adapter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-adapter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus-adapter
+    spec:
+      serviceAccountName: custom-metrics-apiserver
+      volumes:
+        - name: config
+          configMap:
+            name: adapter-config
+        # The adapter generates a self-signed serving cert at startup into
+        # --cert-dir, so it needs somewhere writable while the root filesystem
+        # stays read-only.
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: prometheus-adapter
+          # Bump this when the cluster moves on; check the project's releases
+          # rather than trusting this pin indefinitely.
+          image: registry.k8s.io/prometheus-adapter/prometheus-adapter:v0.12.0
+          args:
+            - --config=/etc/adapter/config.yaml
+            - --prometheus-url=http://prometheus.default.svc:9090
+            - --secure-port=6443
+            - --cert-dir=/tmp/cert
+            # How often the adapter re-asks Prometheus which series exist. A new
+            # metric is invisible to the HPA until the next relist, so a short
+            # interval makes a dev loop less confusing.
+            - --metrics-relist-interval=1m
+            # Deliberately verbose: a wrong rule is this file's whole failure
+            # mode, and at v=4 the adapter logs the PromQL it actually ran.
+            - --v=4
+          ports:
+            - name: https
+              containerPort: 6443
+          volumeMounts:
+            - name: config
+              mountPath: /etc/adapter
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet: {path: /healthz, port: https, scheme: HTTPS}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /readyz, port: https, scheme: HTTPS}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: {cpu: "100m", memory: "128Mi"}
+            limits: {cpu: "500m", memory: "512Mi"}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-metrics-apiserver
+  labels:
+    app.kubernetes.io/name: prometheus-adapter
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: prometheus-adapter
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+# The registration. This is what makes /apis/custom.metrics.k8s.io exist: the
+# main API server proxies that path to the Service above.
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.custom.metrics.k8s.io
+spec:
+  group: custom.metrics.k8s.io
+  version: v1beta1
+  groupPriorityMinimum: 100
+  versionPriority: 100
+  service:
+    name: custom-metrics-apiserver
+    namespace: default
+    port: 443
+  # The adapter signs its own serving cert, so there is no CA for the API server
+  # to verify it against. Acceptable in a dev cluster; in production this is a
+  # cert-manager-issued cert and a caBundle here instead.
+  insecureSkipTLSVerify: true

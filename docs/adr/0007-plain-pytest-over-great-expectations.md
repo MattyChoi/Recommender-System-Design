@@ -4,9 +4,10 @@
 
 ## Context
 
-The guide's §3 layout names Great Expectations as the data-contract tool, and §5.5 asks
-for assertions that fail the pipeline rather than warnings that scroll past. Those are two
-separate requirements: *what* the checks assert, and *what framework* expresses them.
+The standard layout for this kind of project names Great Expectations as the data-contract
+tool, and asks for assertions that fail the pipeline rather than warnings that scroll
+past. Those are two separate requirements: *what* the checks assert, and *what framework*
+expresses them.
 
 The checks themselves are not in question. `data_pipeline/tests/test_contracts.py` holds 34
 of them — row-count conservation from raw through silver, click-implies-impression,
@@ -41,15 +42,15 @@ across runs by a platform team. None of those apply to a single-author repositor
    check.
 3. **No validation history.** A GE store retains results across runs, so drift in a
    contract's pass rate is visible. Here a check is green or red, with no series behind it.
-   Part O's monitoring covers drift for features, not for contracts.
+   Monitoring covers drift for features, not for contracts.
 4. **Hand-rolled equivalents.** `_MAX_HISTORY_OVERLAP`, the CTR plausibility band and the
    row-count tolerances are thresholds GE ships as built-ins. They are five lines each
    here, and they will stay hand-rolled as the suite grows.
 
 ## Alternatives considered
 
-- **Great Expectations as §3 specifies.** Rejected above. Worth restating that this is a
-  deliberate departure from the guide rather than an omission.
+- **Great Expectations as the standard layout specifies.** Rejected above. Worth restating
+  that this is a deliberate departure from the standard recipe rather than an omission.
 - **Both: GE for data, pytest for code.** Rejected as the worst option — it pays GE's
   setup cost and still leaves contract failures in a second place to check.
 - **Pandera.** Lighter than GE, schema-first, integrates with pytest. Genuinely close, and

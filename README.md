@@ -346,9 +346,10 @@ observation, and carries most of the calibration signal.
 
 ## How results are measured
 
-The current baseline numbers live in [docs/results.md](docs/results.md), rebuilt from the
-report cards by `make results`. Every model in this project is scored by the same harness
-and lands in that table — including the ones that look good.
+The current baseline numbers live in [docs/baselines.md](docs/baselines.md), rebuilt from the
+report cards by `make results`; [docs/results.md](docs/results.md) indexes that alongside the
+retrieval and cost documents. Every model in this project is scored by the same harness and
+lands in one of those tables — including the ones that look good.
 
 Two protocols, deliberately separate, because the same metric name over two different pools
 is two different measurements — and the number alone does not say which you are looking at.
@@ -358,12 +359,17 @@ selected by MSN's own recommender; the question is whether the model orders that
 better than they did. This is MIND's leaderboard task, so GAUC, MRR and NDCG@10 reported
 here are comparable to published MIND results.
 
-**Everything measured so far is ranking.** `docs/results.md` reports the popularity
-family, recency and co-visitation under the ranking protocol only. They are retrieval-family
-models — candidate generators that can score any item — but they have only ever been asked to
-reorder MSN's shortlist, so their `recall@10` is within-slate and says nothing about whether
-they could retrieve from the catalogue. `evaluate_retrieval` is implemented and tested and has
-not yet been run against a model; that measurement arrives with the two-tower retriever.
+**The baselines have only ever been measured as rankers.** `docs/baselines.md` reports the
+popularity family, recency and co-visitation under the ranking protocol only. They are
+retrieval-family models — candidate generators that can score any item — but they have only
+ever been asked to reorder MSN's shortlist, so their `recall@10` is within-slate and says
+nothing about whether they could retrieve from the catalogue. `evaluate_retrieval` is
+implemented and tested and has still not been run against any of them.
+
+**The two-tower retriever is measured, and measured separately.**
+[`docs/retrieval.md`](docs/retrieval.md) scores it over the full catalogue on a 12-hour holdout
+carved from train. No model appears in both documents, and no row of one is comparable to a row
+of the other — different candidate set, different denominator, different question.
 
 **Retrieval is scored against the whole catalogue** — all 65,238 articles, never a sampled
 pool. Scoring one positive against ~100 random negatives is biased and does not

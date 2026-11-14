@@ -1,7 +1,7 @@
 """``make coverage`` -- how much of the split co-visitation can score at all.
 
 A model that ranks badly and a model that has nothing to rank with produce
-nearly identical report cards. Co-visitation at the manual's 1-hour window
+nearly identical report cards. Co-visitation at the usual 1-hour window
 scored GAUC 0.5007 against random's 0.5007 -- not a weak result, a silent one:
 91% of slates had every candidate tied at 0.0, and a slate of ties contributes
 exactly 0.5 to GAUC by construction.
@@ -28,7 +28,7 @@ from pyspark.sql import functions as f
 from common.config import Settings, load_settings
 from common.spark import get_spark
 from common.utils import read_gold
-from models.retrieval.covisit import build_covisitation, score_covisit
+from models.retrieval.baselines.covisit import build_covisitation, score_covisit
 
 # Needed by score_covisit; kept narrow so the cached frames stay small.
 _NEEDED = ("user_id", "item_id", "impression_id", "clicked", "ts")

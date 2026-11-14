@@ -1,0 +1,40 @@
+// Per-REQUEST serving context for the impression rows in events.proto.
+//
+// A SEPARATE message rather than more fields on InteractionEvent: that one is
+// the shared interaction schema -- clicks, watches and purchases from Parts B-L
+// land in it from the client -- and serving internals do not belong in it.
+
+syntax = "proto3";
+package recsys.v1;
+option go_package = "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb;pb";
+
+message ImpressionContext {
+  string request_id   = 1;   // joins to InteractionEvent.request_id
+  string user_id      = 2;
+  string variant      = 3;   // the A/B arm.
+  int64  served_ts_ms = 4;   // == InteractionEvent.event_ts_ms for this request
+
+  // ALIGNED: with each other, and with the `position` of the InteractionEvent
+  // rows carrying this request_id. Internal indices here
+  repeated int32  item_ids  = 5;
+  repeated double scores    = 6;   // the ranker's raw output
+  repeated double objective = 7;   // what each slot was ordered by
+
+  // The SERVED feature values
+  repeated float user_feats = 8;
+
+  // What degraded, so off-policy evaluation can exclude or weight the requests
+  // where the logging policy was not the policy under study.
+  repeated string degraded = 9;
+
+  // Whether the store had a row for this user. False means user_feats are the
+  // zero defaults, not measured values
+  bool user_found = 10;
+
+  // --- shadow mode ---
+  // A second model, scored on the SAME feature matrix as `scores` and never
+  // served. ALIGNED with item_ids, like scores and objective.
+  repeated double shadow_scores = 11;
+  // Which model produced shadow_scores. Empty whenever shadow_scores is.
+  string shadow_model = 12;
+}

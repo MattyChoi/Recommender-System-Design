@@ -1,0 +1,22 @@
+# Build context. The Dockerfile COPYs serving/go/ and nothing else, so
+# everything here is pure transfer cost to the daemon -- but `data/` alone is
+# hundreds of MB on every build, which is the one worth having this file for.
+data/
+.venv/
+.git/
+notebooks/
+docs/img/
+
+# Generated, large, and MOUNTED at runtime rather than copied in. Excluding
+# them is safe only because the image does not bake artifacts; if that changes,
+# these three lines have to go with it.
+serving/artifacts/
+**/*.onnx
+**/*.onnx.data
+
+# Caches
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

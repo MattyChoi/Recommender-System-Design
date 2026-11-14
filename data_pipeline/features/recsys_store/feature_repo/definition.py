@@ -86,6 +86,8 @@ item_stats = FeatureView(
     schema=[
         Field(name="item_impressions_24h", dtype=Int64),
         Field(name="item_clicks_24h", dtype=Int64),
+        Field(name="item_impressions_cum", dtype=Int64),
+        Field(name="item_clicks_cum", dtype=Int64),
         Field(name="item_ctr_smoothed", dtype=Float64),
         Field(name="cat_expanding_ctr", dtype=Float64),
         Field(name="item_age_hours", dtype=Float64),

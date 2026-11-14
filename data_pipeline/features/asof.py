@@ -16,6 +16,8 @@ from pyspark.sql import functions as f
 _ITEM_FEATURES = (
     "item_impressions_24h",
     "item_clicks_24h",
+    "item_impressions_cum",
+    "item_clicks_cum",
     "item_ctr_smoothed",
     "item_age_hours",
 )
@@ -43,6 +45,8 @@ _CATEGORY_FEATURES = ("cat_expanding_ctr",)
 ZERO_FILLED = (
     "item_impressions_24h",
     "item_clicks_24h",
+    "item_impressions_cum",
+    "item_clicks_cum",
     "item_age_hours",
     "user_impressions_24h",
     "user_clicks_24h",
@@ -69,7 +73,8 @@ def asof_join(
     Args:
         labels: Rows to enrich; must contain ``join_key`` and ``label_ts``, and
             must NOT already carry any of the feature columns.
-        features: Time series from D1; must contain ``join_key`` and ``feat_ts``.
+        features: Time series from the feature groups; must contain ``join_key``
+            and ``feat_ts``.
         join_key: Join key, or several. ``"item_id"``, ``"user_id"``, and
             ``["user_id", "category"]``
 

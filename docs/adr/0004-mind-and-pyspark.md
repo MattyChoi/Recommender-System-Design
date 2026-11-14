@@ -27,7 +27,7 @@ Three of ADR 0001's four accepted downsides disappear:
    observed rather than sampled, so calibration stops being semi-fictional and the
    position-bias correction has ground truth to correct against. This was the single
    largest weakness in ADR 0001 and it is gone outright.
-2. **Catalog size clears the ANN threshold.** ~160K articles sits inside the guide's
+2. **Catalog size clears the ANN threshold.** ~160K articles sits inside the usual
    100K–2M target, so the HNSW index is load-bearing rather than decorative. ADR 0002 can
    now be decided on real numbers.
 4. **Overexposure is gone.** MIND is rarely used for portfolio projects, so the dataset no

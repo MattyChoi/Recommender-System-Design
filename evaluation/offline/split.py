@@ -1,4 +1,4 @@
-"""The temporal split protocol (guide 5.6).
+"""The temporal split protocol.
 
 Scope. This carves up ONE split's timeline for ablations. It does not produce
 the project's primary evaluation, which is MIND's official train/dev boundary

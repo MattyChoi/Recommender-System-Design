@@ -93,8 +93,8 @@ def test_every_row_is_assigned_exactly_once(timeline: DataFrame) -> None:
 def test_an_impression_straddling_a_boundary_stays_whole(spark: SparkSession) -> None:
     """The leak the whole design is arranged around, and the reason for _anchored.
 
-    One impression whose rows fall either side of t1. Split row-wise -- as the
-    guide's own train filter does -- and it is torn in half: the model trains
+    One impression whose rows fall either side of t1. Split row-wise -- as a
+    naive train filter does -- and it is torn in half: the model trains
     on some of the items a user was shown and is then asked about the rest,
     having already seen the answer. No metric reveals it, because every metric
     aggregates WITHIN an impression, so the leak hides inside the unit the

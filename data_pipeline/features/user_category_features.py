@@ -1,6 +1,6 @@
 """The user x category cross feature: how this reader behaves in this vertical.
 
-D1 groups features by refresh cadence and gives "cross" its own row --
+Features are grouped by refresh cadence, and "cross" gets its own group --
 user-category affinity multiplied by the item's category is its example. It is
 the first feature here that belongs to neither entity alone: the item timeline
 knows nothing about who is reading, the user timeline nothing about what they

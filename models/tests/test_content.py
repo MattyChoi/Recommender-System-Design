@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import pytest
 from pyspark.sql import DataFrame, SparkSession
 
-from models.retrieval.content import score_content, term_weights, tokenize
+from models.retrieval.baselines.content import score_content, term_weights, tokenize
 
 T0 = datetime(2019, 11, 14, 12, 0, 0)
 

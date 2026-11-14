@@ -10,7 +10,7 @@ authors = [
 license = "MIT"
 dependencies = [
     "boto3==1.43.75",
-    "confluent-kafka>=2.12.0",
+    "confluent-kafka[schemaregistry,protobuf]>=2.12.0",
     "feast[redis]>=0.66.0",
     "huggingface-hub>=1.29.0",
     "ipykernel>=7.3.0",
@@ -22,17 +22,29 @@ dependencies = [
     "pyspark>=4.2.0",
     "pyyaml>=6.0.3",
     "s3fs>=2026.7.0",
-    "torch>=2.6.0",
+    "torch==2.13.0",
     "sentence-transformers>=3.3.0",
     "mlflow>=2.19.0",
     "ray[train]>=2.40.0",
+    "faiss-cpu>=1.9.0",
+    "lightgbm>=4.5.0",
 ]
 
 [project.optional-dependencies]
-# TorchRec ships Linux/CUDA wheels and does not install on macOS. G4 is written
-# against it and gated behind an optional import, so the sharding code is real
-# and reviewable without making `uv sync` fail on this machine. See ADR 0012.
-sharded = ["torchrec>=1.0.0"]
+sharded = ["torchrec==1.8.0", "fbgemm-gpu==1.8.0"]
+# Airflow drags in ~100 packages and a web stack. It is needed to PARSE and test
+# the index DAG, not to train or to serve, so it stays out of the base install.
+orchestration = ["apache-airflow>=3.0"]
+serving = [
+    "grpcio>=1.83.1",
+    # The generated grpc_health.v1 stubs. Needed only to ASSERT the health
+    # contract from Python -- the Kubernetes probes carry that descriptor
+    # compiled in and need nothing installed.
+    "grpcio-health-checking>=1.83.1",
+    "onnx>=1.23.0",
+    "onnxruntime>=1.30.0",
+    "onnxscript>=0.7.2",
+]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]
@@ -64,14 +76,47 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*", "confluent_kafka.*", "s3fs.*", "fsspec.*"]
+module = [
+    "pyarrow.*",
+    "confluent_kafka.*",
+    "grpc_health.*",
+    "s3fs.*",
+    "fsspec.*",
+    "sentence_transformers.*",
+    "matplotlib.*",
+    "torchrec.*",
+    "fbgemm_gpu.*",
+    "faiss.*",
+    "airflow.*",
+    "lightgbm.*",
+    "sklearn.*",
+    "pendulum.*",
+    "lightgbm.*",
+    "sklearn.*",
+    "onnx.*",
+    "onnxruntime.*",
+    "onnxscript.*",
+]
 ignore_missing_imports = true
+
+# DAGs type-check against real Airflow locally but against `Any` in CI, which
+# skips the orchestration group: the decorators are untyped there and the
+# XComArg ignores go unused. Relax exactly those two checks, nothing else.
+[[tool.mypy.overrides]]
+module = ["hourly_index"]
+disallow_untyped_decorators = false
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["common.pb.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "data_pipeline/tests", "evaluation/tests", "models/tests", "indexing/tests"]
 addopts = "-q --strict-markers"
 markers = [
     "slow: long-running tests, deselect with -m 'not slow'",
+    "integration: needs a built image or a running stack; skips unless its env var is set",
 ]
 # feast 0.66 builds its null-timestamp sentinel with np.datetime64("NaT"), whose
 # generic unit numpy 2.5 deprecates; it wants an explicit unit. Third-party and
@@ -82,8 +127,23 @@ filterwarnings = [
     "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning:feast.type_map",
 ]
 
+# A bare `--cov` defers to the source list below, so the set of measured
+# packages lives here rather than in a CI argument string that drifts from it.
+[tool.coverage.run]
+source = ["common", "data_pipeline", "models", "indexing", "evaluation"]
+omit = ["common/pb/*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
 [dependency-groups]
 dev = [
+    "matplotlib>=3.10",
     "grpcio-tools>=1.83.1",
     "mypy>=2.3.1",
     "types-grpcio>=1.83.0",
@@ -94,4 +154,5 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.16.5",
     "pandas-stubs>=3.0.5.260730",
+    "mypy-protobuf>=5.1.0",
 ]

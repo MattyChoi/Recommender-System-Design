@@ -2,10 +2,10 @@
 
 Where the data comes from. The contract tests run against the real corpus when
 it has been built, and against a small committed synthetic corpus otherwise --
-which is what makes them meaningful in CI, where no dataset exists. The guide's
-C4 is explicit that the contracts "belong in CI, on a fixture dataset small
-enough to run in seconds"; tests that merely skip cleanly leave a green badge
-on a repository whose labels could be inverted.
+which is what makes them meaningful in CI, where no dataset exists. The
+contracts belong in CI, on a fixture dataset small enough to run in seconds;
+tests that merely skip cleanly leave a green badge on a repository whose
+labels could be inverted.
 
 The fixture is built THROUGH the real pipeline rather than written as Parquet
 by hand. Hand-built tables cannot catch a parse bug, and catching parse bugs is

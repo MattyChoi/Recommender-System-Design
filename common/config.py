@@ -83,12 +83,18 @@ class StorageConfig(BaseModel):
             compose network would use ``http://minio:9000``.
         gold_prefix: Key prefix under the bucket, mirroring the local layout so
             the two backends are diffable.
+        artifacts_prefix: Key prefix for the published serving artifacts. The
+            dumpers write to disk for a Go server that loads from disk, which
+            holds while the two share a filesystem; a pod has no host to mount
+            from, so ``data_pipeline.serving_artifacts.publish`` versions them under here and
+            an init container pulls the version ``CURRENT`` names.
     """
 
     backend: Literal["local", "s3"] = "s3"
     bucket: str = "recsys"
     endpoint_url: str = "http://localhost:9000"
     gold_prefix: str = "gold"
+    artifacts_prefix: str = "serving-artifacts"
 
 
 class SparkConfig(BaseModel):
@@ -149,12 +155,12 @@ class SessionConfig(BaseModel):
     one sitting.
 
     Nothing in the batch pipeline needs sessions; they exist for the streaming
-    session-window aggregates in Part Q and the recently-viewed retriever in
-    Part I.
+    session-window aggregates in the streaming layer and the recently-viewed
+    retriever.
 
     Attributes:
-        gap_minutes: Inactivity gap that ends a session. Guide 5.2 suggests 30,
-            which is a web-analytics convention rather than a measurement --
+        gap_minutes: Inactivity gap that ends a session. The usual default is
+            30, which is a web-analytics convention rather than a measurement --
             and arguably long for news, where reading is short and bursty.
             Measure the inter-impression gap distribution and set this from the
             elbow rather than inheriting the default.
@@ -188,10 +194,35 @@ class ReplayConfig(BaseModel):
 
     topic: str = "impressions"
     bootstrap_servers: str = "localhost:9092"
+    schema_registry: str = "http://localhost:8081"
     speed: float = 3600.0
     max_lateness_seconds: int = 30
     late_fraction: float = 0.02
     seed: int = 0
+
+
+class ImpressionsConfig(BaseModel):
+    """Serving-side impression log (``serving/go/internal/impressions``).
+
+    The Go server takes these as flags and does not read this file.
+    Attributes:
+        topic: InteractionEvent stream. SHARED with ``replay.topic`` -- the
+            serving producer and the replay harness write the same message to
+            one stream.
+        context_topic: ImpressionContext stream, registered as its own subject
+            (``impression_context-value``).
+        bootstrap_servers: ``localhost:9092`` from the host, ``kafka:29092``
+            from inside the compose network.
+        schema_registry: ``http://localhost:8081`` from the host,
+            ``http://schema-registry:8081`` from inside.
+        buffer: Records held before the async log starts dropping.
+    """
+
+    topic: str = "impressions"
+    context_topic: str = "impression_context"
+    bootstrap_servers: str = "localhost:9092"
+    schema_registry: str = "http://localhost:8081"
+    buffer: int = 4096
 
 
 class FilterConfig(BaseModel):
@@ -218,6 +249,24 @@ class FilterConfig(BaseModel):
     max_impressions_per_user: int = 500
 
 
+class MLflowConfig(BaseModel):
+    """Where training runs are recorded.
+
+    Attributes:
+        enabled: False skips tracking entirely. The server is a compose service,
+            so anything that must run without ``make up`` -- CI, every test --
+            turns it off rather than depending on Docker.
+        tracking_uri: The server's host-visible address. A process inside the
+            compose network would use ``http://mlflow:9001``.
+        experiment: Experiment name. The verify step is
+            ``mlflow runs list --experiment-name two_tower``.
+    """
+
+    enabled: bool = True
+    tracking_uri: str = "http://localhost:5001"
+    experiment: str = "two_tower"
+
+
 class Settings(BaseSettings):
     """Root configuration object, assembled from YAML and the environment.
 
@@ -234,7 +283,9 @@ class Settings(BaseSettings):
         split: Optional; temporal split parameters.
         session: Optional; sessionization parameters.
         replay: Optional; Kafka replay harness parameters.
+        impressions: Optional; serving impression log topics and registry.
         filter: Optional; corpus filters.
+        mlflow: Optional; where training runs are recorded.
     """
 
     model_config = SettingsConfigDict(
@@ -248,7 +299,9 @@ class Settings(BaseSettings):
     split: SplitConfig = SplitConfig()
     session: SessionConfig = SessionConfig()
     replay: ReplayConfig = ReplayConfig()
+    impressions: ImpressionsConfig = ImpressionsConfig()
     filter: FilterConfig = FilterConfig()
+    mlflow: MLflowConfig = MLflowConfig()
 
     def gold_uri(self, name: str, scheme: str = "s3a") -> str:
         """Resolve a gold table to a location the calling client can open.

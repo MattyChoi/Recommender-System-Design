@@ -4,9 +4,10 @@
 
 ## Context
 
-F1 says of the half-life: *"Sweep it and report the curve -- it is a free ablation."* The
-manual's own code defaults to 3 days and notes that "3 days is already long" for news. Swept on
-dev, GAUC is **monotone across a 150× range** and the manual's default is the worst point on it:
+The standard advice on the half-life is *"Sweep it and report the curve -- it is a free
+ablation."* The conventional implementation defaults to 3 days and notes that "3 days is
+already long" for news. Swept on dev, GAUC is **monotone across a 150× range** and that
+default is the worst point on it:
 
 | half-life | minutes | GAUC | NDCG@10 | MRR | headroom used |
 |---|---|---|---|---|---|
@@ -52,7 +53,7 @@ is why `flat_impressions` is unchanged there — and 0.01d is already over the l
 2. **Settle the comparison with a paired test, not point estimates.** `make compare` scores both
    models in one pass and bootstraps the per-user difference.
 3. **`HALF_LIVES` spans the optimum**: `0.02 0.05 0.1 0.25 1 3`.
-4. **`recency` is a baseline in its own right** and stays in `docs/results.md`. It is a real
+4. **`recency` is a baseline in its own right** and stays in `docs/baselines.md`. It is a real
    news baseline, not scaffolding for this measurement.
 
 ## The result
@@ -96,6 +97,6 @@ tool that prevents it.
   and the paired test refuted it.
 - **Use `float128` or log-space accumulation to push the grid lower.** Rejected: it would
   measure to more decimal places the approach to a limit that is now computed exactly.
-- **Keep the manual's 3-day default.** Rejected: it is the worst point on the measured curve,
+- **Keep the 3-day default.** Rejected: it is the worst point on the measured curve,
   0.0159 GAUC below the optimum — larger than the gap between most-popular and decayed
   popularity at 3 days.

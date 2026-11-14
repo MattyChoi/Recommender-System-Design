@@ -1,10 +1,10 @@
-# ADR 0008 — MIND's `history` is a snapshot, so C4's leak test was replaced
+# ADR 0008 — MIND's `history` is a snapshot, so the specified leak test was replaced
 
 **Status:** accepted · **Date:** 2026-09-12
 
 ## Context
 
-The guide's C4 specifies a data contract it calls "THE MIND-specific leak, with no
+A commonly specified data contract calls this "THE MIND-specific leak, with no
 MovieLens equivalent":
 
 > Every item in a user's `history` must have been clicked BEFORE the impression it is
@@ -31,11 +31,11 @@ a rising fraction. 0.4% is the overlap of two nearly disjoint time ranges.
 
 ## Decision
 
-**Delete the literal C4 test and replace it with two invariants that can fail**, both in
+**Delete that literal test and replace it with two invariants that can fail**, both in
 `data_pipeline/tests/test_contracts.py`:
 
 1. **`test_history_is_one_snapshot_per_user`** — a user's `history` string is identical
-   across all of their impressions. This is the assumption every sequence feature in Part H
+   across all of their impressions. This is the assumption every sequence feature
    rests on. If MIND ever ships a running history, this goes red and the code that treats
    history as static must be revisited.
 2. **`test_history_predates_the_log_window`** — the share of in-log clicked pairs that also
@@ -47,8 +47,8 @@ a rising fraction. 0.4% is the overlap of two nearly disjoint time ranges.
 
 ## Consequences — accepted downsides
 
-1. **A departure from the guide that must be explained, not hidden.** Anyone comparing this
-   repo to the guide will find C4's named test missing. That is what this ADR is for.
+1. **A departure from the standard recipe that must be explained, not hidden.** Anyone
+   expecting that named test will find it missing. That is what this ADR is for.
 2. **The 0.05 ceiling is a judgement, not a derivation.** It is an order of magnitude above
    the measured value and an order of magnitude below a contaminated one. If MIND-large
    differs materially, the number needs re-measuring rather than raising.
@@ -56,8 +56,8 @@ a rising fraction. 0.4% is the overlap of two nearly disjoint time ranges.
    future dataset carries per-impression history with timestamps, the original test becomes
    meaningful and should be added back alongside these.
 4. **`history` is stale for later impressions by construction**, and that is now recorded in
-   the test rather than discovered during Part H. A user's last impression reads a profile
-   that knows nothing of the days between.
+   the test rather than discovered during the sequence work. A user's last impression
+   reads a profile that knows nothing of the days between.
 
 ## Alternatives considered
 

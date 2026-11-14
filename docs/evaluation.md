@@ -75,7 +75,7 @@ article's first hour.
 So the reading is: **the cold tail is wide but thin.** Nearly half the catalogue is new,
 and almost none of the traffic is. Popular articles dominate impressions, so cold-start
 handling moves aggregate metrics very little — and matters almost entirely for catalogue
-coverage and the long tail, which is where the re-ranking policy in Part L lives. A
+coverage and the long tail, which is where the re-ranking policy lives. A
 headline NDCG that improves because cold items got better is implausible on these
 numbers; a coverage figure that improves is exactly what to expect.
 
@@ -92,7 +92,7 @@ That is worth remembering before reading the flag as an item property.
 ### The eligibility filter, and why it defaults to off
 
 `temporal_split(min_user_impressions=...)` can restrict the test set to users with enough
-training history to be personalizable — the guide's guard against "measuring cold-start
+training history to be personalizable — the guard against "measuring cold-start
 and calling it personalization." How much it costs depends entirely on the corpus, so it
 is measured rather than assumed:
 
@@ -143,7 +143,7 @@ executable rather than documented.
 | `catalog_coverage` | retrieval — distinct items served / addressable catalogue | — |
 | `novelty` | retrieval — mean `-log2(p)` against **train-only** popularity | empty slate |
 | `intra_list_diversity` | re-ranking — 1 − mean pairwise cosine of **content** vectors | fewer than 2 known vectors |
-| `gini` | monitoring — exposure concentration; Part O watches it rise | no exposure at all |
+| `gini` | monitoring — exposure concentration; we watch it rise | no exposure at all |
 
 Report GAUC prominently: ranking only ever happens within a request, so a global AUC
 rewards cross-request separability no user ever experiences.

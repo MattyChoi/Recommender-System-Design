@@ -16,15 +16,16 @@ from it:
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow.parquet as pq
+from google.protobuf import json_format
 
 from common.config import load_settings
+from common.pb import events_pb2
 from common.utils import SPLITS
 from data_pipeline.replay.pacing import LatenessInjector, drift_seconds
 from data_pipeline.replay.records import BRONZE_COLUMNS, event_ts_ms, to_record
@@ -40,7 +41,7 @@ _FLUSH_TIMEOUT_S = 30.0
 class Sink(Protocol):
     """Where records go. Narrow on purpose, so tests can substitute a list."""
 
-    def send(self, key: str, value: dict[str, Any]) -> None: ...
+    def send(self, key: str, value: events_pb2.InteractionEvent) -> None: ...
 
     def close(self) -> None: ...
 
@@ -51,8 +52,16 @@ class DryRunSink:
     def __init__(self) -> None:
         self.count = 0
 
-    def send(self, key: str, value: dict[str, Any]) -> None:
-        print(f"{key}\t{json.dumps(value)}")
+    def send(self, key: str, value: events_pb2.InteractionEvent) -> None:
+        print(
+            f"{key}\t"
+            + json_format.MessageToJson(
+                value,
+                preserving_proto_field_name=True,
+                always_print_fields_with_no_presence=True,
+                indent=None,
+            )
+        )
         self.count += 1
 
     def close(self) -> None:
@@ -60,15 +69,13 @@ class DryRunSink:
 
 
 class KafkaSink:
-    """A thin wrapper over confluent-kafka's Producer.
+    """A thin wrapper over confluent-kafka's Producer and the protobuf serde."""
 
-    The import is deferred to construction so ``--dry-run`` works on a machine
-    where the client is not installed -- which is the case in CI, where the
-    tests exercise the pure logic and never open a socket.
-    """
-
-    def __init__(self, bootstrap_servers: str, topic: str) -> None:
+    def __init__(self, bootstrap_servers: str, topic: str, registry_url: str) -> None:
         from confluent_kafka import Producer
+        from confluent_kafka.schema_registry import SchemaRegistryClient
+        from confluent_kafka.schema_registry.protobuf import ProtobufSerializer
+        from confluent_kafka.serialization import MessageField, SerializationContext
 
         self.topic = topic
         # Record number of failed records and the first failure
@@ -77,15 +84,26 @@ class KafkaSink:
         # linger.ms waits to batch records; without it, sends records one at a time
         self._producer = Producer({"bootstrap.servers": bootstrap_servers, "linger.ms": 20})
 
-    def send(self, key: str, value: dict[str, Any]) -> None:
+        self._serialize = ProtobufSerializer(
+            events_pb2.InteractionEvent,  # pyright: ignore[reportCallIssue]
+            SchemaRegistryClient({"url": registry_url}),
+            {
+                "auto.register.schemas": False,
+                "use.latest.version": True,
+            },
+        )
+        self._ctx = SerializationContext(topic, MessageField.VALUE)
+
+    def send(self, key: str, value: events_pb2.InteractionEvent) -> None:
         # Kafka guarantees order WITHIN a partition only, and the partition is
         # chosen by hashing the key. Keying on user_id is what keeps one user's
-        # events in sequence
+        # events in sequence -- and it has to agree with the Go producer, which
+        # writes the same topic.
         self._producer.produce(
             self.topic,
             key=key.encode(),
-            value=json.dumps(value).encode(),
-            timestamp=value["event_ts_ms"],
+            value=self._serialize(value, self._ctx),
+            timestamp=value.event_ts_ms,
             on_delivery=self._on_delivery,
         )
         # Serve delivery callbacks and apply backpressure. Skip this and the
@@ -173,7 +191,9 @@ def replay(
         if pause > 0:
             time.sleep(pause)
         record = to_record(row, ingest_ms)
-        sink.send(record["user_id"], record)
+        # Attribute, not record["user_id"]. This is the only line in replay()
+        # that changes, which is the point of to_record owning the mapping.
+        sink.send(record.user_id, record)
         sent += 1
 
     for row in rows:
@@ -203,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--split", choices=SPLITS, default="train")
     parser.add_argument("--topic", default=cfg.topic)
     parser.add_argument("--bootstrap-servers", default=cfg.bootstrap_servers)
+    parser.add_argument("--schema-registry", default=cfg.schema_registry)
     parser.add_argument(
         "--speed",
         type=float,
@@ -222,7 +243,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: bronze not built for {args.split!r}. Run `make bronze` first.")
         return 1
 
-    sink: Sink = DryRunSink() if args.dry_run else KafkaSink(args.bootstrap_servers, args.topic)
+    sink: Sink = (
+        DryRunSink()
+        if args.dry_run
+        else KafkaSink(args.bootstrap_servers, args.topic, args.schema_registry)
+    )
     injector = LatenessInjector(
         max_lateness_ms=args.max_lateness_seconds * 1000,
         fraction=args.late_fraction,

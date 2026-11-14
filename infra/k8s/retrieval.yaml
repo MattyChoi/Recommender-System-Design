@@ -1,0 +1,140 @@
+# The retrieval sidecar: user tower + FAISS index, CPU only.
+#
+# ONE process per pod (--processes 1), scaled by replicas, rather than the
+# four strided ports compose runs. The in-image supervisor never restarts a
+# dead child, so under compose a crash quietly loses a quarter of capacity;
+# here the kubelet restarts the container, and the Service needs one port.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recsys-retrieval
+  labels:
+    app.kubernetes.io/name: recsys-retrieval
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: recsys-retrieval
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: recsys-retrieval
+    spec:
+      # The server's own drain grace is 10s; this must exceed it.
+      terminationGracePeriodSeconds: 20
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi # tower ~220MB, item table ~400MB, index ~50MB
+      initContainers:
+        # Same shape as recsys-api's: resolve CURRENT once, pull that version
+        # whole. Only the retrieval/ slice, so the pod never sees Triton's model
+        # or Feast's registry.
+        - name: pull-artifacts
+          # Built from source and side-loaded: make minio-image-kind
+          image: recsys/minio:RELEASE.2025-09-07T16-13-09Z
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              mc alias set store "$ENDPOINT" "$ACCESS_KEY" "$SECRET_KEY" >/dev/null
+              version="$(mc cat "store/$BUCKET/$PREFIX/CURRENT")"
+              test -n "$version" || { echo "no backend bundle; run 'make kind-push'" >&2; exit 1; }
+              echo "pulling $version/retrieval"
+              mc mirror --overwrite "store/$BUCKET/$PREFIX/$version/retrieval" /data
+              ls -lR /data
+          env:
+            - name: ENDPOINT
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: endpoint}
+            - name: BUCKET
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: bucket}
+            - name: PREFIX
+              valueFrom:
+                configMapKeyRef: {name: recsys-artifacts, key: backend_prefix}
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: accesskey}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: recsys-minio, key: secretkey}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests: {cpu: "100m", memory: "64Mi"}
+            limits: {cpu: "1", memory: "256Mi"}
+      containers:
+        - name: retrieval
+          image: recsys/sidecars:dev
+          # kind has no registry; the image is side-loaded by make kind-load.
+          imagePullPolicy: IfNotPresent
+          # Paths into the pulled bundle. The tower is published under a FIXED
+          # name so this manifest does not change when the checkpoint does.
+          command:
+            - python
+            - -m
+            - serving.retrieval
+            - --processes=1
+            - --port=15052
+            - --checkpoint=/data/tower.pt
+            - --artifacts=/data/index
+            - --pointer=/data/index/CURRENT
+          env:
+            # Bare host:port, NOT the --redis-url flag: cache.py wraps this as
+            # redis://<it>/2, so the db number stays owned by the code that
+            # allocates them (Feast 0, seen-lists 1, this cache 2).
+            - name: REDIS_URL
+              value: recsys-redis:6379
+            # load_item_tables reads <paths.gold>/item_content/part-00000.parquet.
+            - name: RECSYS_PATHS__GOLD
+              value: /data/gold
+          ports:
+            - name: grpc
+              containerPort: 15052
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+          # grpc.health.v1, registered by serving/health.py: SERVING once the
+          # port is bound, NOT_SERVING from the first moment of a drain.
+          startupProbe:
+            grpc: {port: 15052}
+            periodSeconds: 5
+            failureThreshold: 60 # 300s: loading the tower and item table is slow
+          readinessProbe:
+            grpc: {port: 15052}
+            periodSeconds: 5
+          livenessProbe:
+            grpc: {port: 15052}
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            # torch and FAISS are pinned to one thread each (server.py), and
+            # concurrency comes from the gRPC pool -- so one core is the floor.
+            requests: {cpu: "500m", memory: "1536Mi"}
+            limits: {cpu: "2", memory: "3Gi"}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532 # the image's `sidecar` user
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recsys-retrieval
+  labels:
+    app.kubernetes.io/name: recsys-retrieval
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: recsys-retrieval
+  ports:
+    - name: grpc
+      port: 15052
+      targetPort: grpc

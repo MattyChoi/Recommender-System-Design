@@ -9,7 +9,7 @@ from data_pipeline.features.ctr import _MIN_PRIOR_IMPRESSIONS, category_prior, s
 
 
 def item_hourly_features(events: DataFrame) -> DataFrame:
-    """One row per (item, hour) with cumulative counts up to that hour."""
+    """One row per (item, hour): rolling 24h counts, cumulative counts, and age."""
 
     # For each item and hour, aggregate the number of impressions and clicks in that hour.
     hourly = (
@@ -27,11 +27,18 @@ def item_hourly_features(events: DataFrame) -> DataFrame:
         .orderBy(f.col("feature_ts").cast("long"))
         .rangeBetween(-24 * 3600, 0)
     )
+    cumulative = (
+        Window.partitionBy("item_id")
+        .orderBy(f.col("feature_ts").cast("long"))
+        .rangeBetween(Window.unboundedPreceding, 0)
+    )
     first_seen = Window.partitionBy("item_id")
 
     return (
         hourly.withColumn("item_impressions_24h", f.sum("item_impressions_1h").over(w24))
         .withColumn("item_clicks_24h", f.sum("item_clicks_1h").over(w24))
+        .withColumn("item_impressions_cum", f.sum("item_impressions_1h").over(cumulative))
+        .withColumn("item_clicks_cum", f.sum("item_clicks_1h").over(cumulative))
         .withColumn("item_first_seen", f.min("feature_ts").over(first_seen))
         .withColumn(
             "item_age_hours",

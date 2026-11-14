@@ -1,0 +1,113 @@
+# OpenTelemetry collector: where the sampling decision actually gets made.
+#
+# The orchestrator head-samples at `-trace-ratio`, which decides at the ROOT of
+# the trace -- before the ranker has timed out, before the feature gateway has
+# failed, before anything worth looking at has happened. Below 1.0 that drops
+# degraded traces at exactly the same rate as healthy ones, and degraded traces
+# are rare by construction. A 1% head sample of a service with a 2% ranker
+# timeout rate captures almost none of the 2%.
+#
+# Tail sampling inverts that: the collector buffers each trace until it ends,
+# then decides using what the trace CONTAINS. The orchestrator records
+# `recsys.degraded`, `recsys.used_fallback` and `recsys.incomplete_rows` as
+# span attributes specifically so these policies have something to key on --
+# see internal/tracing.
+#
+# Run the orchestrator at `-trace-ratio 1.0` and let this file do the cutting.
+# Head-sampling first and tail-sampling second throws the traces away before
+# the policies ever see them.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # ⚠️ ORDER MATTERS: tail_sampling must come before batch.
+  #
+  # tail_sampling groups spans by trace id and holds them until the trace is
+  # complete. Batching first interleaves spans from different traces into one
+  # payload, and the sampler then sees fragments rather than traces.
+  tail_sampling:
+    # How long to hold a trace before deciding. The end-to-end budget is 90ms
+    # and the request deadline is hard, so 10s is far past any real trace and
+    # short enough that the buffer stays small.
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 500
+
+    policies:
+      # --- Keep everything that went wrong -------------------------------
+      #
+      # These are the reason the whole pipeline reports degradation as
+      # attributes rather than only as counters. The counter says HOW OFTEN;
+      # the trace says what else was happening at the time, which is the
+      # question that actually gets asked.
+
+      - name: degraded
+        # A non-empty `recsys.degraded` means a named dependency failed and
+        # the request still returned 200 with a full slate.
+        type: string_attribute
+        string_attribute:
+          key: recsys.degraded
+          values: [".+"]
+          enabled_regex_matching: true
+
+      - name: fallback
+        # The popularity slate: retrieval produced nothing at all.
+        type: boolean_attribute
+        boolean_attribute: {key: recsys.used_fallback, value: true}
+
+      - name: rung-two
+        # Candidates scored with zero-filled model columns, i.e. the retrieval
+        # sidecar was unreachable and exact search ran in-process.
+        type: numeric_attribute
+        numeric_attribute: {key: recsys.incomplete_rows, min_value: 1, max_value: 9223372036854775807}
+
+      - name: errors
+        type: status_code
+        status_code: {status_codes: [ERROR]}
+
+      - name: slow
+        # Past the budget in docs/design.md. Kept regardless of whether
+        # anything reported itself degraded, because "everything succeeded and
+        # it was still slow" is its own question.
+        type: latency
+        latency: {threshold_ms: 90}
+
+      # --- And a floor of ordinary traffic --------------------------------
+      #
+      # Without this the only traces retained are failures, and a waterfall of
+      # a broken request is unreadable with nothing healthy to compare it to.
+      - name: baseline
+        type: probabilistic
+        probabilistic: {sampling_percentage: 1}
+
+  batch:
+    timeout: 5s
+
+exporters:
+  # Stdout by default: this project has no trace backend running, and a
+  # collector pointing at a Tempo or Jaeger that does not exist fails to start
+  # and takes `make up` with it. Swap this for otlp/tempo when one exists.
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    metrics:
+      # Scraped by prometheus. A tracing pipeline that has silently stopped
+      # accepting spans is otherwise visible only as an ABSENCE of traces,
+      # which looks identical to a quiet service.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling, batch]
+      exporters: [debug]

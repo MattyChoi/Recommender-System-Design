@@ -1,0 +1,512 @@
+[
+  {
+    "category": [
+      3,
+      4,
+      5
+    ],
+    "content_similarity": [
+      0.31,
+      0.22,
+      0.13
+    ],
+    "expected": [
+      [
+        0.9100000262260437,
+        0.0,
+        4.0,
+        2.0,
+        500.0,
+        7.0,
+        0.3100000023841858,
+        12.0,
+        0.0,
+        3.0,
+        30.0
+      ],
+      [
+        0.8199999928474426,
+        1.0,
+        5.0,
+        2.0,
+        600.0,
+        0.0,
+        0.2199999988079071,
+        12.0,
+        1.0,
+        4.0,
+        40.0
+      ],
+      [
+        0.7300000190734863,
+        2.0,
+        6.0,
+        2.0,
+        700.0,
+        3.0,
+        0.12999999523162842,
+        12.0,
+        0.0,
+        5.0,
+        50.0
+      ]
+    ],
+    "history_length": [
+      12,
+      12,
+      12
+    ],
+    "name": "both sources present, neither absent",
+    "names": [
+      "retrieval_score",
+      "two_tower_rank",
+      "trending_rank",
+      "n_sources",
+      "prior_clicks",
+      "train_clicks",
+      "content_similarity",
+      "history_length",
+      "is_cold_item",
+      "category_idx",
+      "subcategory_idx"
+    ],
+    "prior_clicks": [
+      500,
+      600,
+      700
+    ],
+    "ranks": [
+      {
+        "name": "two_tower",
+        "ranks": [
+          0,
+          1,
+          2
+        ]
+      },
+      {
+        "name": "trending",
+        "ranks": [
+          4,
+          5,
+          6
+        ]
+      }
+    ],
+    "retrieval_score": [
+      0.91,
+      0.82,
+      0.73
+    ],
+    "subcategory": [
+      30,
+      40,
+      50
+    ],
+    "train_clicks": [
+      7,
+      0,
+      3
+    ]
+  },
+  {
+    "category": [
+      1,
+      1
+    ],
+    "content_similarity": [
+      0.4,
+      0.2
+    ],
+    "expected": [
+      [
+        0.8999999761581421,
+        0.0,
+        2.0,
+        2.0,
+        10.0,
+        1.0,
+        0.4000000059604645,
+        3.0,
+        0.0,
+        1.0,
+        10.0
+      ],
+      [
+        0.5,
+        1.0,
+        10000.0,
+        1.0,
+        20.0,
+        2.0,
+        0.20000000298023224,
+        3.0,
+        0.0,
+        1.0,
+        11.0
+      ]
+    ],
+    "history_length": [
+      3,
+      3
+    ],
+    "name": "trending absent for one candidate",
+    "names": [
+      "retrieval_score",
+      "two_tower_rank",
+      "trending_rank",
+      "n_sources",
+      "prior_clicks",
+      "train_clicks",
+      "content_similarity",
+      "history_length",
+      "is_cold_item",
+      "category_idx",
+      "subcategory_idx"
+    ],
+    "prior_clicks": [
+      10,
+      20
+    ],
+    "ranks": [
+      {
+        "name": "two_tower",
+        "ranks": [
+          0,
+          1
+        ]
+      },
+      {
+        "name": "trending",
+        "ranks": [
+          2,
+          10000
+        ]
+      }
+    ],
+    "retrieval_score": [
+      0.9,
+      0.5
+    ],
+    "subcategory": [
+      10,
+      11
+    ],
+    "train_clicks": [
+      1,
+      2
+    ]
+  },
+  {
+    "category": [
+      1,
+      1
+    ],
+    "content_similarity": [
+      0.4,
+      0.2
+    ],
+    "expected": [
+      [
+        0.8999999761581421,
+        0.0,
+        10000.0,
+        1.0,
+        10.0,
+        1.0,
+        0.4000000059604645,
+        3.0,
+        0.0,
+        1.0,
+        10.0
+      ],
+      [
+        0.5,
+        1.0,
+        10000.0,
+        1.0,
+        20.0,
+        2.0,
+        0.20000000298023224,
+        3.0,
+        0.0,
+        1.0,
+        11.0
+      ]
+    ],
+    "history_length": [
+      3,
+      3
+    ],
+    "name": "the trending source did not run at all",
+    "names": [
+      "retrieval_score",
+      "two_tower_rank",
+      "trending_rank",
+      "n_sources",
+      "prior_clicks",
+      "train_clicks",
+      "content_similarity",
+      "history_length",
+      "is_cold_item",
+      "category_idx",
+      "subcategory_idx"
+    ],
+    "prior_clicks": [
+      10,
+      20
+    ],
+    "ranks": [
+      {
+        "name": "two_tower",
+        "ranks": [
+          0,
+          1
+        ]
+      }
+    ],
+    "retrieval_score": [
+      0.9,
+      0.5
+    ],
+    "subcategory": [
+      10,
+      11
+    ],
+    "train_clicks": [
+      1,
+      2
+    ]
+  },
+  {
+    "category": [
+      1,
+      2
+    ],
+    "content_similarity": [
+      0.4,
+      0.0
+    ],
+    "expected": [
+      [
+        0.8999999761581421,
+        0.0,
+        1.0,
+        2.0,
+        10.0,
+        1.0,
+        0.4000000059604645,
+        0.0,
+        0.0,
+        1.0,
+        10.0
+      ],
+      [
+        0.10000000149011612,
+        10000.0,
+        10000.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        2.0,
+        20.0
+      ]
+    ],
+    "history_length": [
+      0,
+      0
+    ],
+    "name": "a candidate no source proposed",
+    "names": [
+      "retrieval_score",
+      "two_tower_rank",
+      "trending_rank",
+      "n_sources",
+      "prior_clicks",
+      "train_clicks",
+      "content_similarity",
+      "history_length",
+      "is_cold_item",
+      "category_idx",
+      "subcategory_idx"
+    ],
+    "prior_clicks": [
+      10,
+      0
+    ],
+    "ranks": [
+      {
+        "name": "two_tower",
+        "ranks": [
+          0,
+          10000
+        ]
+      },
+      {
+        "name": "trending",
+        "ranks": [
+          1,
+          10000
+        ]
+      }
+    ],
+    "retrieval_score": [
+      0.9,
+      0.1
+    ],
+    "subcategory": [
+      10,
+      20
+    ],
+    "train_clicks": [
+      1,
+      0
+    ]
+  },
+  {
+    "category": [
+      7,
+      7
+    ],
+    "content_similarity": [
+      0.1,
+      0.1
+    ],
+    "expected": [
+      [
+        0.5,
+        0.0,
+        10000.0,
+        1.0,
+        900.0,
+        0.0,
+        0.10000000149011612,
+        50.0,
+        1.0,
+        7.0,
+        70.0
+      ],
+      [
+        0.5,
+        1.0,
+        10000.0,
+        1.0,
+        0.0,
+        4.0,
+        0.10000000149011612,
+        50.0,
+        0.0,
+        7.0,
+        71.0
+      ]
+    ],
+    "history_length": [
+      50,
+      50
+    ],
+    "name": "cold and warm items side by side",
+    "names": [
+      "retrieval_score",
+      "two_tower_rank",
+      "trending_rank",
+      "n_sources",
+      "prior_clicks",
+      "train_clicks",
+      "content_similarity",
+      "history_length",
+      "is_cold_item",
+      "category_idx",
+      "subcategory_idx"
+    ],
+    "prior_clicks": [
+      900,
+      0
+    ],
+    "ranks": [
+      {
+        "name": "two_tower",
+        "ranks": [
+          0,
+          1
+        ]
+      }
+    ],
+    "retrieval_score": [
+      0.5,
+      0.5
+    ],
+    "subcategory": [
+      70,
+      71
+    ],
+    "train_clicks": [
+      0,
+      4
+    ]
+  },
+  {
+    "category": [
+      2,
+      2
+    ],
+    "content_similarity": [
+      0.2,
+      0.3
+    ],
+    "expected": [
+      [
+        1.0,
+        0.6000000238418579,
+        1.0
+      ],
+      [
+        0.0,
+        0.4000000059604645,
+        0.0
+      ]
+    ],
+    "features": [
+      "is_cold_item",
+      "retrieval_score",
+      "n_sources"
+    ],
+    "history_length": [
+      8,
+      8
+    ],
+    "name": "a three-column ablation arm",
+    "names": [
+      "is_cold_item",
+      "retrieval_score",
+      "n_sources"
+    ],
+    "prior_clicks": [
+      5,
+      6
+    ],
+    "ranks": [
+      {
+        "name": "two_tower",
+        "ranks": [
+          0,
+          10000
+        ]
+      }
+    ],
+    "retrieval_score": [
+      0.6,
+      0.4
+    ],
+    "subcategory": [
+      21,
+      22
+    ],
+    "train_clicks": [
+      0,
+      9
+    ]
+  }
+]

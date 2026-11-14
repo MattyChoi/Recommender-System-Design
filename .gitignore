@@ -21,15 +21,22 @@ htmlcov/
 .idea/
 .vscode/
 
+# Compiled orchestrator (make server-build)
+serving/go/bin/
+
 # Data and artifacts (never commit these)
 data/
 artifacts/
 *.parquet
 *.pt
 *.onnx
+*.onnx.data
 *.faiss
 mlruns/
 mlartifacts/
+evaluation/results/retrieval
+evaluation/results/sources
+evaluation/results/ranking
 
 # Secrets and local config
 .env
@@ -38,9 +45,14 @@ mlartifacts/
 
 # Scratch that is genuinely personal and should not ship
 outline.md
+commands.md
 logs.txt
 notebooks/*
 .ipynb_checkpoints/
+scripts/*
+!scripts/writeups/
+!scripts/__init__.py
+/tmp
 
 # defer tracking for now
 personal_README.md

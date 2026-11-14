@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, dev-orch]
   pull_request:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
           enable-cache: true
 
       - name: Install Python and dependencies
-        run: uv sync --dev
+        run: uv sync --dev --extra serving
 
       - name: Lint
         run: uv run ruff check --output-format=github .
@@ -36,8 +36,15 @@ jobs:
 
       - name: Notebooks are not importable
         run: |
-          ! rg -q "^\s*(from|import) notebooks" --type py . \
-            || { echo "notebooks/ must not be imported -- move the logic into a package"; exit 1; }
+          set +e
+          git grep -qE '^[[:space:]]*(from|import)[[:space:]]+notebooks' -- '*.py'
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "notebooks/ must not be imported -- move the logic into a package"; exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "git grep failed (exit $rc)"; exit "$rc"
+          fi
 
       - name: Typecheck
         run: uv run mypy .
@@ -46,7 +53,7 @@ jobs:
         # Redundant with the fixture, which pins it too but writing for visibility
         env:
           RECSYS_STORAGE__BACKEND: local
-        run: uv run pytest
+        run: make test-cov
 
       - name: Pre-commit hooks
         run: uv run pre-commit run --all-files --show-diff-on-failure
@@ -63,9 +70,120 @@ jobs:
           cache-dependency-path: serving/go/go.sum
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned, not `latest`: a new release adds checks, and an unchanged
+          # tree should not go red overnight. Match it locally:
+          #   curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.15.0
+          version: v2.15.0
           working-directory: serving/go
       - run: go build ./...
         working-directory: serving/go
       - run: go test ./...
         working-directory: serving/go
+
+  # The orchestrator image, run with every backend deliberately absent. This is
+  # the only part of the stack that fits a hosted runner: triton reserves an
+  # NVIDIA device and its image alone would not fit the disk. The ranked-slate
+  # smoke needs artifacts and a GPU, so it lives on the self-hosted runner.
+  smoke:
+    name: orchestrator image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [go]          # don't spend a build on code that does not compile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/serving.Dockerfile
+          tags: recsys/serving:ci
+          load: true          # into the local daemon, not a registry
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --dev --extra serving
+
+      # Catches a broken compose file here rather than on a developer's machine.
+      # Both sidecars declare .env as not required, so this parses on a clone
+      # that has no .env -- which is every clone, since .env is gitignored.
+      - name: Compose file is valid
+        run: docker compose config -q
+
+      - name: Smoke
+        env:
+          RECSYS_SMOKE_IMAGE: recsys/serving:ci
+        run: uv run pytest -m integration tests/test_serving_smoke.py
+
+  # Stage 8. ON MAIN ONLY, and only behind the three jobs above.
+  images:
+    name: build and push images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [python, go, smoke]
+    permissions:
+      contents: read
+      packages: write   # narrower than the workflow default: only this job publishes
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # The per-run token, not a PAT. It expires with the job and is scoped
+          # by the permissions block above.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two tags: the commit SHA, immutable and the only one worth deploying,
+      # and the branch name as a moving pointer for humans. Deliberately NOT
+      # `latest` -- a tag that changes under a running cluster turns a rollback
+      # into a guess about which build was actually serving.
+      #
+      # metadata-action also lowercases the image name, which ghcr requires and
+      # the owner's name does not satisfy.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/recsys-serving
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/serving.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Reads the cache the smoke job just wrote, so this is a re-tag and a
+          # push rather than a second compile. No cache-to: smoke owns writing it.
+          cache-from: type=gha
+
+      # NOT the sidecar image, and the reason is the CACHE, not the disk.
+      #
+      # Disk is surmountable: a free-disk-space step reclaims tens of GB on a
+      # hosted runner, and `push` without `load` streams layers to the registry
+      # rather than materialising a tarball. The binding limit is the Actions
+      # cache: 10GB per REPOSITORY. `cache-to: type=gha,mode=max` on a 4.68GB
+      # image blows past it, and eviction is LRU across the whole repo -- so the
+      # sidecar's cache would evict the serving image's above, making the fast
+      # build slow without reliably making the slow build fast.
+      #
+      # No cache means a cold ~4.7GB wheel install on every push to main, for an
+      # image whose inputs (pyproject.toml, uv.lock, sidecars.Dockerfile, the
+      # Python packages) change far more rarely than the Go orchestrator does.
+      # Republishing a byte-identical image for ten minutes a commit is the
+      # waste, independent of whether it fits.
+      #
+      # If this is picked up: gate it on those paths (dorny/paths-filter, or a
+      # second workflow with a `paths:` filter) so it builds only when something
+      # that affects it changed. The dependency split -- [project] dependencies
+      # is the TRAINING set and serving inherits all of it -- would take the
+      # image to roughly 2GB and make the question easier either way.
