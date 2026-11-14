@@ -99,21 +99,45 @@ def group_slates(
     return slates
 
 
+def slate_aucs(
+    slates: Mapping[Any, tuple[list[int], list[float]]],
+) -> tuple[list[float], list[float]]:
+    """Per-slate AUC and GAUC weight, one entry per slate, in ``slates`` order.
+
+    EVERY slate gets an entry, the undefined ones included as NaN, so the
+    output stays index-aligned with anything else built by iterating the same
+    mapping -- the slate-to-user list in ``report._slice_report`` above all.
+    Dropping them here would silently shift every later row onto the wrong
+    user. NaN is then skipped downstream (``per_user_means``, and
+    :func:`gauc_from_slates` below), never scored as zero.
+
+    Args:
+        slates: Output of :func:`group_slates`.
+
+    Returns:
+        ``(auc, weight)``: AUC per slate (NaN for all-click or no-click) and
+        its size, the weight :func:`gauc` uses.
+    """
+    auc = [impression_auc(labels, scores) for labels, scores in slates.values()]
+    weight = [float(len(labels)) for labels, _ in slates.values()]
+    return auc, weight
+
+
 def gauc_from_slates(
     slates: Mapping[Any, tuple[list[int], list[float]]],
 ) -> Aggregate:
     """GAUC over rows already bucketed by :func:`group_slates`.
 
     Separate from :func:`gauc` so a caller computing several slate metrics pays
-    for the grouping once rather than once per metric.
+    for the grouping once rather than once per metric. Built on
+    :func:`slate_aucs` so the card's GAUC and the per-slate rows the gate pairs
+    are one computation, not two that could drift.
     """
     total, total_weight, scored, skipped = 0.0, 0.0, 0, 0
-    for slate_labels, slate_scores in slates.values():
-        auc = impression_auc(slate_labels, slate_scores)
+    for auc, weight in zip(*slate_aucs(slates), strict=True):
         if math.isnan(auc):
             skipped += 1
             continue
-        weight = float(len(slate_labels))
         total += auc * weight
         total_weight += weight
         scored += 1

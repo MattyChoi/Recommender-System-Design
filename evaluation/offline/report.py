@@ -14,13 +14,14 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
 
-from evaluation.offline.metrics import catalog_coverage, group_slates, ndcg_at_k
+from evaluation.offline.metrics import catalog_coverage, group_slates, ndcg_at_k, slate_aucs
 from evaluation.offline.protocols import evaluate_ranking
+from evaluation.offline.slates import SlateRows
 from evaluation.offline.stats import (
     bootstrap_ci,
     bootstrap_ci_by_impression,
@@ -125,9 +126,15 @@ def _slice_report(
     k: int,
     item_ids: np.ndarray | None = None,
     catalogue_size: int | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], SlateRows]:
     """Every number reported for one cohort, including how much of the cohort
-    the model could discriminate within at all."""
+    the model could discriminate within at all.
+
+    Returns the per-slate AUCs alongside the numbers, rather than a second
+    function recomputing them: the slate-to-user mapping below is the thing
+    worth not having twice, since two copies of it is how a paired test ends up
+    pairing the wrong rows.
+    """
     ranking = evaluate_ranking(scores.tolist(), labels.tolist(), impression_ids.tolist(), k=k)
 
     by_slate = group_slates(scores, labels, impression_ids)
@@ -138,6 +145,11 @@ def _slice_report(
 
     slate_ndcg = [ndcg_at_k(lab, sc, k) for lab, sc in by_slate.values()]
     slate_users = [slate_owner[slate] for slate in by_slate]
+
+    # Same dict, same order, so auc[i], slate_users[i] and weight[i] are one
+    # slate. group_slates buckets in first-seen order and nothing re-sorts it.
+    slate_auc, slate_weight = slate_aucs(by_slate)
+    rows = SlateRows(auc=slate_auc, users=slate_users, weight=slate_weight)
 
     # A slate whose scores are all equal contributes exactly 0.5 to GAUC no
     # matter what those scores are: every comparison is a tie, and a tie counts
@@ -210,10 +222,29 @@ def _slice_report(
         report["distinct_items_served"] = len(set(served))
         report["catalogue_size"] = catalogue_size
 
-    return report
+    return report, rows
 
 
-def report_card(
+class Card(NamedTuple):
+    """A report card and the per-slate rows behind it.
+
+    Two files, one scoring pass. The report is what a human reads and what
+    ``docs/baselines.md`` quotes; the rows are what the quality gate pairs. They
+    are returned together because scoring twice to get both is how they drift.
+
+    Attributes:
+        report: The JSON-serialisable card.
+        slates: Cohort name to its per-slate AUCs. Empty cohorts are ABSENT
+            rather than present and empty -- a cohort with no slates has
+            nothing to pair, and the gate reads a missing cohort as
+            unavailable rather than as agreement.
+    """
+
+    report: dict[str, Any]
+    slates: dict[str, SlateRows]
+
+
+def card_with_slates(
     model_name: str,
     scores: npt.ArrayLike,
     labels: npt.ArrayLike,
@@ -224,8 +255,8 @@ def report_card(
     k: int = 10,
     item_ids: npt.ArrayLike | None = None,
     catalogue_size: int | None = None,
-) -> dict[str, Any]:
-    """Score one model and return the comparable record of it.
+) -> Card:
+    """Score one model and return the comparable record of it, plus its rows.
 
     Args:
         model_name: Identifies the run in ``evaluation/results/``.
@@ -243,7 +274,7 @@ def report_card(
             Required alongside ``item_ids``; without it there is no denominator.
 
     Returns:
-        A JSON-serialisable report card.
+        A :class:`Card`.
     """
     scores_arr = np.asarray(scores, dtype=float)
     labels_arr = np.asarray(labels, dtype=int)
@@ -261,12 +292,13 @@ def report_card(
 
     items_arr = None if item_ids is None else np.asarray(item_ids, dtype=object)
 
+    slates: dict[str, SlateRows] = {}
     for name, mask in cohorts.items():
         selector = np.asarray(mask, dtype=bool)
         if not selector.any():
             card["cohorts"][name] = {"rows": 0}
             continue
-        card["cohorts"][name] = _slice_report(
+        card["cohorts"][name], slates[name] = _slice_report(
             scores_arr[selector],
             labels_arr[selector],
             impressions_arr[selector],
@@ -276,4 +308,36 @@ def report_card(
             catalogue_size=catalogue_size,
         )
 
-    return card
+    return Card(report=card, slates=slates)
+
+
+def report_card(
+    model_name: str,
+    scores: npt.ArrayLike,
+    labels: npt.ArrayLike,
+    impression_ids: npt.ArrayLike,
+    user_ids: npt.ArrayLike,
+    cohorts: Mapping[str, npt.ArrayLike],
+    split: str = "dev",
+    k: int = 10,
+    item_ids: npt.ArrayLike | None = None,
+    catalogue_size: int | None = None,
+) -> dict[str, Any]:
+    """The card alone, for callers that do not pair.
+
+    See :func:`card_with_slates` for the arguments. This wrapper exists so that
+    adding the per-slate rows did not change the signature every existing
+    caller was written against.
+    """
+    return card_with_slates(
+        model_name,
+        scores,
+        labels,
+        impression_ids,
+        user_ids,
+        cohorts,
+        split=split,
+        k=k,
+        item_ids=item_ids,
+        catalogue_size=catalogue_size,
+    ).report
