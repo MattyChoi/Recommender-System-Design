@@ -23,12 +23,21 @@ test:  ## pytest
 ### Go lints, fmts, tests, and compile commands
 GO ?= go
 GO_DIR = serving/go
+GOLANGCI ?= golangci-lint
+GOLANGCI_VERSION := $(shell sed -n 's/^ *version: *\(v[0-9.]*\).*/\1/p' .github/workflows/ci.yml | head -1)
 
 go-lint:
 	@cd $(GO_DIR) && out=$$("$$($(GO) env GOROOT)/bin/gofmt" -l .) && \
 	  { [ -z "$$out" ] || { echo "not gofmt-clean:"; echo "$$out"; \
 	    echo "fix with: make go-fmt"; exit 1; }; }
 	cd $(GO_DIR) && $(GO) vet ./...
+	@# The same linter CI runs. The version is read from ci.yml, so the pin
+	@# lives in one place; a mismatch only warns, since checks can differ.
+	@command -v $(GOLANGCI) >/dev/null || { echo "golangci-lint not found; install $(GOLANGCI_VERSION):"; \
+	  echo '  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$$(go env GOPATH)/bin" $(GOLANGCI_VERSION)'; exit 1; }
+	@$(GOLANGCI) --version | grep -q "version $(patsubst v%,%,$(GOLANGCI_VERSION)) " || \
+	  echo "warning: CI pins golangci-lint $(GOLANGCI_VERSION), local is: $$($(GOLANGCI) --version | head -1)"
+	cd $(GO_DIR) && $(GOLANGCI) run ./...
 
 go-fmt:
 	cd $(GO_DIR) && "$$($(GO) env GOROOT)/bin/gofmt" -w .

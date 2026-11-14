@@ -63,7 +63,7 @@ func Select(scores []float64, items []int32, k int, opts Options) (Slate, error)
 		return Slate{}, errors.New("exploration needs a Rand, or the run cannot be reproduced")
 	}
 	if opts.Epsilon > 0 && opts.ExploreSlots <= 0 {
-		return Slate{}, errors.New("Epsilon > 0 with no ExploreSlots explores nothing")
+		return Slate{}, errors.New("exploration with no ExploreSlots explores nothing: set ExploreSlots or Epsilon=0")
 	}
 
 	budget := k

@@ -36,8 +36,15 @@ jobs:
 
       - name: Notebooks are not importable
         run: |
-          ! rg -q "^\s*(from|import) notebooks" --type py . \
-            || { echo "notebooks/ must not be imported -- move the logic into a package"; exit 1; }
+          set +e
+          git grep -qE '^[[:space:]]*(from|import)[[:space:]]+notebooks' -- '*.py'
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "notebooks/ must not be imported -- move the logic into a package"; exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "git grep failed (exit $rc)"; exit "$rc"
+          fi
 
       - name: Typecheck
         run: uv run mypy .
@@ -65,7 +72,10 @@ jobs:
           cache-dependency-path: serving/go/go.sum
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned, not `latest`: a new release adds checks, and an unchanged
+          # tree should not go red overnight. Match it locally:
+          #   curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.15.0
+          version: v2.15.0
           working-directory: serving/go
       - run: go build ./...
         working-directory: serving/go
@@ -109,3 +119,63 @@ jobs:
         env:
           RECSYS_SMOKE_IMAGE: recsys/serving:ci
         run: uv run pytest -m integration tests/test_serving_smoke.py
+
+  # Stage 8. ON MAIN ONLY, and only behind the three jobs above.
+  images:
+    name: build and push images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [python, go, smoke]
+    permissions:
+      contents: read
+      packages: write   # narrower than the workflow default: only this job publishes
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # The per-run token, not a PAT. It expires with the job and is scoped
+          # by the permissions block above.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two tags: the commit SHA, immutable and the only one worth deploying,
+      # and the branch name as a moving pointer for humans. Deliberately NOT
+      # `latest` -- a tag that changes under a running cluster turns a rollback
+      # into a guess about which build was actually serving.
+      #
+      # metadata-action also lowercases the image name, which ghcr requires and
+      # the owner's name does not satisfy.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/recsys-serving
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/serving.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Reads the cache the smoke job just wrote, so this is a re-tag and a
+          # push rather than a second compile. No cache-to: smoke owns writing it.
+          cache-from: type=gha
+
+      # NOT the sidecar image, and the reason is measured rather than cautious.
+      # It is 4.68GB -- torch 750MB, pyspark 483MB, ray 233MB, transformers
+      # 114MB, none of which serving/features or serving/retrieval import --
+      # against a hosted runner with roughly 14GB of free disk shared between
+      # the wheel downloads, the layers and the buildkit cache.
+      #
+      # Unblocking it is the dependency split, not a CI change: [project]
+      # dependencies is currently the TRAINING set and serving inherits all of
+      # it. Moving the training-only packages into their own extras takes the
+      # image to roughly 2GB, at which point this job can push it too. Until
+      # then the sidecar image is built on BigBox.

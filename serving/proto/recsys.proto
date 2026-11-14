@@ -66,7 +66,7 @@ message RecommendResponse {
   // Per-stage milliseconds.
   map<string, int32> stage_latency_ms = 8;
 
-  // Candidates surviving each stage. 
+  // Candidates surviving each stage.
   map<string, int32> stage_counts = 9;
 }
 
@@ -81,7 +81,7 @@ message HealthResponse {
   string model_version = 3;
   string index_version = 4;
 
-  // "hnsw" or "flat". 
+  // "hnsw" or "flat".
   string index_kind = 5;
 
   // The efSearch actually loaded.

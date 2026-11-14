@@ -27,7 +27,7 @@ message GetUserResponse {
   // Items in last_50_items the item_map did not know. For quality checks
   int32 unmapped_history = 4;
   bool found = 5;
-  
+
   // The user's affinity for EVERY category, indexed by category index.
   repeated float cat_affinity = 6;
 
@@ -51,7 +51,7 @@ message GetItemsResponse {
   // news corpus; ALL of them being cold is a broken materialisation.
   repeated bool found = 3;
 
-  // How many rows came from the gateway's in-process cache. 
+  // How many rows came from the gateway's in-process cache.
   int32 cached = 4;
 }
 

@@ -12,7 +12,7 @@ WORKDIR /repo
 
 # Manifest and lockfile FIRST, so this layer invalidates when the dependency
 # set changes and not on every source edit.
-# EXPORT, FILTER, then PIP 
+# EXPORT, FILTER, then PIP
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv export --frozen --no-dev --extra serving \
