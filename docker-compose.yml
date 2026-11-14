@@ -122,7 +122,7 @@ services:
     ports: ["9090:9090"]         # query UI and API
     # Mounts your scrape config over the path the image reads at startup.
     # ":ro" = read-only, so the container cannot modify your repo file.
-    volumes: 
+    volumes:
       - "./infra/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
       - "./serving/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"
     extra_hosts:
@@ -163,7 +163,7 @@ services:
       - "4317:4317"              # OTLP/gRPC -- the -otlp flag on the orchestrator
       - "8888:8888"              # its own metrics, scraped by prometheus above
     volumes:
-      - "./infra/docker/otel-collector.yaml:/etc/otel/config.yaml:ro" 
+      - "./infra/docker/otel-collector.yaml:/etc/otel/config.yaml:ro"
 
   triton:
     image: nvcr.io/nvidia/tritonserver:25.12-py3

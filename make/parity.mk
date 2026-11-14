@@ -6,7 +6,7 @@
 # moves silently is a parity test re-pointed at new behaviour.
 fixtures:  ## Regenerate serving/testdata/*.json from the Python implementations
 	uv run python -m scripts.writeups.dump_parity_fixtures
-	
+
 SERVED ?=
 
 # The training/serving skew report. SERVED is newline-delimited ImpressionContext

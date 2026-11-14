@@ -51,6 +51,7 @@ notebooks/*
 .ipynb_checkpoints/
 scripts/*
 !scripts/writeups/
+!scripts/__init__.py
 /tmp
 
 # defer tracking for now
