@@ -44,6 +44,12 @@ class Run:
         user_ids: ``[R]`` who made each request.
         found: ``[R]`` whether retrieval surfaced the clicked article.
         k: The cutoff.
+        checkpoint: Stem of the model this run produced, so a label can be
+            traced back to what it scored. A label is a nickname someone typed:
+            `evaluation/results/PRODUCTION.json` named `mmoe` as the serving
+            ranker and nothing in the run said whether that was
+            `mmoe-two_tower+trending+covisit+content-c100-...`, which is what
+            `RANKER_CHECKPOINT` exports to ONNX.
     """
 
     label: str
@@ -51,6 +57,7 @@ class Run:
     user_ids: npt.NDArray[np.int64]
     found: npt.NDArray[np.bool_]
     k: int
+    checkpoint: str = ""
 
     def save(self, directory: Path = RESULTS) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
@@ -62,6 +69,7 @@ class Run:
             found=self.found,
             k=np.asarray(self.k),
             label=np.asarray(self.label),
+            checkpoint=np.asarray(self.checkpoint),
         )
         return destination
 
@@ -74,6 +82,7 @@ def load(label: str, directory: Path = RESULTS) -> Run:
             user_ids=data["user_ids"],
             found=data["found"],
             k=int(data["k"]),
+            checkpoint=str(data["checkpoint"]) if "checkpoint" in data.files else "",
         )
 
 
@@ -120,6 +129,9 @@ def render(baseline: Run, candidate: Run, result: PairedResult) -> str:
             f"  [{result.lo:+.4f}, {result.hi:+.4f}]"
             f"{' *' if result.significant else '   (not resolvable)'}",
             f"  over {result.n_users:,} users scored under both.",
+            "",
+            f"  {baseline.label}: {baseline.checkpoint or 'checkpoint not recorded'}",
+            f"  {candidate.label}: {candidate.checkpoint or 'checkpoint not recorded'}",
             "",
             "  Read the paired line, not the gap between the two above it: the",
             f"  spread BETWEEN users is far larger than {abs(result.difference):.4f}, so two",

@@ -305,7 +305,10 @@ def report(
         print(f"\n  model -> {artifact}")
 
     if args.label:
-        destination = Run(args.label, ranked, held.user_ids, held.found, args.k).save(args.runs)
+        destination = Run(
+            args.label, ranked, held.user_ids, held.found, args.k, artifact.stem
+        ).save(args.runs)
         print(f"  per-request scores -> {destination}")
+        print(f"  from checkpoint      {artifact.stem}")
         print(f"  compare two runs: uv run python -m models.ranking.compare <a> {args.label}")
     return 0

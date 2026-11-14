@@ -386,3 +386,27 @@ click, so that count is zero overall — but a cohort slice can still reduce a s
 all-clicks or all-misses, and a mean without its denominator is not a comparable number.
 
 Full protocol, cohort slicing and the cold-start denominators: [`docs/evaluation.md`](docs/evaluation.md).
+
+
+## Rollout
+
+Four rungs — shadow, canary, A/B, ramp — in [`docs/rollout.md`](docs/rollout.md), with the
+mechanism that carries each one and what is deliberately not automated.
+
+**Shadow mode runs.** A second ranker scores the same feature matrix on live traffic, is served
+never, and is logged into the impression record beside what actually served. Its column is
+indicative rather than a measurement: the read is non-blocking, so which requests carry a shadow
+score correlates with how hard they were.
+
+**Assignment, the guardrails and the SRM inputs are built; the actuator is not.** Variant
+assignment is deterministic, sticky and salted per experiment, so a user cannot flip arms
+mid-test and two experiments over the same users cannot share a split. Ten alerts in
+`serving/monitoring/alerts.yml` are the canary's guardrails, and every dashboard threshold
+mirrors one. Nothing watches them and rolls back, so a canary here is a human reading a
+dashboard — `docs/rollout.md` says so rather than implying otherwise.
+
+**A new model and a new binary need different mechanisms.** A new model is a variant inside the
+running Deployment, where per-user assignment gives exactly the percent asked for. A new binary
+needs a second Deployment, and a Kubernetes Service load-balances connections rather than
+requests — a gRPC client multiplexes every call over one long-lived connection, so one canary pod
+in ten receives whatever share of *clients* reached it, not 10% of traffic.
