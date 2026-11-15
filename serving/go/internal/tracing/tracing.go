@@ -21,13 +21,15 @@ import (
 const Name = "github.com/MattyChoi/Recommender-System-Design/serving/go"
 
 const (
-	AttrDegraded   = "recsys.degraded"
-	AttrFallback   = "recsys.used_fallback"
-	AttrIncomplete = "recsys.incomplete_rows"
-	AttrVariant    = "recsys.experiment_variant"
-	AttrSource     = "recsys.source"
-	AttrBudget     = "recsys.budget_ms"
-	AttrCandidates = "recsys.candidates"
+	AttrDegraded     = "recsys.degraded"
+	AttrFallback     = "recsys.used_fallback"
+	AttrIncomplete   = "recsys.incomplete_rows"
+	AttrVariant      = "recsys.experiment_variant"
+	AttrSource       = "recsys.source"
+	AttrBudget       = "recsys.budget_ms"
+	AttrCandidates   = "recsys.candidates"
+	AttrModelVersion = "recsys.model_version"
+	AttrIndexVersion = "recsys.index_version"
 )
 
 func Tracer() trace.Tracer { return otel.Tracer(Name) }
@@ -79,6 +81,23 @@ func Degraded(span trace.Span, sources []string) {
 		return
 	}
 	span.SetAttributes(attribute.StringSlice(AttrDegraded, sources))
+}
+
+// Served tags a span with what answered the request.
+func Served(span trace.Span, model, index, variant string) {
+	attributes := make([]attribute.KeyValue, 0, 3)
+	if model != "" {
+		attributes = append(attributes, attribute.String(AttrModelVersion, model))
+	}
+	if index != "" {
+		attributes = append(attributes, attribute.String(AttrIndexVersion, index))
+	}
+	if variant != "" {
+		attributes = append(attributes, attribute.String(AttrVariant, variant))
+	}
+	if len(attributes) > 0 {
+		span.SetAttributes(attributes...)
+	}
 }
 
 // Source annotates one retriever's span with its budget, so a span that ends

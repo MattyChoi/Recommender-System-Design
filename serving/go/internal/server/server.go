@@ -98,9 +98,10 @@ func (r *Recommender) GetRecommendations(ctx context.Context, request *pb.Recomm
 }
 
 func (r *Recommender) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
+	model, index := r.Service.Versions()
 	response := &pb.HealthResponse{
-		ModelVersion: r.Service.Config.ModelVersion,
-		IndexVersion: r.Service.Config.IndexVersion,
+		ModelVersion: model,
+		IndexVersion: index,
 	}
 	if r.Probe == nil {
 		response.Detail = "no index probe configured"
@@ -144,8 +145,8 @@ func (r *Recommender) response(result service.Result) (*pb.RecommendResponse, er
 
 	response := &pb.RecommendResponse{
 		Items:           items,
-		ModelVersion:    r.Service.Config.ModelVersion,
-		IndexVersion:    r.Service.Config.IndexVersion,
+		ModelVersion:    result.ModelVersion,
+		IndexVersion:    result.IndexVersion,
 		LatencyMs:       int32(result.TotalLatency.Milliseconds()),
 		UsedFallback:    result.UsedFallback,
 		DegradedSources: result.DegradedSources,

@@ -390,6 +390,86 @@ func (p probe) Ready(context.Context) error { return p.err }
 func (p probe) Kind() string                { return p.kind }
 func (p probe) EFSearch() int32             { return p.efSearch }
 
+// TestTheReportedVersionsPreferWhatTheUpstreamsSay is the whole reason for
+// asking them. A flag is a promise made at startup; an index promoted under a
+// running pod makes it false, and the field every logged impression is
+// attributed by would go on asserting the old answer.
+func TestTheReportedVersionsPreferWhatTheUpstreamsSay(t *testing.T) {
+	server := testServer(t, fullMap())
+	server.Service.LiveVersions = func() (string, string) { return "ranker-7", "hnsw-2026-11" }
+
+	response, err := server.GetRecommendations(context.Background(), &pb.RecommendRequest{
+		UserId: "U1", NumResults: 2,
+	})
+	if err != nil {
+		t.Fatalf("GetRecommendations: %v", err)
+	}
+	if response.GetModelVersion() != "ranker-7" || response.GetIndexVersion() != "hnsw-2026-11" {
+		t.Errorf("reported %q / %q, want the upstreams' ranker-7 / hnsw-2026-11",
+			response.GetModelVersion(), response.GetIndexVersion())
+	}
+
+	// Health and the slate must not disagree: two endpoints naming different
+	// artifacts is worse than either being wrong, because it gives a reader a
+	// reason to trust whichever one suits them.
+	health, err := server.Health(context.Background(), &pb.HealthRequest{})
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if health.GetModelVersion() != response.GetModelVersion() {
+		t.Errorf("Health says %q, the slate says %q",
+			health.GetModelVersion(), response.GetModelVersion())
+	}
+}
+
+// TestAnUnreportedVersionFallsBackToTheFlag covers the startup window: before
+// the first score, Triton has said nothing. Empty must not win over a value
+// somebody configured, or a fresh pod attributes its traffic to nothing.
+func TestAnUnreportedVersionFallsBackToTheFlag(t *testing.T) {
+	server := testServer(t, fullMap())
+	server.Service.LiveVersions = func() (string, string) { return "", "hnsw-2026-11" }
+
+	response, err := server.GetRecommendations(context.Background(), &pb.RecommendRequest{
+		UserId: "U1", NumResults: 2,
+	})
+	if err != nil {
+		t.Fatalf("GetRecommendations: %v", err)
+	}
+	if response.GetModelVersion() != "mmoe-v3" {
+		t.Errorf("model version %q, want the configured mmoe-v3", response.GetModelVersion())
+	}
+	// Resolved independently: one upstream being quiet must not drag the other
+	// back to its flag.
+	if response.GetIndexVersion() != "hnsw-2026-11" {
+		t.Errorf("index version %q, want the live hnsw-2026-11", response.GetIndexVersion())
+	}
+}
+
+// TestTheFallbackPathStillNamesWhatServedIt is why the versions are resolved
+// before the first stage rather than beside the slate. servePopularity returns
+// early, and a degraded response that cannot be attributed is the one most
+// worth attributing.
+func TestTheFallbackPathStillNamesWhatServedIt(t *testing.T) {
+	server := testServer(t, fullMap())
+	server.Service.Retrievers = nil
+	server.Service.Config.Quotas = nil
+	server.Service.Fallback = fixedFallback{items: []int32{1, 2}}
+
+	response, err := server.GetRecommendations(context.Background(), &pb.RecommendRequest{
+		UserId: "U1", NumResults: 2,
+	})
+	if err != nil {
+		t.Fatalf("GetRecommendations: %v", err)
+	}
+	if !response.GetUsedFallback() {
+		t.Fatal("expected the fallback path")
+	}
+	if response.GetModelVersion() != "mmoe-v3" || response.GetIndexVersion() != "hnsw-2026-09" {
+		t.Errorf("fallback slate reports %q / %q; a degraded response must still name its build",
+			response.GetModelVersion(), response.GetIndexVersion())
+	}
+}
+
 func TestHealthAnswersRatherThanErroring(t *testing.T) {
 	server := testServer(t, fullMap())
 	server.Probe = probe{err: errors.New("index still loading"), kind: "hnsw", efSearch: 512}

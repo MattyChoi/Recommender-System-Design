@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -101,6 +102,8 @@ type options struct {
 	traceRatio   float64
 
 	// --- versioning ---
+	// showVersion is about the BINARY; the two below are about the artifacts.
+	showVersion  bool
 	modelVersion string
 	indexVersion string
 }
@@ -129,6 +132,14 @@ func (p healthProbe) EFSearch() int32 {
 	return p.efSearch
 }
 
+// Versions asks the upstreams rather than repeating a flag. The index sidecar
+// reports its version in every health response and the ANNIndex already records
+// it; Triton reports the version it served with in every infer response.
+func (p healthProbe) Versions() (string, string) {
+	_, index := p.index.LastIndex()
+	return p.ranker.LastModel(), index
+}
+
 func (p healthProbe) Ready(ctx context.Context) error {
 	if err := p.gateway.Ready(ctx); err != nil {
 		return err
@@ -137,6 +148,53 @@ func (p healthProbe) Ready(ctx context.Context) error {
 		return err
 	}
 	return p.ranker.Ready(ctx)
+}
+
+// version is injected at build time with -ldflags "-X main.version=...".
+var version string
+
+// buildVersion identifies the BINARY, which is what an OTel resource's
+// service.version means.
+func buildVersion() string {
+	// Preferred over the stamp because serving.Dockerfile copies serving/go/
+	// alone, so the image build has no repository above the main package and
+	// nothing to stamp. Empty for a plain local `go build`, which falls through.
+	if version != "" {
+		return version
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+
+	// No revision means a build outside a git checkout, or -buildvcs=false.
+	// Main.Version is "(devel)" for a local build, which is still more than
+	// nothing.
+	if revision == "" {
+		return info.Main.Version
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	// Said out loud, the same reason models/ranking/pipeline.py warns about it:
+	// a dirty build's revision does not describe the code that is running, and
+	// a trace attributed to a commit that never contained it is worse than one
+	// attributed to nothing.
+	if modified == "true" {
+		return revision + "-dirty"
+	}
+	return revision
 }
 
 // readColumns reads the order the exported graph was built for.
@@ -361,18 +419,38 @@ func parse() options {
 	flag.StringVar(&o.otlpEndpoint, "otlp", "", "OTLP collector, e.g. localhost:4317. Empty disables tracing")
 	flag.Float64Var(&o.traceRatio, "trace-ratio", 1.0, "head sampling ratio")
 
-	flag.StringVar(&o.modelVersion, "model-version", "", "reported in every response")
-	flag.StringVar(&o.indexVersion, "index-version", "", "reported in every response")
+	flag.BoolVar(&o.showVersion, "version", false,
+		"print the build revision and exit; needs no artifacts and no stack")
+
+	// Fallbacks, not the answer. Triton and the index sidecar each report what
+	// they are actually serving, and those win -- see service.Service.Versions.
+	// These cover the window before either has answered.
+	flag.StringVar(&o.modelVersion, "model-version", "",
+		"fallback model version, until Triton reports the one it served with")
+	flag.StringVar(&o.indexVersion, "index-version", "",
+		"fallback index version, until the index sidecar reports its own")
 
 	flag.Parse()
 	return o
 }
 
 func run(o options) error {
+	build := buildVersion()
+
+	// Answered before tracing and before the artifact loads, and written to
+	// stdout with no log prefix: the point is a clean string readable off a bare
+	// image with nothing mounted and no stack running.
+	if o.showVersion {
+		fmt.Println(build)
+		return nil
+	}
+
+	log.Printf("build %s", build)
+
 	// Tracing first, so the artifact loads below are inside it if anything
 	// ever instruments them.
 	shutdownTracing, err := tracing.Setup(
-		context.Background(), "recsys-orchestrator", o.otlpEndpoint, o.modelVersion, o.traceRatio,
+		context.Background(), "recsys-orchestrator", o.otlpEndpoint, build, o.traceRatio,
 	)
 	if err != nil {
 		return err
@@ -662,6 +740,8 @@ func run(o options) error {
 		index:    index,
 		efSearch: int32(o.efSearch),
 	}
+
+	pipeline.LiveVersions = probe.Versions
 
 	pb.RegisterRecommenderServer(grpcServer, &server.Recommender{
 		Service:    pipeline,

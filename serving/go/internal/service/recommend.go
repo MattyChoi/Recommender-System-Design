@@ -60,6 +60,7 @@ type Service struct {
 	Fallback      Fallback
 	Config        Config
 	Now           func() time.Time
+	LiveVersions  func() (model string, index string)
 	Shadow        Ranker
 	ShadowModel   string
 	shadowLogged  atomic.Uint64
@@ -85,6 +86,8 @@ type Result struct {
 	Sources         [][]string
 	UsedFallback    bool
 	DegradedSources []string
+	ModelVersion    string
+	IndexVersion    string
 	StageCounts     map[string]int
 	StageLatency    map[string]time.Duration
 	TotalLatency    time.Duration
@@ -102,6 +105,23 @@ func (s *Service) Recommend(ctx context.Context, userID string, numResults int) 
 	return s.Run(ctx, Request{UserID: userID, NumResults: numResults})
 }
 
+// Versions reports what is serving, preferring the upstreams over the flags.
+func (s *Service) Versions() (model string, index string) {
+	model, index = s.Config.ModelVersion, s.Config.IndexVersion
+	if s.LiveVersions == nil {
+		return model, index
+	}
+
+	liveModel, liveIndex := s.LiveVersions()
+	if liveModel != "" {
+		model = liveModel
+	}
+	if liveIndex != "" {
+		index = liveIndex
+	}
+	return model, index
+}
+
 func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	userID, numResults := request.UserID, request.NumResults
 	started := s.now()
@@ -116,6 +136,9 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 
 	ctx, span := tracing.Tracer().Start(ctx, "recommend")
 	defer span.End()
+
+	result.ModelVersion, result.IndexVersion = s.Versions()
+	tracing.Served(span, result.ModelVersion, result.IndexVersion, request.Variant)
 
 	// --- step 0: fetch the user features from the feature gateway ---
 	var user User

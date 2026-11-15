@@ -39,9 +39,11 @@ SIDECAR_IMAGE ?= recsys/sidecars:dev
 
 COMPOSE_PROJECT ?= $(notdir $(CURDIR))
 COMPOSE_NETWORK ?= $(COMPOSE_PROJECT)_default
+REVISION ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)$(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo -dirty)
 
 serving-image:  ## Build the orchestrator image
-	docker build -f infra/docker/serving.Dockerfile -t $(IMAGE) .
+	docker build -f infra/docker/serving.Dockerfile \
+	  --build-arg REVISION=$(REVISION) -t $(IMAGE) .
 
 # ONE image for both Python sidecars; the compose service picks the module.
 sidecar-image:  ## Build the Python sidecar image (features + retrieval)
