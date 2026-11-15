@@ -227,6 +227,30 @@ services:
       timeout: 5s
       retries: 12
 
+  # The live feature-drift monitor. Not behind the `sidecars` profile: it serves
+  # no requests and holds no port the orchestrator dials, so a plain `make up`
+  # can run it without taking anything the host-run workflow needs.
+  drift:
+    image: recsys/sidecars:dev
+    container_name: recsys-drift
+    command: ["python", "-m", "serving.monitoring.drift", "--bootstrap-servers", "kafka:29092"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      # drift_baseline.json, written by `make drift-baseline`. Read-only and
+      # mounted rather than baked, exactly like the other serving artifacts --
+      # serving/artifacts/ is in .dockerignore.
+      - ./serving/artifacts:/repo/serving/artifacts:ro
+    ports: ["9103:9103"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9103/metrics')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
   # Python sidecars
   features:
     profiles: ["sidecars"]

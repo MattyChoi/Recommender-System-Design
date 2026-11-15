@@ -11,15 +11,14 @@ import json
 import numpy as np
 import pytest
 
+from common.drift import PSI_SKEW, psi
 from common.features import USER_FEATURES
 from scripts.writeups.skew_report import (
     BEGIN,
     END,
-    PSI_SKEW,
     Row,
     ks_statistic,
     parse_served,
-    psi,
     splice,
 )
 

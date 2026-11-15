@@ -37,6 +37,7 @@ sharded = ["torchrec==1.8.0", "fbgemm-gpu==1.8.0"]
 orchestration = ["apache-airflow>=3.0"]
 serving = [
     "grpcio>=1.83.1",
+    "prometheus-client>=0.24.1",
     # The generated grpc_health.v1 stubs. Needed only to ASSERT the health
     # contract from Python -- the Kubernetes probes carry that descriptor
     # compiled in and need nothing installed.

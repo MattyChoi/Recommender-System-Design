@@ -4718,6 +4718,7 @@ serving = [
     { name = "onnx" },
     { name = "onnxruntime" },
     { name = "onnxscript" },
+    { name = "prometheus-client" },
 ]
 sharded = [
     { name = "fbgemm-gpu" },
@@ -4758,6 +4759,7 @@ requires-dist = [
     { name = "onnx", marker = "extra == 'serving'", specifier = ">=1.23.0" },
     { name = "onnxruntime", marker = "extra == 'serving'", specifier = ">=1.30.0" },
     { name = "onnxscript", marker = "extra == 'serving'", specifier = ">=0.7.2" },
+    { name = "prometheus-client", marker = "extra == 'serving'", specifier = ">=0.24.1" },
     { name = "protobuf", specifier = ">=7.36.1" },
     { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "pydantic", specifier = ">=2.13.5" },

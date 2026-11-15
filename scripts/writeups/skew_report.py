@@ -47,18 +47,14 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
-from common.features import USER_FEATURES, USER_FLAGS
+from common.drift import band, psi
+from common.features import USER_FEATURES
 from common.tracking import git_revision
+from data_pipeline.features.training_block import load_training
 
 BEGIN = "<!-- skew-report:begin -->"
 END = "<!-- skew-report:end -->"
 
-PSI_WATCH = 0.1
-PSI_SKEW = 0.25
-PSI_BINS = 10
-# Floors an empty bin so PSI stays finite. Small enough that one empty bin out
-# of ten moves PSI only when the other side genuinely holds mass there.
-PSI_EPSILON = 1e-6
 # Below this many served rows the KS and PSI figures are noise, and saying so
 # is better than printing a confident SKEW off forty requests.
 MIN_SERVED_ROWS = 500
@@ -87,11 +83,7 @@ class Row:
 
     @property
     def status(self) -> str:
-        if self.psi > PSI_SKEW:
-            return "SKEW"
-        if self.psi > PSI_WATCH:
-            return "WATCH"
-        return "OK"
+        return band(self.psi)
 
 
 def parse_served(lines: Iterable[str]) -> Served:
@@ -127,27 +119,6 @@ def parse_served(lines: Iterable[str]) -> Served:
 
     block = np.asarray(rows, dtype=np.float64).reshape(-1, width)
     return Served(block, requests, found, fetch_failed, malformed)
-
-
-def psi(expected: npt.NDArray[np.float64], actual: npt.NDArray[np.float64]) -> float:
-    """Population Stability Index of ``actual`` against ``expected``'s quantile bins.
-
-    Edges are TRAINING's deciles, de-duplicated: a count feature with most mass
-    at zero has repeated quantiles, and a zero-width bin would hold nothing on
-    either side and contribute only epsilon noise. The outer edges are opened
-    to infinity so serving values beyond training's range land in the end bins
-    -- which is exactly the mass PSI should see -- instead of being dropped.
-    """
-    edges = np.unique(np.quantile(expected, np.linspace(0, 1, PSI_BINS + 1)))
-    if edges.size < 2:
-        # Training was constant. Any serving value elsewhere is a shift.
-        return 0.0 if np.all(actual == edges[0]) else float("inf")
-    edges[0], edges[-1] = -np.inf, np.inf
-
-    e = np.histogram(expected, edges)[0] / expected.size
-    a = np.histogram(actual, edges)[0] / actual.size
-    e, a = np.maximum(e, PSI_EPSILON), np.maximum(a, PSI_EPSILON)
-    return float(np.sum((a - e) * np.log(a / e)))
 
 
 def ks_statistic(a: npt.NDArray[np.float64], b: npt.NDArray[np.float64]) -> float:
@@ -243,29 +214,6 @@ def splice(document: str, body: str) -> str:
     if not found_begin or not found_end:
         raise SystemExit(f"docs/skew_report.md has no {BEGIN} ... {END} block to replace")
     return f"{head}{BEGIN}\n{body}\n{END}{tail}"
-
-
-def load_training(split: str) -> tuple[npt.NDArray[np.float64], int]:
-    """Training's user block for found users, and the request count.
-
-    Spark, because gold is Parquet written by Spark under the configured storage
-    backend; this runs offline, beside `make parity`, never on the serving path.
-    """
-    from common.config import load_settings
-    from common.spark import get_spark
-    from common.utils import read_gold
-
-    settings = load_settings()
-    spark = get_spark(settings, app="skew-report")
-    frame = (
-        read_gold(spark, settings, f"training_examples/{split}")
-        .select("impression_id", *USER_FEATURES, *USER_FLAGS)
-        .dropDuplicates(["impression_id"])
-        .toPandas()
-    )
-    found = frame[USER_FLAGS[0]].fillna(False).astype(bool).to_numpy()
-    block = frame.loc[found, list(USER_FEATURES)].to_numpy(dtype=np.float64)
-    return block, len(frame)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

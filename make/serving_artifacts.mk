@@ -1,12 +1,13 @@
 # All artifacts that are dumped to disk for the Go server to load at startup.
 
 .PHONY: catalogue category-map content-vectors item-map popular index-vectors artifacts onnx
-.PHONY: artifacts-push artifacts-current
+.PHONY: artifacts-push artifacts-current drift-baseline
 
 DUMPERS = data_pipeline.serving_artifacts
 SERVING_ARTIFACTS_DIR = serving/artifacts
 
 CATALOGUE ?= ${SERVING_ARTIFACTS_DIR}/catalogue.json
+DRIFT_BASELINE ?= ${SERVING_ARTIFACTS_DIR}/drift_baseline.json
 CATEGORY_MAP ?= ${SERVING_ARTIFACTS_DIR}/category_map.json
 CONTENT_STEM ?= ${SERVING_ARTIFACTS_DIR}/content
 ITEM_MAP ?= ${SERVING_ARTIFACTS_DIR}/item_map.json
@@ -60,3 +61,9 @@ artifacts-push:  ## Publish ${SERVING_ARTIFACTS_DIR} to the object store and fli
 
 artifacts-current:  ## Print the published version an init container would pull
 	@uv run python -m $(DUMPERS).publish --show
+
+# NOT part of `artifacts`: it reads gold through Spark, where the six dumpers
+# above read item tables and checkpoints. Regenerate it when the TRAINING
+# distribution changes -- a retrain -- not on every artifact rebuild.
+drift-baseline:  ## Freeze training's feature bins for the live drift monitor
+	uv run python -m $(DUMPERS).dump_drift_baseline --out $(DRIFT_BASELINE)

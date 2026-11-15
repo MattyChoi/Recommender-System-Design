@@ -31,6 +31,7 @@ COPY conf/ ./conf/
 COPY serving/__init__.py serving/processes.py serving/health.py ./serving/
 COPY serving/features/ ./serving/features/
 COPY serving/retrieval/ ./serving/retrieval/
+COPY serving/monitoring/ ./serving/monitoring/
 
 ENV PATH="/repo/.venv/bin:$PATH" \
     PYTHONPATH=/repo \

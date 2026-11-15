@@ -123,3 +123,34 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "experiment arms differ by more than 20%; run the chi-square before trusting any result"
+
+  - name: recsys-drift
+    interval: 60s
+    rules:
+      # 0.25 is common.drift.PSI_SKEW. YAML cannot import it, so
+      # tests/test_drift_window.py asserts the two agree -- a gauge that pages
+      # at a value docs/skew_report.md calls OK is worse than no gauge.
+      #
+      # alerting="true" is the churn label, not a filter: a feature whose
+      # distribution turns over by design still has a series, it just must not
+      # page. On a news corpus a naive PSI alarm fires constantly, gets muted,
+      # and is then worse than nothing.
+      - alert: RecsysFeatureDrift
+        expr: max by (feature) (recsys_feature_psi{alerting="true"}) > 0.25
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.feature }} PSI is {{ $value }}, past the 0.25 skew band"
+          runbook: "Served features have moved off the bins the model was fitted on. Compare against docs/skew_report.md, which runs the same statistic in batch; if both agree the model needs a retrain, not the monitor a fix."
+
+      # Separate from the PSI alert on purpose. A window that never fills means
+      # the monitor is not seeing traffic -- an absent PSI, which `for: 30m` on
+      # the rule above would otherwise sit through silently, since a series that
+      # does not exist cannot breach a threshold.
+      - alert: RecsysDriftMonitorStarved
+        expr: recsys_drift_window_rows < 500
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: "the drift window holds {{ $value }} rows; below 500 no PSI is reported at all"
+          runbook: "Starvation has four causes and recsys_drift_records_* separates them: a flat _seen is no traffic or a dead consumer; _degraded climbing with it is a feature-fetch outage, which is an availability incident and not skew; _found flat is a feature store with no row for these users; _malformed above zero is a baseline whose width disagrees with the served vector, so re-dump it."

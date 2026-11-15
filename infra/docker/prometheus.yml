@@ -51,3 +51,16 @@ scrape_configs:
   - job_name: triton
     static_configs:
       - targets: ["triton:8002"]
+
+  # The feature-drift monitor. `drift:9103` -- the compose SERVICE name, unlike
+  # the orchestrator above: this one runs in the network rather than on the
+  # host, so it needs no recsys-host indirection.
+  #
+  # Scraped at the global 15s like everything else, which oversamples it: the
+  # monitor refreshes its gauges every 200 records. That is deliberate -- a
+  # longer interval here would delay RecsysDriftMonitorStarved noticing a
+  # window that has stopped filling, which is the failure most likely to be
+  # mistaken for "no drift".
+  - job_name: recsys-drift
+    static_configs:
+      - targets: ["drift:9103"]
