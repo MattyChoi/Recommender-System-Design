@@ -75,6 +75,14 @@ func Dial(target, model string, columns []string, conns int, opts ...grpc.DialOp
 	}, nil
 }
 
+// ConnectAll opens every pooled connection; see rpc.Balanced.ConnectAll.
+func (c *Client) ConnectAll(ctx context.Context) error {
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.ConnectAll(ctx)
+}
+
 func (c *Client) Close() error {
 	if c.conn == nil {
 		return nil

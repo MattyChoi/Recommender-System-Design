@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 // The 500 rps rows are identical within noise
@@ -85,6 +86,40 @@ func (b *Balanced) Each(
 			defer wait.Done()
 			if err := check(ctx, address, b.conns[index]); err != nil {
 				failures[index] = fmt.Errorf("%s: %w", address, err)
+			}
+		}()
+	}
+	wait.Wait()
+	return errors.Join(failures...)
+}
+
+// ConnectAll opens EVERY connection in the pool and waits until each is READY.
+//
+// grpc.NewClient connects lazily, and Each only exercises conns[:len(addresses)],
+// so without this the rest of the pool is still unopened when real traffic
+// arrives. Opening one costs ~20ms locally: the size of a whole per-source
+// deadline. Round-robin hands the first len(conns)-len(addresses) requests
+// exactly those connections, and they miss their deadline.
+func (b *Balanced) ConnectAll(ctx context.Context) error {
+	failures := make([]error, len(b.conns))
+	var wait sync.WaitGroup
+	for index, conn := range b.conns {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for {
+				state := conn.GetState()
+				if state == connectivity.Ready {
+					return
+				}
+				if state == connectivity.Idle {
+					conn.Connect()
+				}
+				if !conn.WaitForStateChange(ctx, state) {
+					failures[index] = fmt.Errorf("%s (connection %d of %d) stuck in %v: %w",
+						conn.Target(), index+1, len(b.conns), state, ctx.Err())
+					return
+				}
 			}
 		}()
 	}

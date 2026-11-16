@@ -1,9 +1,13 @@
 package rpc
 
 import (
+	"context"
+	"net"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -62,5 +66,61 @@ func TestMoreTargetsThanConnections(t *testing.T) {
 func TestAnEmptyTargetIsRefused(t *testing.T) {
 	if _, err := Dial(" , ", 4); err == nil {
 		t.Error("expected an error for a target list with no addresses")
+	}
+}
+
+// TestConnectAllOpensEveryConnection: Each touches one connection per address,
+// so a 2-per-address pool would leave half its connections unopened.
+func TestConnectAllOpensEveryConnection(t *testing.T) {
+	var targets []string
+	for range 2 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		server := grpc.NewServer()
+		go func() { _ = server.Serve(listener) }()
+		t.Cleanup(server.Stop)
+		targets = append(targets, listener.Addr().String())
+	}
+
+	balanced, err := Dial(targets[0]+","+targets[1], 4,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = balanced.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := balanced.ConnectAll(ctx); err != nil {
+		t.Fatalf("ConnectAll: %v", err)
+	}
+	for index, conn := range balanced.conns {
+		if state := conn.GetState(); state != connectivity.Ready {
+			t.Errorf("connection %d to %s is %v, want READY", index, conn.Target(), state)
+		}
+	}
+}
+
+func TestConnectAllGivesUpWithTheContext(t *testing.T) {
+	// Bound then closed, so nothing is listening on it.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	dead := listener.Addr().String()
+	_ = listener.Close()
+
+	balanced, err := Dial(dead, 2, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = balanced.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := balanced.ConnectAll(ctx); err == nil {
+		t.Fatal("ConnectAll to a dead address returned nil")
 	}
 }

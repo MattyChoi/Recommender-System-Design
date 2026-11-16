@@ -88,9 +88,19 @@ processors:
     timeout: 5s
 
 exporters:
-  # Stdout by default: this project has no trace backend running, and a
-  # collector pointing at a Tempo or Jaeger that does not exist fails to start
-  # and takes `make up` with it. Swap this for otlp/tempo when one exists.
+  # Tempo, in this compose network. Nothing dials Tempo directly: every span
+  # arrives here first, so the policies above are what decide what is stored
+  # rather than what a client happened to sample.
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true           # plaintext inside the compose network
+
+  # Kept alongside Tempo, at `basic`: one line per exported batch, so "is this
+  # pipeline receiving anything at all" is answerable from
+  # `docker logs recsys-otel` without opening Grafana -- which matters because
+  # an empty Tempo and a collector that stopped accepting spans look the same.
+  # Per-span output needs `detailed` and is not worth it.
   debug:
     verbosity: basic
 
@@ -110,4 +120,4 @@ service:
     traces:
       receivers: [otlp]
       processors: [tail_sampling, batch]
-      exporters: [debug]
+      exporters: [otlp/tempo, debug]

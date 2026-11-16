@@ -111,6 +111,9 @@ type options struct {
 type namedProbe struct {
 	name  string
 	check func(context.Context) error
+	// connect opens the REST of the backend's pool once check passes: check
+	// only reaches one connection per address. nil for none.
+	connect func(context.Context) error
 }
 
 type healthProbe struct {
@@ -236,7 +239,8 @@ const (
 	upstreamsPeriod = 2 * time.Second
 )
 
-// warmConnections dials every backend before the first real request.
+// warmConnections dials every backend before the first real request: the
+// health check, then every connection in its pool (see rpc.Balanced.ConnectAll).
 //
 // A sidecar that is still loading refuses the connection outright, so a probe
 // fails in milliseconds and warmTimeout never comes into it. With wait > 0 a
@@ -251,6 +255,9 @@ func warmConnections(ctx context.Context, probes []namedProbe, wait time.Duratio
 		for attempt := 0; ; attempt++ {
 			inner, cancel := context.WithTimeout(ctx, warmTimeout)
 			err = probe.check(inner)
+			if err == nil && probe.connect != nil {
+				err = probe.connect(inner)
+			}
 			cancel()
 			if err == nil || ctx.Err() != nil || !time.Now().Before(deadline) {
 				break
@@ -583,7 +590,7 @@ func run(o options) error {
 	defer func() { _ = ranker.Close() }()
 
 	var shadow service.Ranker
-	var shadowReady func(context.Context) error
+	var shadowReady, shadowConnect func(context.Context) error
 	if o.shadowModel != "" {
 		if o.shadowModel == o.tritonModel {
 			return fmt.Errorf("-shadow-triton-model %q equals -triton-model; that shadows nothing",
@@ -596,7 +603,7 @@ func run(o options) error {
 			return fmt.Errorf("dialling the shadow model: %w", err)
 		}
 		defer func() { _ = client.Close() }()
-		shadow, shadowReady = client, client.Ready
+		shadow, shadowReady, shadowConnect = client, client.Ready, client.ConnectAll
 	}
 
 	var impressionLog service.ImpressionLog
@@ -805,12 +812,12 @@ func run(o options) error {
 	}
 
 	probes := []namedProbe{
-		{"features", gateway.Ready},
-		{"retrieval", index.Ready},
-		{"triton", ranker.Ready},
+		{"features", gateway.Ready, gateway.ConnectAll},
+		{"retrieval", index.Ready, index.ConnectAll},
+		{"triton", ranker.Ready, ranker.ConnectAll},
 	}
 	if shadowReady != nil {
-		probes = append(probes, namedProbe{"shadow", shadowReady})
+		probes = append(probes, namedProbe{"shadow", shadowReady, shadowConnect})
 	}
 	warmConnections(context.Background(), probes, o.warmWait)
 

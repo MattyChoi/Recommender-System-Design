@@ -10,6 +10,20 @@ FEATURES_ARGS ?=
 RETRIEVAL_ARGS ?= --artifacts data/index --pointer data/index/CURRENT
 SERVE_ARGS ?= -content-stem ../../$(CONTENT_STEM)
 
+# The collector, not Tempo: traces must pass the tail sampler. Defaulted ON
+# because -otlp's own default is EMPTY, which disables tracing silently -- a
+# healthy Tempo with a provisioned datasource and no spans in it looks like a
+# broken backend and is actually an unset flag.
+#
+# Safe when nothing is listening: otlptracegrpc does not dial at construction,
+# so a missing collector costs dropped spans and retry logs, never a failed
+# start. `make serve OTLP=` turns tracing off again.
+#
+# Head ratio stays at the binary's 1.0 default on purpose. Cutting here would
+# throw traces away before infra/docker/otel-collector.yaml's policies could
+# ask whether they were the degraded ones worth keeping.
+OTLP ?= localhost:4317
+
 # Processes per Python sidecar, each on its own port: base, base+10, ...
 # (PORT_STRIDE in serving/processes.py). `serve` is handed the same list, so
 # the orchestrator and the sidecars cannot disagree about where the copies are.
@@ -52,7 +66,10 @@ serve:  ## Run the gRPC orchestrator on :15051
 	  echo '  note: no data/index/CURRENT -- index_version will be empty in responses'
 	@test -f "$(INDEX_STEM).json" || \
 	  echo '  note: no $(INDEX_STEM).json -- exact search fallback disabled (run: make index-vectors)'
+	@test -z "$(OTLP)" || docker inspect -f '{{.State.Running}}' recsys-otel 2>/dev/null | grep -q true || \
+	  echo '  note: recsys-otel is not running -- spans will be dropped (run: make up)'
 	cd $(GO_DIR) && ./$(SERVER_BIN) \
+	    -otlp '$(OTLP)' \
 	    -item-map ../../$(ITEM_MAP) -catalogue ../../$(CATALOGUE) \
 	    -popular ../../$(POPULAR) -columns ../../$(RANKER_COLUMNS) \
 	    -index-stem ../../$(INDEX_STEM) \
