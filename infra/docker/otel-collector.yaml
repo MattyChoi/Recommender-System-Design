@@ -24,6 +24,26 @@ receivers:
         endpoint: 0.0.0.0:4317
 
 processors:
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+        # Keyed on the CURRENT RPC semconv (otelgrpc >= v0.6x, semconv 1.40+):
+        # `rpc.method` is the fully-qualified "package.Service/Method" and
+        # `rpc.service` is no longer emitted at all. Matching the old split
+        # form (`rpc.method == "Health"`) silently matches nothing -- the
+        # filter runs, counts zero, and every probe ships.
+        #
+        # Our own probes: recsys.v1.{Recommender,Retrieval,Features}/Health.
+        - 'IsMatch(attributes["rpc.method"], "^recsys\\.v1\\.[A-Za-z]+/Health$")'
+        # The standard gRPC health service (Check and Watch): kubelet,
+        # grpc-health-probe, and watchUpstreams' own publication target.
+        - 'IsMatch(attributes["rpc.method"], "^grpc\\.health\\.v1\\.Health/")'
+        # Old semconv, for any client still on it (OTEL_SEMCONV_STABILITY_OPT_IN=rpc/old,
+        # or an older SDK in a sidecar).
+        - 'attributes["rpc.method"] == "Health"'
+        - 'attributes["rpc.service"] == "grpc.health.v1.Health"'
+
   # ⚠️ ORDER MATTERS: tail_sampling must come before batch.
   #
   # tail_sampling groups spans by trace id and holds them until the trace is
@@ -119,5 +139,5 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [tail_sampling, batch]
+      processors: [filter/health, tail_sampling, batch]
       exporters: [otlp/tempo, debug]

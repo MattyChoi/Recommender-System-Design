@@ -5,11 +5,18 @@
 # than in a container entrypoint keeps the bucket names in one place and lets
 # `make up` be idempotent.
 
-.PHONY: up down clean image image-size image-run sidecar-image sidecars-up sidecars-down \
+.PHONY: up down reload clean image image-size image-run sidecar-image sidecars-up sidecars-down \
         minio-image minio-image-kind
 
 
 export HOST_IP := $(shell hostname -I 2>/dev/null | awk '{print $$1}')
+
+# Printed by both `up` and `reload`, from one definition so the two cannot
+# drift: a scrape target that is down is invisible on a dashboard, which is
+# indistinguishable from a quiet service.
+SHOW_TARGETS = curl -s localhost:9090/api/v1/targets \
+  | python3 -c "import json,sys; [print(f\"    {t['labels'].get('job'):22} {t['health']}\") for t in json.load(sys.stdin)['data']['activeTargets']]" \
+  || echo "    (could not read Prometheus targets)"
 
 # MinIO is built from source (no more published images -- see
 # infra/docker/minio.Dockerfile), so `up` builds it the first time it is missing.
@@ -19,12 +26,23 @@ up:  ## Start the local stack and create the MinIO buckets
 	docker compose up -d --wait
 	docker exec recsys-minio sh -c 'mc alias set local http://localhost:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null && mc mb --ignore-existing local/mlflow local/recsys'
 	@echo "  scrape targets:"
-	@curl -s localhost:9090/api/v1/targets \
-	  | python3 -c "import json,sys; [print(f\"    {t['labels'].get('job'):22} {t['health']}\") for t in json.load(sys.stdin)['data']['activeTargets']]" \
-	  || echo "    (could not read Prometheus targets)"
+	@$(SHOW_TARGETS)
 
 down:  ## Stop and remove containers, keeping data
 	docker compose down
+
+
+RELOAD_SERVICES ?= prometheus grafana otel-collector tempo
+
+reload:  ## Re-read the mounted config files (prometheus, grafana, otel, tempo)
+	docker compose restart $(RELOAD_SERVICES)
+	@sleep 3
+	@echo "  scrape targets:"
+	@$(SHOW_TARGETS)
+	@echo "  grafana datasources:"
+	@curl -s localhost:3000/api/frontend/settings \
+	  | python3 -c "import json,sys; [print(f'    {name}') for name in sorted(json.load(sys.stdin)['datasources']) if not name.startswith('--')]" \
+	  || echo "    (could not read Grafana datasources)"
 
 # Destroys the MinIO and MLflow volumes, which is where every logged run and
 # every published artifact lives. There is no undo.

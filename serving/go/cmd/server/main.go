@@ -32,6 +32,7 @@ import (
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/popular"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/ranking"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rerank"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/server"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/sources"
@@ -92,6 +93,7 @@ type options struct {
 	capPerCategory int
 	epsilon        float64
 	exploreSlots   int
+	exploreSeed    int64
 
 	// --- experiments ---
 	experimentID string
@@ -417,6 +419,8 @@ func parse() options {
 	flag.Float64Var(&o.epsilon, "epsilon", 0.1,
 		"chance an exploration slot is filled at random (ADR 0012)")
 	flag.IntVar(&o.exploreSlots, "explore-slots", 2, "how many of the LAST slots explore")
+	flag.Int64Var(&o.exploreSeed, "explore-seed", 0,
+		"seed for the exploration draw; 0 picks one and logs it, so a slate stays reproducible")
 
 	flag.StringVar(&o.experimentID, "experiment-id", "",
 		"salts the bucketing; required whenever -variants is set")
@@ -439,6 +443,41 @@ func parse() options {
 
 	flag.Parse()
 	return o
+}
+
+// pipelineConfig copies the flags onto the service's config.
+func pipelineConfig(o options) (service.Config, error) {
+	// -1 disables; 0 does NOT. A cap of zero means "no slots for any
+	// subcategory", which is a real setting and a catastrophic one, so it must
+	// stay expressible. This is the conversion the flag's own comment promised.
+	var capPerCategory *int
+	if o.capPerCategory >= 0 {
+		capPerCategory = &o.capPerCategory
+	}
+
+	// Refused here rather than inside Select, which would fail every request
+	// at runtime with the process otherwise healthy.
+	if o.epsilon > 0 && o.exploreSlots <= 0 {
+		return service.Config{}, fmt.Errorf(
+			"-epsilon %.3f with -explore-slots %d explores nothing; set slots or -epsilon 0",
+			o.epsilon, o.exploreSlots)
+	}
+
+	return service.Config{
+		// one source, the whole quota
+		Quotas:          []int{o.candidates},
+		MaxCandidates:   o.candidates,
+		Deadline:        o.deadline,
+		RankDeadline:    o.rankDeadline,
+		FeatureDeadline: o.featDeadline,
+		MaxHistory:      features.MaxHistory,
+		Lambda:          o.lambda,
+		CapPerCategory:  capPerCategory,
+		Epsilon:         o.epsilon,
+		ExploreSlots:    o.exploreSlots,
+		ModelVersion:    o.modelVersion,
+		IndexVersion:    o.indexVersion,
+	}, nil
 }
 
 func run(o options) error {
@@ -680,6 +719,19 @@ func run(o options) error {
 		}, func() float64 { return float64(sink.Unmapped()) }))
 	}
 
+	config, err := pipelineConfig(o)
+	if err != nil {
+		return err
+	}
+
+	// Seeded ONCE per process and logged, which is what makes an explored
+	// slate reproducible after the fact. 0 means "pick one": a fixed default
+	// would make every pod in a Deployment explore identically.
+	seed := o.exploreSeed
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
+
 	pipeline := &service.Service{
 		Retrievers: []service.Retriever{index},
 		Store:      gateway,
@@ -695,18 +747,8 @@ func run(o options) error {
 		Catalogue:   catalog,
 		Fallback:    fallback,
 		Impressions: impressionLog,
-		Config: service.Config{
-			// one source, the whole quota
-			Quotas:          []int{o.candidates},
-			MaxCandidates:   o.candidates,
-			Deadline:        o.deadline,
-			RankDeadline:    o.rankDeadline,
-			FeatureDeadline: o.featDeadline,
-			MaxHistory:      features.MaxHistory,
-			Lambda:          1.0,
-			ModelVersion:    o.modelVersion,
-			IndexVersion:    o.indexVersion,
-		},
+		Rand:        rerank.NewLockedRand(seed),
+		Config:      config,
 	}
 
 	if shadow != nil {
@@ -804,6 +846,22 @@ func run(o options) error {
 	log.Printf("  seen-list  %d bits, %d hashes (capacity %d at %.3f), ttl %v",
 		bits, hashes, o.seenCap, o.seenRate, o.seenTTL)
 	log.Printf("  budget     %v end to end, %v rank, %v features", o.deadline, o.rankDeadline, o.featDeadline)
+
+	// Printed because the absence of this line is how four dropped flags went
+	// unnoticed: an inert epsilon looks exactly like a configured one from
+	// outside, and the only visible symptom is a propensity column of 1.0.
+	capLabel := "off"
+	if config.CapPerCategory != nil {
+		capLabel = strconv.Itoa(*config.CapPerCategory)
+	}
+	if config.Epsilon > 0 {
+		log.Printf("  rerank     lambda %.2f, cap/category %s, epsilon %.3f over %d slots (seed %d)",
+			config.Lambda, capLabel, config.Epsilon, config.ExploreSlots, seed)
+	} else {
+		log.Printf("  rerank     lambda %.2f, cap/category %s, NO exploration "+
+			"(every propensity will be 1.0, so this log cannot support off-policy evaluation)",
+			config.Lambda, capLabel)
+	}
 	if len(variants) == 0 {
 		log.Printf("  experiment none; experiment_variant will be empty")
 	} else {

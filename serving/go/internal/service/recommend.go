@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,7 @@ type Service struct {
 	LiveVersions  func() (model string, index string)
 	Shadow        Ranker
 	ShadowModel   string
+	Rand          *rand.Rand
 	shadowLogged  atomic.Uint64
 	shadowDropped atomic.Uint64
 }
@@ -204,7 +206,7 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 			Blocked:      blocked,
 			Epsilon:      s.Config.Epsilon,
 			ExploreSlots: s.Config.ExploreSlots,
-			Rand:         nil,
+			Rand:         s.Rand,
 		})
 	})
 	if err != nil {

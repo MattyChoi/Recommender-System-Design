@@ -4,7 +4,7 @@
 # Every run writes a JSON result card under evaluation/results/. docs/baselines.md
 # is regenerated from those cards and never hand-edited.
 
-.PHONY: eval sweep coverage compare baselines results quality-gate
+.PHONY: eval sweep coverage compare baselines results quality-gate exposure
 
 MODELS ?= random popularity recency content covisit als als_item
 MODEL ?= random
@@ -66,3 +66,19 @@ quality-gate:  ## Refuse a promotion that regresses quality (make quality-gate C
 	@test -f $(CANDIDATE_POINTER) \
 	  || { echo "  no $(CANDIDATE_POINTER): copy PRODUCTION.json and point it at the new cards"; exit 1; }
 	uv run python -m evaluation.offline.gate --candidate $(CANDIDATE_POINTER)
+
+# Exposure concentration over time
+#   make consume TOPIC=impressions        N=200000 > /tmp/logged.jsonl
+#   make consume TOPIC=impression_context N=20000  > /tmp/served.jsonl
+#
+# Either may be omitted; one curve alone is a weaker claim, not an error.
+EXPOSURE_LOGGED ?= /tmp/logged.jsonl
+EXPOSURE_SERVED ?= /tmp/served.jsonl
+EXPOSURE_WINDOW ?= 5000
+
+exposure:  ## Gini of impressions over items, two policies (make exposure EXPOSURE_LOGGED=... EXPOSURE_SERVED=...)
+	$(MAKE) --no-print-directory consume TOPIC=impressions        N=200000 > $(EXPOSURE_LOGGED)
+	$(MAKE) --no-print-directory consume TOPIC=impression_context N=20000 > $(EXPOSURE_SERVED)
+	uv run python -m scripts.writeups.exposure --window $(EXPOSURE_WINDOW) \
+	    $(if $(EXPOSURE_LOGGED),--logged $(EXPOSURE_LOGGED)) \
+	    $(if $(EXPOSURE_SERVED),--served $(EXPOSURE_SERVED))
