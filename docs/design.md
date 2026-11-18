@@ -1,4 +1,4 @@
-# Design: multi-stage movie recommender
+# Design: multi-stage news recommender
 
 **Status:** draft, Phase 0. Written before any model, on purpose.
 
@@ -66,6 +66,15 @@ budgets.
 
 Retrieval sources: two-tower + HNSW, co-visitation, trending, recently-viewed,
 content-similarity. Union, dedupe, source-tagged so per-source contribution is measurable.
+
+⚠️ **One of the five is wired.** `cmd/server` constructs `Retrievers` with the HNSW index alone,
+so the fan-out above is the design and not yet the system. The trace waterfall in the README shows
+a single `retrieve.two_tower` span for that reason; the span names are per-source, so the picture
+widens on its own as the others land.
+
+**This table is checkable in production**, which is the whole reason the per-stage histograms
+share bucket boundaries with the budget rows. The dashboard and a trace waterfall for one request
+are in the [README](../README.md#monitoring).
 
 ## 4. Data contracts
 

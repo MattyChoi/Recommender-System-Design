@@ -1,6 +1,50 @@
 # Recommendation System Design
 
-A small project working on production-level recommender systems.
+A multi-stage news recommender built end to end on [MIND](https://msnews.github.io/): a PySpark
+medallion pipeline with point-in-time features, two-tower retrieval over a FAISS index, a ranker
+served from Triton, and a Go orchestrator that assembles a slate inside a 90 ms budget — plus the
+monitoring, experimentation and rollout machinery needed to decide whether a change should ship.
+
+Where something is **not** built, it is named rather than left to be assumed: the fan-out is one
+retriever against a design of five, nothing watches the guardrail alerts and rolls back, and no
+model retrains on the log this system produces.
+
+```bash
+make up            # Kafka, Redis, MinIO, MLflow, Prometheus, Grafana, Tempo, Triton
+make test          # contract and unit tests
+```
+
+**A fresh clone goes green without the dataset.** MIND is licence-gated, so no sampled rows may be
+committed; the data contracts fall back to a seeded synthetic corpus of the same shape and build
+bronze and silver from it *with the real pipeline*, so a parse bug still fails the build. With the
+corpus and a GPU:
+
+```bash
+make data          # raw -> bronze -> silver -> gold   (make download first; gated)
+make artifacts     # the artifacts the orchestrator and Triton read
+make serve-all     # orchestrator + the two Python sidecars
+make demo          # one request through the full path, printed
+```
+
+### The documents
+
+Generated documents are rebuilt from the data they describe and are never hand-edited — a table
+that disagrees with the JSON it quotes is worse than no table.
+
+| | |
+|---|---|
+| [`design.md`](docs/design.md) | the funnel, the latency budget, failure modes, the feedback loop |
+| [`evaluation.md`](docs/evaluation.md) | the protocol, cohort slicing, cold-start denominators |
+| [`baselines.md`](docs/baselines.md) | every baseline's report card — *generated* |
+| [`retrieval.md`](docs/retrieval.md) | the two-tower, scored over the full catalogue |
+| [`ranking.md`](docs/ranking.md) | the ranker, its features and its ablations |
+| [`benchmarks.md`](docs/benchmarks.md) | embedding tables, sequence pooling, the ANN index, the seen-list |
+| [`rollout.md`](docs/rollout.md) | four rungs, and what is deliberately not automated |
+| [`skew_report.md`](docs/skew_report.md) | training/serving skew — *generated* |
+| [`exposure.md`](docs/exposure.md) | how much of the catalogue the policy reaches — *generated* |
+| [`experiment.md`](docs/experiment.md) | a worked launch decision — *generated* |
+| [`materialization_parity.md`](docs/materialization_parity.md) | Feast's online store against the offline one |
+| [`adr/`](docs/adr) | thirteen decisions, each with the option it rejected and the downside accepted |
 
 
 ## The data pipeline
@@ -388,6 +432,45 @@ all-clicks or all-misses, and a mean without its denominator is not a comparable
 Full protocol, cohort slicing and the cold-start denominators: [`docs/evaluation.md`](docs/evaluation.md).
 
 
+## Serving
+
+A Go orchestrator on gRPC assembles a slate from three backends: a Feast gateway and a
+FAISS + user-tower sidecar, both Python, and the ranker on Triton. Five stages against a 90 ms
+end-to-end budget, each with its own deadline rather than a share of the request's.
+
+```
+features 8ms -> retrieval fan-out 25ms -> seen-list filter -> rank 35ms -> re-rank 5ms
+```
+
+Measured at 300 rps: **7 ms p50 across stages, 13.4 ms p99 end to end.** Saturation sits at
+300–400 rps, and the binding constraint is not latency — p99 stays inside the budget at every
+rate tested while the retriever starts missing its 25 ms deadline, so the slate falls back.
+Full table and the regime it was measured in: [`docs/design.md`](docs/design.md).
+
+**It degrades rather than failing, and that is the hard part to observe.** A failed feature
+fetch serves a cold user, a failed retriever serves the union of the rest, a ranker that misses
+its deadline ships the retrieval order, and an empty candidate set serves a precomputed
+popularity slate. Every one returns `200` with a full slate — *faster* than a healthy request,
+because it skipped the expensive stages. So a benchmark watching latency and status codes reports
+a system that scales beautifully by not working; `make bench` reads the orchestrator's own
+degradation counters before and after each rate for exactly that reason, and the first version of
+it reported 10,000 rps for a service serving 97% fallbacks.
+
+**Readiness does not track upstream health**, which inverts the obvious wiring. The pipeline
+answers from `popular.json` with every backend down, so routing on backend health would flip every
+pod out of the Service during a Triton outage and turn a degraded dependency into a total outage.
+Three health names carry two meanings: liveness, readiness, and an `upstreams` verdict that
+nothing routes on and dashboards read.
+
+**Provenance travels with the response.** Triton reports the model version it served with and the
+index sidecar reports its own in every health response, and those *win over* the command-line
+flags — a static flag would drift from what actually served. Both land on the response, the
+impression log, and the trace span.
+
+Every served slate is logged to Kafka as protobuf with its propensities, which is what makes
+off-policy evaluation possible at all — see below.
+
+
 ## Rollout
 
 Four rungs — shadow, canary, A/B, ramp — in [`docs/rollout.md`](docs/rollout.md), with the
@@ -398,7 +481,7 @@ never, and is logged into the impression record beside what actually served. Its
 indicative rather than a measurement: the read is non-blocking, so which requests carry a shadow
 score correlates with how hard they were.
 
-**Assignment, the guardrails and the SRM inputs are built; the actuator is not.** Variant
+**Assignment, the guardrails and the analysis are built; the actuator is not.** Variant
 assignment is deterministic, sticky and salted per experiment, so a user cannot flip arms
 mid-test and two experiments over the same users cannot share a split. Ten alerts in
 `serving/monitoring/alerts.yml` are the canary's guardrails, and every dashboard threshold
@@ -410,3 +493,98 @@ running Deployment, where per-user assignment gives exactly the percent asked fo
 needs a second Deployment, and a Kubernetes Service load-balances connections rather than
 requests — a gRPC client multiplexes every call over one long-lived connection, so one canary pod
 in ten receives whatever share of *clients* reached it, not 10% of traffic.
+
+
+## Monitoring
+
+Prometheus scrapes the orchestrator, Triton, the OTLP collector and the drift monitor; Grafana
+provisions one dashboard from the repo, so it can be reviewed in a pull request rather than dying
+with a volume. Every threshold on it mirrors a rule in `serving/monitoring/alerts.yml`, which is
+what stops a green panel and a firing alert disagreeing.
+
+![The serving dashboard](docs/img/dashboard.png)
+
+Five stages against their budgets, the funnel in pipeline order, the four named degradations, arm
+balance, and the feature-drift row — PSI per feature against **training's** bins, the rolling
+window's size, user-found rate, and why a window is the size it is.
+
+**Two panels are deliberately unflattering.** Feature-store age reads a multi-year gap, because
+MIND's event timestamps are from 2019 and the clock is not; the panel's description says so rather
+than hiding it, and §16.1's freshness alert is unenablable on this corpus for the same reason. And
+the degradation panel is non-zero at the top of the `make bench` sweep, which is the point —
+this pipeline degrades rather than failing, so a degraded request returns 200 with a full slate
+*faster* than a healthy one. Latency alone cannot see it.
+
+The drift monitor bins on the distribution the model was **fitted** on, never on a fresh quantile
+of what is being served — edges that move with the data cannot detect the shift they exist to
+detect. `docs/exposure.md` measures the related question of how much of the catalogue the policy
+actually reaches.
+
+### One request, end to end
+
+![A trace waterfall](docs/img/trace.png)
+
+OpenTelemetry spans from the orchestrator through the feature fetch, the retrieval fan-out, the
+seen-list filter, ranking and re-ranking, tagged with the model and index version that served
+them. The collector **tail-samples**: head sampling decides at the root, before anything worth
+looking at has happened, so it discards degraded traces at exactly the same rate as healthy ones —
+and degraded traces are rare by construction. Policies keyed on `recsys.degraded`,
+`recsys.used_fallback`, `recsys.incomplete_rows`, error status and a 90 ms latency threshold keep
+what matters, plus a small baseline of ordinary traffic so a broken request has something to be
+read against.
+
+**`rank` is two spans, not one.** `"ranker"` in the degradation label covers both a feature matrix
+that failed to build and a Triton that did not answer; splitting `rank.build` from `rank.infer` is
+what makes the waterfall say which — the only question worth asking when the rank stage has
+consumed its entire 35 ms deadline.
+
+⚠️ **The fan-out is narrower than the design.** `docs/design.md` §3 specifies five retrieval
+sources; one is wired, so the trace shows a single `retrieve.two_tower` span rather than five
+parallel ones. The span names are per-source, so the picture widens on its own when the others
+land.
+
+
+## Deciding whether to ship
+
+A worked launch decision is in [`docs/experiment.md`](docs/experiment.md), regenerated by
+`make simulate`. The responses are simulated; **the decision rule is not**, and the order it
+applies is the part worth reading:
+
+1. **Sample ratio mismatch, before the primary metric is even computed.** If assignment broke,
+   every number below it describes the breakage. The live alert compares a 1.2 max/min ratio,
+   which cannot tell a 20% imbalance over 200 assignments from the same imbalance over 200,000 —
+   one is noise and the other is a serious defect. `evaluation/experiments/srm.py` runs the
+   chi-square that can, at α=0.001 because a guard that fires on one healthy experiment in
+   twenty gets switched off.
+2. **Guardrails second.** A primary-metric win that costs latency or catalogue coverage is a
+   trade, and the trade is named before the win is celebrated. A breach needs the *interval* to
+   clear the tolerance, not just the point estimate, so a noisy guardrail cannot block a launch
+   on its own noise.
+3. **The primary metric as an interval**, de-noised by CUPED. An online experiment cannot pair
+   users the way an offline comparison does — a user is in one arm or the other — so the
+   between-user variance pairing would cancel has to be removed another way: by subtracting the
+   part of each outcome a pre-experiment covariate already predicted.
+4. **And if it is flat, the minimum detectable effect.** "Flat with adequate power" and "flat and
+   underpowered" are different conclusions, and collapsing them is how a real effect ships as a
+   null.
+
+**Off-policy evaluation is built and deliberately not used there.**
+`evaluation/counterfactual/ips.py` reweights the distribution over *which items are shown*; it
+assumes the reward for a given (context, action) belongs to the world rather than to the policy.
+A ranker that makes the shown items *more relevant* changes the reward function itself, which
+importance weighting cannot see — so running it would produce a confident number for a quantity
+it is not estimating. It applies cleanly to an action-distribution change, and that is where it
+is pointed.
+
+**How much of the catalogue the policy actually reaches** is a separate measurement:
+[`docs/exposure.md`](docs/exposure.md), via `make exposure`. It found the serving policy reaching
+**176 distinct articles** out of 65,238 — not because it was failing to personalise (19,983
+requests produced 9,585 distinct orderings) but because the re-ranker's category cap and
+exploration slots were configured, documented, and never applied. Wiring them widened reach
+2.6×.
+
+⚠️ **The simulator cannot falsify its own assumptions.** It encodes beliefs about how users
+behave, so its numbers are statements about the model. Two are known to be wrong for this corpus
+and kept anyway: MIND shuffles its impression lists, so the examination curve is imported rather
+than measured, and the treatment lifts every user equally where a real one would not — which
+makes **the power figures optimistic**. `docs/experiment.md` opens by saying so.
