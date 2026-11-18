@@ -151,3 +151,113 @@ func TestCancellingStopsThePoller(t *testing.T) {
 		t.Fatal("the poller did not return when its context was cancelled")
 	}
 }
+
+// --- the flags reaching the pipeline ----------------------------------------
+
+// wired sets every rerank knob to something that is NOT its zero value, so a
+// field that stops being copied shows up as a zero rather than passing by
+// coincidence.
+func wired() options {
+	return options{
+		candidates:     400,
+		deadline:       90 * time.Millisecond,
+		rankDeadline:   35 * time.Millisecond,
+		featDeadline:   8 * time.Millisecond,
+		lambda:         0.7,
+		capPerCategory: 2,
+		epsilon:        0.25,
+		exploreSlots:   3,
+		modelVersion:   "model-abc",
+		indexVersion:   "index-def",
+	}
+}
+
+// TestFlagsReachTheConfig is the regression test for the defect it was written
+// after: -epsilon, -explore-slots, -cap-per-category and -lambda were parsed,
+// advertised in -h, and never assigned. The reranker ran with exploration off
+// and no category cap, nothing failed, no metric moved, and every logged
+// propensity was 1.0 -- which makes a log that CANNOT support off-policy
+// evaluation look exactly like one that can.
+func TestFlagsReachTheConfig(t *testing.T) {
+	o := wired()
+	config, err := pipelineConfig(o)
+	if err != nil {
+		t.Fatalf("pipelineConfig: %v", err)
+	}
+
+	if config.Lambda != o.lambda {
+		t.Errorf("Lambda = %v, want %v (the flag, not a literal)", config.Lambda, o.lambda)
+	}
+	if config.Epsilon != o.epsilon {
+		t.Errorf("Epsilon = %v, want %v; exploration would never fire", config.Epsilon, o.epsilon)
+	}
+	if config.ExploreSlots != o.exploreSlots {
+		t.Errorf("ExploreSlots = %d, want %d", config.ExploreSlots, o.exploreSlots)
+	}
+	if config.CapPerCategory == nil {
+		t.Fatal("CapPerCategory is nil; the per-subcategory cap would be off")
+	}
+	if *config.CapPerCategory != o.capPerCategory {
+		t.Errorf("CapPerCategory = %d, want %d", *config.CapPerCategory, o.capPerCategory)
+	}
+	if config.MaxCandidates != o.candidates || config.RankDeadline != o.rankDeadline {
+		t.Errorf("the budgets did not survive either: %+v", config)
+	}
+	if config.ModelVersion != o.modelVersion || config.IndexVersion != o.indexVersion {
+		t.Errorf("versions = %q/%q, want %q/%q",
+			config.ModelVersion, config.IndexVersion, o.modelVersion, o.indexVersion)
+	}
+}
+
+// -1 disables the cap; 0 does not. Zero means "no slots for any subcategory",
+// which is catastrophic and must stay expressible rather than being folded
+// into the disabled case by a truthiness check.
+func TestCapPerCategoryDistinguishesDisabledFromZero(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		flag  int
+		want  int
+		isNil bool
+	}{
+		{name: "disabled", flag: -1, isNil: true},
+		{name: "zero is a real setting", flag: 0, want: 0},
+		{name: "ordinary", flag: 3, want: 3},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			o := wired()
+			o.capPerCategory = testCase.flag
+			config, err := pipelineConfig(o)
+			if err != nil {
+				t.Fatalf("pipelineConfig: %v", err)
+			}
+			if testCase.isNil {
+				if config.CapPerCategory != nil {
+					t.Fatalf("cap = %d, want nil", *config.CapPerCategory)
+				}
+				return
+			}
+			if config.CapPerCategory == nil {
+				t.Fatal("cap is nil, want a value")
+			}
+			if *config.CapPerCategory != testCase.want {
+				t.Errorf("cap = %d, want %d", *config.CapPerCategory, testCase.want)
+			}
+		})
+	}
+}
+
+// Refused at STARTUP rather than once per request. rerank.Select returns this
+// error too, but by then it is a 100% error rate on a process that started
+// cleanly and whose every other signal looks healthy.
+func TestExplorationWithNoSlotsIsRefusedAtStartup(t *testing.T) {
+	o := wired()
+	o.exploreSlots = 0
+	if _, err := pipelineConfig(o); err == nil {
+		t.Fatal("a positive epsilon with no explore slots should be refused")
+	}
+
+	o.epsilon = 0
+	if _, err := pipelineConfig(o); err != nil {
+		t.Fatalf("epsilon 0 with no slots is the OFF setting, not an error: %v", err)
+	}
+}

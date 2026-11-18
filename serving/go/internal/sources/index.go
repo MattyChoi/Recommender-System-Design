@@ -200,6 +200,14 @@ func indexHealth(ctx context.Context, client pb.RetrievalClient) (*pb.RetrievalH
 	return response, nil
 }
 
+// ConnectAll opens every pooled connection; see rpc.Balanced.ConnectAll.
+func (s *ANNIndex) ConnectAll(ctx context.Context) error {
+	if s.conn == nil {
+		return nil
+	}
+	return s.conn.ConnectAll(ctx)
+}
+
 func (s *ANNIndex) Close() error {
 	if s.conn == nil {
 		return nil

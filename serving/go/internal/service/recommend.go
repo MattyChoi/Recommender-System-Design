@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -60,8 +61,10 @@ type Service struct {
 	Fallback      Fallback
 	Config        Config
 	Now           func() time.Time
+	LiveVersions  func() (model string, index string)
 	Shadow        Ranker
 	ShadowModel   string
+	Rand          *rand.Rand
 	shadowLogged  atomic.Uint64
 	shadowDropped atomic.Uint64
 }
@@ -85,6 +88,8 @@ type Result struct {
 	Sources         [][]string
 	UsedFallback    bool
 	DegradedSources []string
+	ModelVersion    string
+	IndexVersion    string
 	StageCounts     map[string]int
 	StageLatency    map[string]time.Duration
 	TotalLatency    time.Duration
@@ -102,6 +107,23 @@ func (s *Service) Recommend(ctx context.Context, userID string, numResults int) 
 	return s.Run(ctx, Request{UserID: userID, NumResults: numResults})
 }
 
+// Versions reports what is serving, preferring the upstreams over the flags.
+func (s *Service) Versions() (model string, index string) {
+	model, index = s.Config.ModelVersion, s.Config.IndexVersion
+	if s.LiveVersions == nil {
+		return model, index
+	}
+
+	liveModel, liveIndex := s.LiveVersions()
+	if liveModel != "" {
+		model = liveModel
+	}
+	if liveIndex != "" {
+		index = liveIndex
+	}
+	return model, index
+}
+
 func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	userID, numResults := request.UserID, request.NumResults
 	started := s.now()
@@ -116,6 +138,9 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 
 	ctx, span := tracing.Tracer().Start(ctx, "recommend")
 	defer span.End()
+
+	result.ModelVersion, result.IndexVersion = s.Versions()
+	tracing.Served(span, result.ModelVersion, result.IndexVersion, request.Variant)
 
 	// --- step 0: fetch the user features from the feature gateway ---
 	var user User
@@ -181,7 +206,7 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 			Blocked:      blocked,
 			Epsilon:      s.Config.Epsilon,
 			ExploreSlots: s.Config.ExploreSlots,
-			Rand:         nil,
+			Rand:         s.Rand,
 		})
 	})
 	if err != nil {
@@ -258,7 +283,13 @@ func (s *Service) servePopularity(
 	ctx context.Context, numResults int, started time.Time, result Result,
 ) (Result, error) {
 	result.UsedFallback = true
+
+	ctx, span := tracing.Tracer().Start(ctx, "fallback")
+	defer span.End()
+
 	if s.Fallback == nil {
+		tracing.Fallback(span, 0, nil)
+		span.SetStatus(otelcodes.Error, "no fallback slate configured")
 		result.TotalLatency = s.now().Sub(started)
 		return result, nil
 	}
@@ -267,6 +298,7 @@ func (s *Service) servePopularity(
 	items, err := s.Fallback.Popular(ctx, numResults)
 	result.StageLatency["fallback"] = s.now().Sub(stage)
 	if err != nil {
+		tracing.Fallback(span, 0, err)
 		result.TotalLatency = s.now().Sub(started)
 		return result, err
 	}
@@ -281,6 +313,7 @@ func (s *Service) servePopularity(
 
 	}
 	result.StageCounts["served"] = len(items)
+	tracing.Fallback(span, len(items), nil)
 	result.TotalLatency = s.now().Sub(started)
 	return result, nil
 }
@@ -320,7 +353,8 @@ func (s *Service) fanOut(ctx context.Context, user User) ([]retrieval.Source, Co
 			sourceCtx, cancel := context.WithTimeout(ctx, source.Budget())
 			defer cancel()
 
-			sourceCtx, span := tracing.Tracer().Start(sourceCtx, "retrieve")
+			// Named per source
+			sourceCtx, span := tracing.Tracer().Start(sourceCtx, "retrieve."+source.Name())
 			defer span.End()
 			tracing.Source(span, source.Name(), source.Budget())
 
@@ -415,15 +449,20 @@ func (s *Service) score(ctx context.Context, in BuildInput) scored {
 	rankCtx, cancel := context.WithTimeout(ctx, s.Config.RankDeadline)
 	defer cancel()
 
-	// fetch the item features from the feature gateway
-	built, err := s.Features.Build(rankCtx, in)
+	buildCtx, buildSpan := tracing.Tracer().Start(rankCtx, "rank.build")
+	built, err := s.Features.Build(buildCtx, in)
+	tracing.Built(buildSpan, len(built.Rows), built.Incomplete, err)
+	buildSpan.End()
 	if err != nil || len(built.Rows) != len(items) {
 		return scored{scores: descending}
 	}
 
 	shadow := s.startShadow(ctx, built, len(items))
 
-	scores, err := s.Ranker.Score(rankCtx, built)
+	inferCtx, inferSpan := tracing.Tracer().Start(rankCtx, "rank.infer")
+	scores, err := s.Ranker.Score(inferCtx, built)
+	tracing.Inferred(inferSpan, len(scores), len(items), err)
+	inferSpan.End()
 	if err != nil || len(scores) != len(items) {
 		return scored{scores: descending, shadow: shadow}
 	}

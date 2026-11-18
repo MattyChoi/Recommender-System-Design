@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -35,6 +36,26 @@ type Client struct {
 
 	// Columns is the order the exported graph was built for
 	Columns []string
+
+	// What Triton last said it served with. Behind a mutex because ONE instance
+	// serves every concurrent request.
+	mu        sync.RWMutex
+	lastModel string
+}
+
+// LastModel reports the model version Triton last answered with, or empty
+// before the first successful score. ModelReady carries no version, so there is
+// no cheaper way to learn this than to have scored once.
+func (c *Client) LastModel() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastModel
+}
+
+func (c *Client) setLastModel(version string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lastModel = version
 }
 
 func Dial(target, model string, columns []string, conns int, opts ...grpc.DialOption) (*Client, error) {
@@ -52,6 +73,14 @@ func Dial(target, model string, columns []string, conns int, opts ...grpc.DialOp
 		Model:   model,
 		Columns: columns,
 	}, nil
+}
+
+// ConnectAll opens every pooled connection; see rpc.Balanced.ConnectAll.
+func (c *Client) ConnectAll(ctx context.Context) error {
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.ConnectAll(ctx)
 }
 
 func (c *Client) Close() error {
@@ -141,6 +170,8 @@ func (c *Client) Score(ctx context.Context, features service.Features) ([]float6
 	if err != nil {
 		return nil, fmt.Errorf("triton ModelInfer: %w", err)
 	}
+
+	c.setLastModel(response.GetModelVersion())
 
 	for index, output := range response.GetOutputs() {
 		if output.GetName() != outputName {

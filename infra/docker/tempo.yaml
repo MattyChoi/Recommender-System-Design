@@ -1,0 +1,37 @@
+# Tempo: the trace backend. One binary, local filesystem.
+#
+# Monolithic mode (`-target=all`): every component in one process, no Kafka.
+# Tempo 3.0 made the new ingest architecture the only path and REMOVED the
+# `ingester` and `compactor` config sections along with the
+# `scalable-single-binary` target, so a 2.x tempo.yaml -- which is what most
+# blog posts and example repos still carry -- is refused rather than migrated.
+# Everything below is the documented 3.x monolithic key set.
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        # 4317 INSIDE this container only, deliberately not published.
+        # The collector owns the host's 4317 and the orchestrator's -otlp flag
+        # points there, not here: a trace that reached Tempo directly would
+        # have skipped the tail sampler, which is the one component that can
+        # decide to keep it for a reason other than luck.
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# Anonymous usage reporting. A local dev stack has nothing worth reporting.
+usage_report:
+  reporting_enabled: false

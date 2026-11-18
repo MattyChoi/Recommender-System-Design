@@ -5,7 +5,7 @@
 # same address through the published port; Flink, inside the compose network,
 # uses the INTERNAL listener at kafka:29092 instead.
 
-.PHONY: topic delete_topic replay consume offsets schemas schemas-check
+.PHONY: topic topics delete_topic replay consume offsets schemas schemas-check
 
 KAFKA_CONTAINER ?= recsys-kafka
 KAFKA_BROKER    ?= localhost:9092
@@ -32,6 +32,16 @@ TOPICS ?= $(foreach p,$(SCHEMA_SUBJECTS),$(firstword $(subst :, ,$(p))))
 endif
 
 topic:  ## Create the event topics (impressions, impression_context) -- run ONCE before the first replay
+	$(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
+		--create --if-not-exists --topic $(TOPIC) \
+		--partitions $(PARTITIONS) --replication-factor 1 || exit 1; \
+	$(KAFKA_EXEC)/kafka-configs.sh --bootstrap-server $(KAFKA_BROKER) \
+		--alter --entity-type topics --entity-name $(TOPIC) \
+		--add-config retention.ms=-1 || exit 1; \
+	$(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
+		--describe --topic $(TOPIC) || exit 1; \
+
+topics:  ## Create the event topics (impressions, impression_context) -- run ONCE before the first replay
 	@for t in $(TOPICS); do \
 	  $(KAFKA_EXEC)/kafka-topics.sh --bootstrap-server $(KAFKA_BROKER) \
 	      --create --if-not-exists --topic $$t \

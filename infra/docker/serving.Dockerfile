@@ -11,9 +11,11 @@ RUN go mod download
 
 COPY serving/go/ ./
 
+ARG REVISION=unknown
+
 RUN CGO_ENABLED=1 GOOS=linux \
     go build -tags musl -trimpath \
-      -ldflags='-s -w -extldflags "-static"' \
+      -ldflags="-s -w -extldflags \"-static\" -X main.version=${REVISION}" \
       -o /out/server ./cmd/server
 
 # Fail the BUILD, not the pod. `ldd` on a truly static binary reports no

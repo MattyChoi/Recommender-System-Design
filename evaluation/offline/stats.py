@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import NamedTuple
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 _DEFAULT_RESAMPLES = 1_000
 _DEFAULT_ALPHA = 0.05
@@ -163,6 +164,65 @@ def bootstrap_ci_by_impression(
         hi=float(hi),
         n_users=len(values),
         n_resamples=n_resamples,
+    )
+
+
+def two_sample_bootstrap(
+    control: ArrayLike,
+    treatment: ArrayLike,
+    n_resamples: int = _DEFAULT_RESAMPLES,
+    alpha: float = _DEFAULT_ALPHA,
+    seed: int = 0,
+) -> PairedResult:
+    """Bootstrap the difference in means between two DISJOINT samples.
+
+    For an online A/B test, where :func:`paired_bootstrap` cannot be used: a
+    user is in one arm or the other, never both, so there is no per-user
+    difference to take and the between-user variance that pairing cancels
+    stays in the estimate.
+
+    That is the whole reason CUPED exists. An offline comparison scores both
+    systems on the same users and pairs them; an online experiment cannot, so
+    it buys the same variance reduction a different way -- by subtracting the
+    part of each user's outcome a pre-period covariate already predicted. See
+    :mod:`evaluation.experiments.cuped`.
+
+    Each arm is resampled independently at its own size, so unequal arms are
+    handled correctly rather than by truncation.
+
+    Args:
+        control: One value per unit in the control arm.
+        treatment: One value per unit in the treatment arm.
+        n_resamples: Bootstrap iterations.
+        alpha: 0.05 gives a 95% interval.
+        seed: Fixed for reproducibility.
+
+    Returns:
+        A :class:`PairedResult` for ``treatment - control``. ``n_users`` is
+        the combined count, since no unit appears on both sides.
+
+    Raises:
+        ValueError: If either arm is empty.
+    """
+    a = np.asarray(control, dtype=float)
+    b = np.asarray(treatment, dtype=float)
+    if a.size == 0 or b.size == 0:
+        raise ValueError(f"both arms need units; got {a.size} and {b.size}")
+
+    # One generator, two draws: independent resampling of each arm, but a
+    # single seed so the whole comparison reproduces from one number.
+    rng = np.random.default_rng(seed)
+    control_means = a[rng.integers(0, a.size, size=(n_resamples, a.size))].mean(axis=1)
+    treatment_means = b[rng.integers(0, b.size, size=(n_resamples, b.size))].mean(axis=1)
+    differences = treatment_means - control_means
+
+    lo, hi = np.percentile(differences, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return PairedResult(
+        difference=float(b.mean() - a.mean()),
+        lo=float(lo),
+        hi=float(hi),
+        n_users=int(a.size + b.size),
+        significant=bool(lo > 0.0 or hi < 0.0),
     )
 
 

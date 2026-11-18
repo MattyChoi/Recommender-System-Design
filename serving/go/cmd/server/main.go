@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,6 +32,7 @@ import (
 	pb "github.com/MattyChoi/Recommender-System-Design/serving/go/internal/pb"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/popular"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/ranking"
+	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/rerank"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/server"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/service"
 	"github.com/MattyChoi/Recommender-System-Design/serving/go/internal/sources"
@@ -91,6 +93,7 @@ type options struct {
 	capPerCategory int
 	epsilon        float64
 	exploreSlots   int
+	exploreSeed    int64
 
 	// --- experiments ---
 	experimentID string
@@ -101,6 +104,8 @@ type options struct {
 	traceRatio   float64
 
 	// --- versioning ---
+	// showVersion is about the BINARY; the two below are about the artifacts.
+	showVersion  bool
 	modelVersion string
 	indexVersion string
 }
@@ -108,6 +113,9 @@ type options struct {
 type namedProbe struct {
 	name  string
 	check func(context.Context) error
+	// connect opens the REST of the backend's pool once check passes: check
+	// only reaches one connection per address. nil for none.
+	connect func(context.Context) error
 }
 
 type healthProbe struct {
@@ -129,6 +137,14 @@ func (p healthProbe) EFSearch() int32 {
 	return p.efSearch
 }
 
+// Versions asks the upstreams rather than repeating a flag. The index sidecar
+// reports its version in every health response and the ANNIndex already records
+// it; Triton reports the version it served with in every infer response.
+func (p healthProbe) Versions() (string, string) {
+	_, index := p.index.LastIndex()
+	return p.ranker.LastModel(), index
+}
+
 func (p healthProbe) Ready(ctx context.Context) error {
 	if err := p.gateway.Ready(ctx); err != nil {
 		return err
@@ -137,6 +153,53 @@ func (p healthProbe) Ready(ctx context.Context) error {
 		return err
 	}
 	return p.ranker.Ready(ctx)
+}
+
+// version is injected at build time with -ldflags "-X main.version=...".
+var version string
+
+// buildVersion identifies the BINARY, which is what an OTel resource's
+// service.version means.
+func buildVersion() string {
+	// Preferred over the stamp because serving.Dockerfile copies serving/go/
+	// alone, so the image build has no repository above the main package and
+	// nothing to stamp. Empty for a plain local `go build`, which falls through.
+	if version != "" {
+		return version
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+
+	var revision, modified string
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value
+		}
+	}
+
+	// No revision means a build outside a git checkout, or -buildvcs=false.
+	// Main.Version is "(devel)" for a local build, which is still more than
+	// nothing.
+	if revision == "" {
+		return info.Main.Version
+	}
+	if len(revision) > 12 {
+		revision = revision[:12]
+	}
+	// Said out loud, the same reason models/ranking/pipeline.py warns about it:
+	// a dirty build's revision does not describe the code that is running, and
+	// a trace attributed to a commit that never contained it is worse than one
+	// attributed to nothing.
+	if modified == "true" {
+		return revision + "-dirty"
+	}
+	return revision
 }
 
 // readColumns reads the order the exported graph was built for.
@@ -178,7 +241,8 @@ const (
 	upstreamsPeriod = 2 * time.Second
 )
 
-// warmConnections dials every backend before the first real request.
+// warmConnections dials every backend before the first real request: the
+// health check, then every connection in its pool (see rpc.Balanced.ConnectAll).
 //
 // A sidecar that is still loading refuses the connection outright, so a probe
 // fails in milliseconds and warmTimeout never comes into it. With wait > 0 a
@@ -193,6 +257,9 @@ func warmConnections(ctx context.Context, probes []namedProbe, wait time.Duratio
 		for attempt := 0; ; attempt++ {
 			inner, cancel := context.WithTimeout(ctx, warmTimeout)
 			err = probe.check(inner)
+			if err == nil && probe.connect != nil {
+				err = probe.connect(inner)
+			}
 			cancel()
 			if err == nil || ctx.Err() != nil || !time.Now().Before(deadline) {
 				break
@@ -352,6 +419,8 @@ func parse() options {
 	flag.Float64Var(&o.epsilon, "epsilon", 0.1,
 		"chance an exploration slot is filled at random (ADR 0012)")
 	flag.IntVar(&o.exploreSlots, "explore-slots", 2, "how many of the LAST slots explore")
+	flag.Int64Var(&o.exploreSeed, "explore-seed", 0,
+		"seed for the exploration draw; 0 picks one and logs it, so a slate stays reproducible")
 
 	flag.StringVar(&o.experimentID, "experiment-id", "",
 		"salts the bucketing; required whenever -variants is set")
@@ -361,18 +430,73 @@ func parse() options {
 	flag.StringVar(&o.otlpEndpoint, "otlp", "", "OTLP collector, e.g. localhost:4317. Empty disables tracing")
 	flag.Float64Var(&o.traceRatio, "trace-ratio", 1.0, "head sampling ratio")
 
-	flag.StringVar(&o.modelVersion, "model-version", "", "reported in every response")
-	flag.StringVar(&o.indexVersion, "index-version", "", "reported in every response")
+	flag.BoolVar(&o.showVersion, "version", false,
+		"print the build revision and exit; needs no artifacts and no stack")
+
+	// Fallbacks, not the answer. Triton and the index sidecar each report what
+	// they are actually serving, and those win -- see service.Service.Versions.
+	// These cover the window before either has answered.
+	flag.StringVar(&o.modelVersion, "model-version", "",
+		"fallback model version, until Triton reports the one it served with")
+	flag.StringVar(&o.indexVersion, "index-version", "",
+		"fallback index version, until the index sidecar reports its own")
 
 	flag.Parse()
 	return o
 }
 
+// pipelineConfig copies the flags onto the service's config.
+func pipelineConfig(o options) (service.Config, error) {
+	// -1 disables; 0 does NOT. A cap of zero means "no slots for any
+	// subcategory", which is a real setting and a catastrophic one, so it must
+	// stay expressible. This is the conversion the flag's own comment promised.
+	var capPerCategory *int
+	if o.capPerCategory >= 0 {
+		capPerCategory = &o.capPerCategory
+	}
+
+	// Refused here rather than inside Select, which would fail every request
+	// at runtime with the process otherwise healthy.
+	if o.epsilon > 0 && o.exploreSlots <= 0 {
+		return service.Config{}, fmt.Errorf(
+			"-epsilon %.3f with -explore-slots %d explores nothing; set slots or -epsilon 0",
+			o.epsilon, o.exploreSlots)
+	}
+
+	return service.Config{
+		// one source, the whole quota
+		Quotas:          []int{o.candidates},
+		MaxCandidates:   o.candidates,
+		Deadline:        o.deadline,
+		RankDeadline:    o.rankDeadline,
+		FeatureDeadline: o.featDeadline,
+		MaxHistory:      features.MaxHistory,
+		Lambda:          o.lambda,
+		CapPerCategory:  capPerCategory,
+		Epsilon:         o.epsilon,
+		ExploreSlots:    o.exploreSlots,
+		ModelVersion:    o.modelVersion,
+		IndexVersion:    o.indexVersion,
+	}, nil
+}
+
 func run(o options) error {
+	build := buildVersion()
+
+	// Answered before tracing and before the artifact loads, and written to
+	// stdout with no log prefix: the point is a clean string readable off a bare
+	// image with nothing mounted and no stack running.
+	if o.showVersion {
+		fmt.Println(build)
+		return nil
+	}
+
+	log.Printf("build %s", build)
+
 	// Tracing first, so the artifact loads below are inside it if anything
 	// ever instruments them.
 	shutdownTracing, err := tracing.Setup(
-		context.Background(), "recsys-orchestrator", o.otlpEndpoint, o.modelVersion, o.traceRatio,
+		context.Background(), "recsys-orchestrator", o.otlpEndpoint, build, o.traceRatio,
 	)
 	if err != nil {
 		return err
@@ -505,7 +629,7 @@ func run(o options) error {
 	defer func() { _ = ranker.Close() }()
 
 	var shadow service.Ranker
-	var shadowReady func(context.Context) error
+	var shadowReady, shadowConnect func(context.Context) error
 	if o.shadowModel != "" {
 		if o.shadowModel == o.tritonModel {
 			return fmt.Errorf("-shadow-triton-model %q equals -triton-model; that shadows nothing",
@@ -518,7 +642,7 @@ func run(o options) error {
 			return fmt.Errorf("dialling the shadow model: %w", err)
 		}
 		defer func() { _ = client.Close() }()
-		shadow, shadowReady = client, client.Ready
+		shadow, shadowReady, shadowConnect = client, client.Ready, client.ConnectAll
 	}
 
 	var impressionLog service.ImpressionLog
@@ -595,6 +719,19 @@ func run(o options) error {
 		}, func() float64 { return float64(sink.Unmapped()) }))
 	}
 
+	config, err := pipelineConfig(o)
+	if err != nil {
+		return err
+	}
+
+	// Seeded ONCE per process and logged, which is what makes an explored
+	// slate reproducible after the fact. 0 means "pick one": a fixed default
+	// would make every pod in a Deployment explore identically.
+	seed := o.exploreSeed
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
+
 	pipeline := &service.Service{
 		Retrievers: []service.Retriever{index},
 		Store:      gateway,
@@ -610,18 +747,8 @@ func run(o options) error {
 		Catalogue:   catalog,
 		Fallback:    fallback,
 		Impressions: impressionLog,
-		Config: service.Config{
-			// one source, the whole quota
-			Quotas:          []int{o.candidates},
-			MaxCandidates:   o.candidates,
-			Deadline:        o.deadline,
-			RankDeadline:    o.rankDeadline,
-			FeatureDeadline: o.featDeadline,
-			MaxHistory:      features.MaxHistory,
-			Lambda:          1.0,
-			ModelVersion:    o.modelVersion,
-			IndexVersion:    o.indexVersion,
-		},
+		Rand:        rerank.NewLockedRand(seed),
+		Config:      config,
 	}
 
 	if shadow != nil {
@@ -662,6 +789,8 @@ func run(o options) error {
 		index:    index,
 		efSearch: int32(o.efSearch),
 	}
+
+	pipeline.LiveVersions = probe.Versions
 
 	pb.RegisterRecommenderServer(grpcServer, &server.Recommender{
 		Service:    pipeline,
@@ -717,6 +846,22 @@ func run(o options) error {
 	log.Printf("  seen-list  %d bits, %d hashes (capacity %d at %.3f), ttl %v",
 		bits, hashes, o.seenCap, o.seenRate, o.seenTTL)
 	log.Printf("  budget     %v end to end, %v rank, %v features", o.deadline, o.rankDeadline, o.featDeadline)
+
+	// Printed because the absence of this line is how four dropped flags went
+	// unnoticed: an inert epsilon looks exactly like a configured one from
+	// outside, and the only visible symptom is a propensity column of 1.0.
+	capLabel := "off"
+	if config.CapPerCategory != nil {
+		capLabel = strconv.Itoa(*config.CapPerCategory)
+	}
+	if config.Epsilon > 0 {
+		log.Printf("  rerank     lambda %.2f, cap/category %s, epsilon %.3f over %d slots (seed %d)",
+			config.Lambda, capLabel, config.Epsilon, config.ExploreSlots, seed)
+	} else {
+		log.Printf("  rerank     lambda %.2f, cap/category %s, NO exploration "+
+			"(every propensity will be 1.0, so this log cannot support off-policy evaluation)",
+			config.Lambda, capLabel)
+	}
 	if len(variants) == 0 {
 		log.Printf("  experiment none; experiment_variant will be empty")
 	} else {
@@ -725,12 +870,12 @@ func run(o options) error {
 	}
 
 	probes := []namedProbe{
-		{"features", gateway.Ready},
-		{"retrieval", index.Ready},
-		{"triton", ranker.Ready},
+		{"features", gateway.Ready, gateway.ConnectAll},
+		{"retrieval", index.Ready, index.ConnectAll},
+		{"triton", ranker.Ready, ranker.ConnectAll},
 	}
 	if shadowReady != nil {
-		probes = append(probes, namedProbe{"shadow", shadowReady})
+		probes = append(probes, namedProbe{"shadow", shadowReady, shadowConnect})
 	}
 	warmConnections(context.Background(), probes, o.warmWait)
 

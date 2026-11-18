@@ -2,7 +2,7 @@
   "id": null,
   "uid": "recsys-serving",
   "title": "Recsys · serving",
-  "description": "The orchestrator's five stages against their budgets, the funnel, the four named degradations, arm balance and the impression log. Every threshold here mirrors serving/monitoring/alerts.yml, so a red panel and a firing alert cannot disagree. Scrape job: recsys-orchestrator at recsys-host:9102.",
+  "description": "The orchestrator's five stages against their budgets, the funnel, the four named degradations, arm balance, feature drift and the impression log. Every threshold here mirrors serving/monitoring/alerts.yml, so a red panel and a firing alert cannot disagree. TWO scrape jobs: recsys-orchestrator at recsys-host:9102 (the host, via $HOST_IP) and recsys-drift at drift:9103 (in the compose network). A drift panel reading No data while the latency panels are fine means the second target is down, not that nothing drifted -- check /api/v1/targets before believing either.",
   "tags": [
     "recsys",
     "serving"
@@ -1206,6 +1206,496 @@
       ]
     },
     {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Feature drift (PSI) against training's bins",
+      "description": "Served user features against the bins the model was FITTED on, read from serving/artifacts/drift_baseline.json. The dashed line at 0.25 is common.drift.PSI_SKEW -- the same number RecsysFeatureDrift fires on and the same band docs/skew_report.md calls SKEW, and tests/test_drift_window.py asserts the three agree rather than leaving it to a comment. Dashed grey is a feature in EXPECTED_CHURN: shown, never paged on, because on a news corpus a naive PSI alarm fires constantly and then gets muted. That set is EMPTY today -- ImpressionContext carries user_feats only, so no item feature reaches this panel at all. NO SERIES APPEARS BELOW 500 ROWS: the monitor reports nothing rather than a confident number off forty requests, which is what the window panel beside this is for.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "decimals": 3,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "user_clicks_24h"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "user_ctr_smoothed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "user_impressions_24h"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "user_tenure_hours"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* \\(expected churn\\)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    6
+                  ]
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#8E8E8E"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (feature) (recsys_feature_psi{alerting=\"true\"})",
+          "legendFormat": "{{feature}}",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (feature) (recsys_feature_psi{alerting=\"false\"})",
+          "legendFormat": "{{feature}} (expected churn)",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Drift window",
+      "description": "Rows in the monitor's rolling window. Below 500 it reports NO PSI at all, and RecsysDriftMonitorStarved tickets after 30m there. That is a SEPARATE alert from the PSI one on purpose: a series that does not exist cannot breach a threshold, so an absent PSI would otherwise be silent for as long as the monitor saw no traffic. Zero while the endpoint is up does NOT on its own mean an idle topic: a record is also declined when its feature fetch had already failed, when the store held no row for that user, and when its width disagrees with the baseline. Read the outcome panel below before concluding anything from a zero here.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 5,
+        "x": 14,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 500
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(recsys_drift_window_rows)",
+          "legendFormat": "Drift window",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "User rows found",
+      "description": "Share of non-degraded requests that had a stored user row. A SEPARATE number from the distributions above and deliberately not pooled into them: a store miss serves zeros and training fills a missing row with zeros too, so pooling would let the miss RATE masquerade as a shift in the values. Train coverage on this corpus is 66.7% (docs/skew_report.md), so a served figure far off that is worth reading before any PSI on this row. Renders No data rather than 0% when no request was eligible, because nothing that never reached a feature fetch can have missed one: 0% would read as \"every request missed\", which is a measurement, and nothing was measured.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 5,
+        "x": 19,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.6
+              }
+            ]
+          },
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(recsys_drift_user_found_rate)",
+          "legendFormat": "User rows found",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Drift records, by outcome",
+      "description": "Why the window is the size it is. seen is every record consumed since the monitor started. found is the subset that reached the window; degraded and malformed are the two refused for a stated reason; and seen minus all three is the store misses -- a user the feature store does not hold. Four readings: a flat seen is no impression_context traffic, or a dead consumer; seen climbing with degraded alongside it is the orchestrator losing its feature fetch, which is an availability incident and NOT skew; seen climbing with found flat and degraded flat is a feature store holding no row for these users; malformed above zero is a baseline whose width disagrees with the served vector, so re-dump it. Cumulative since start, so the slope is the rate and a drop to zero is a restart.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "seen"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "found"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "degraded"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "malformed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#F2495C"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(recsys_drift_records_seen)",
+          "legendFormat": "seen",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(recsys_drift_records_found)",
+          "legendFormat": "found",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(recsys_drift_records_degraded)",
+          "legendFormat": "degraded",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(recsys_drift_records_malformed)",
+          "legendFormat": "malformed",
+          "refId": "D",
+          "editorMode": "code",
+          "range": true
+        }
+      ]
+    },
+    {
       "id": 16,
       "type": "row",
       "title": "The impression log",
@@ -1214,7 +1704,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 49
       },
       "panels": []
     },
@@ -1231,7 +1721,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 50
       },
       "fieldConfig": {
         "defaults": {

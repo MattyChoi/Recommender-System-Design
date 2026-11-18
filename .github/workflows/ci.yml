@@ -99,6 +99,8 @@ jobs:
           file: infra/docker/serving.Dockerfile
           tags: recsys/serving:ci
           load: true          # into the local daemon, not a registry
+          build-args: |
+            REVISION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -162,6 +164,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            REVISION=${{ github.sha }}
           # Reads the cache the smoke job just wrote, so this is a re-tag and a
           # push rather than a second compile. No cache-to: smoke owns writing it.
           cache-from: type=gha

@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -21,13 +22,18 @@ import (
 const Name = "github.com/MattyChoi/Recommender-System-Design/serving/go"
 
 const (
-	AttrDegraded   = "recsys.degraded"
-	AttrFallback   = "recsys.used_fallback"
-	AttrIncomplete = "recsys.incomplete_rows"
-	AttrVariant    = "recsys.experiment_variant"
-	AttrSource     = "recsys.source"
-	AttrBudget     = "recsys.budget_ms"
-	AttrCandidates = "recsys.candidates"
+	AttrDegraded     = "recsys.degraded"
+	AttrFallback     = "recsys.used_fallback"
+	AttrIncomplete   = "recsys.incomplete_rows"
+	AttrVariant      = "recsys.experiment_variant"
+	AttrSource       = "recsys.source"
+	AttrBudget       = "recsys.budget_ms"
+	AttrCandidates   = "recsys.candidates"
+	AttrModelVersion = "recsys.model_version"
+	AttrIndexVersion = "recsys.index_version"
+	AttrRows         = "recsys.feature_rows"
+	AttrScores       = "recsys.scores"
+	AttrServed       = "recsys.served"
 )
 
 func Tracer() trace.Tracer { return otel.Tracer(Name) }
@@ -42,8 +48,13 @@ func Setup(ctx context.Context, serviceName, endpoint, version string, ratio flo
 		return nil, fmt.Errorf("otlp exporter at %s: %w", endpoint, err)
 	}
 
-	attributes, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
-		semconv.SchemaURL,
+	// NewSchemaless, NOT NewWithAttributes(semconv.SchemaURL, ...). Merge
+	// REFUSES two resources whose schema URLs differ, returning Empty and an
+	// error -- and resource.Default() carries whichever semconv version the SDK
+	// was built against (1.43.0 under sdk v1.47.0), against the 1.26.0 this
+	// file imports. Declaring no schema lets the default's stand and survives
+	// the next SDK bump
+	attributes, err := resource.Merge(resource.Default(), resource.NewSchemaless(
 		semconv.ServiceName(serviceName),
 		semconv.ServiceVersion(version),
 	))
@@ -79,6 +90,60 @@ func Degraded(span trace.Span, sources []string) {
 		return
 	}
 	span.SetAttributes(attribute.StringSlice(AttrDegraded, sources))
+}
+
+// Served tags a span with what answered the request.
+func Served(span trace.Span, model, index, variant string) {
+	attributes := make([]attribute.KeyValue, 0, 3)
+	if model != "" {
+		attributes = append(attributes, attribute.String(AttrModelVersion, model))
+	}
+	if index != "" {
+		attributes = append(attributes, attribute.String(AttrIndexVersion, index))
+	}
+	if variant != "" {
+		attributes = append(attributes, attribute.String(AttrVariant, variant))
+	}
+	if len(attributes) > 0 {
+		span.SetAttributes(attributes...)
+	}
+}
+
+// Built records the rank stage's feature matrix -- the half of a "ranker"
+// degradation that belongs to the gateway rather than to Triton.
+func Built(span trace.Span, rows, incomplete int, err error) {
+	span.SetAttributes(
+		attribute.Int(AttrRows, rows),
+		attribute.Int(AttrIncomplete, incomplete),
+	)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, "feature build failed")
+	}
+}
+
+// Inferred records the ranker's answer.
+func Inferred(span trace.Span, got, want int, err error) {
+	span.SetAttributes(attribute.Int(AttrScores, got))
+	switch {
+	case err != nil:
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, "ranker failed")
+	case got != want:
+		span.SetStatus(otelcodes.Error, "score width mismatch")
+	}
+}
+
+// Fallback marks the popularity path.
+func Fallback(span trace.Span, served int, err error) {
+	span.SetAttributes(
+		attribute.Bool(AttrFallback, true),
+		attribute.Int(AttrServed, served),
+	)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, "fallback failed")
+	}
 }
 
 // Source annotates one retriever's span with its budget, so a span that ends

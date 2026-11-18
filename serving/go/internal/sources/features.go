@@ -164,6 +164,14 @@ func health(ctx context.Context, client pb.FeaturesClient) (int64, error) {
 // Ready call
 func (g *Gateway) StoreAgeSeconds() int64 { return g.storeAge.Load() }
 
+// ConnectAll opens every pooled connection; see rpc.Balanced.ConnectAll.
+func (g *Gateway) ConnectAll(ctx context.Context) error {
+	if g.conn == nil {
+		return nil
+	}
+	return g.conn.ConnectAll(ctx)
+}
+
 func (g *Gateway) Close() error {
 	if g.conn == nil {
 		return nil

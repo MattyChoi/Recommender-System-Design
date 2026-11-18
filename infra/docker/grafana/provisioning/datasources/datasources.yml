@@ -18,3 +18,17 @@ datasources:
 
     isDefault: true
     editable: false      # the file is the source of truth; edit it, not the UI
+
+  # Traces. Same reasoning as above on both counts: the uid is pinned so a
+  # committed dashboard or a trace link can name it, and proxy access means
+  # Grafana's backend resolves `tempo` on the compose network.
+  #
+  # Port 3200 is Tempo's QUERY api. Its OTLP receiver on 4317 is a different
+  # port for a different direction -- pointing this URL at 4317 yields a
+  # datasource that saves cleanly and finds no traces.
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
