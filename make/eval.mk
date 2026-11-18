@@ -4,7 +4,7 @@
 # Every run writes a JSON result card under evaluation/results/. docs/baselines.md
 # is regenerated from those cards and never hand-edited.
 
-.PHONY: eval sweep coverage compare baselines results quality-gate exposure
+.PHONY: eval sweep coverage compare baselines results quality-gate exposure simulate
 
 MODELS ?= random popularity recency content covisit als als_item
 MODEL ?= random
@@ -82,3 +82,26 @@ exposure:  ## Gini of impressions over items, two policies (make exposure EXPOSU
 	uv run python -m scripts.writeups.exposure --window $(EXPOSURE_WINDOW) \
 	    $(if $(EXPOSURE_LOGGED),--logged $(EXPOSURE_LOGGED)) \
 	    $(if $(EXPOSURE_SERVED),--served $(EXPOSURE_SERVED))
+
+
+# Determining launch decision. Simulated responses, but a REAL decision rule: SRM
+# first, guardrails second, the primary metric's interval third, and the MDE
+# when it comes back flat. Calibrated on the served log, so the control arm
+# draws from the items this policy actually reaches.
+#
+#   make consume TOPIC=impression_context N=20000 > /tmp/served.jsonl
+#
+# SESSIONS=0 asks the power calculation how long the experiment needs to be,
+# which is the direction that question is usually asked from.
+SIM_SERVED ?= /tmp/served.jsonl
+SIM_SESSIONS ?= 0
+SIM_LIFT ?= 0.10
+SIM_TARGET_LIFT ?= 0.02
+SIM_SEED ?= 0
+
+simulate:  ## Simulated A/B test and launch recommendation -> docs/experiment.md
+	@test -f "$(SIM_SERVED)" \
+	  || { echo "  no $(SIM_SERVED) -- run: make consume TOPIC=impression_context N=20000 > $(SIM_SERVED)"; exit 1; }
+	uv run python -m scripts.writeups.simulate_ab \
+	    --served $(SIM_SERVED) --sessions $(SIM_SESSIONS) \
+	    --relevance-lift $(SIM_LIFT) --target-lift $(SIM_TARGET_LIFT) --seed $(SIM_SEED)
